@@ -6,7 +6,7 @@
 
 <div align="center">
 
-**⬇️ [下载 VetarAI 0.1.66 安装包](https://github.com/zero11924065-dev/Vetar/releases/tag/v0.1.66)**
+**⬇️ [下载 VetarAI 0.1.66 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.66)**
 
 （132MB · macOS Apple Silicon · dmg 格式）
 
