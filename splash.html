@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>VetarAI</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #F7F7F8;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-user-select: none; user-select: none;
+    overflow: hidden;
+  }
+  #logo { width: 96px; height: 96px; border-radius: 20px; box-shadow: 0 2px 16px rgba(0,0,0,.10); }
+</style>
+</head>
+<body>
+  <img id="logo" alt="VetarAI" />
+  <script>
+    // checkpoint-064b：加载页极简——仅居中 Logo。
+    // setStep 保留为空操作（主进程仍会调用，兼容不报错；文案不再展示）
+    window.setStep = () => {};
+  </script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+/* checkpoint-051 UI 重设计：全局样式（规范 §4.4 / §5 / §10）
+   内联样式写不了的部分：滚动条、@keyframes、:hover/:focus 伪类。 */
+
+/* 滚动条（4.4） */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #D5D5DA; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #B8B8C0; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 动画（§5） */
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+@keyframes ui-blink { 50% { opacity: 0; } }
+
+/* 焦点环（2.6） */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid rgba(56,189,248,0.4); outline-offset: 1px; }
+
+/* 复选框/单选框主色（6.2） */
+input[type="checkbox"], input[type="radio"] { accent-color: #0EA5E9; }
+
+/* 通用按钮悬停/按下/禁用（6.1）——内联样式无法写伪类，用 class 承载 */
+.ui-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.ui-btn:disabled { cursor: not-allowed; }
+
+/* 主按钮 */
+.ui-btn-primary { background: #38BDF8; color: #063452; }
+.ui-btn-primary:hover:not(:disabled) { background: #0EA5E9; }
+.ui-btn-primary:active:not(:disabled) { background: #0284C7; color: #FFFFFF; }
+.ui-btn-primary:disabled { background: #D9D9DE; color: #FAFAFB; }
+
+/* 次级按钮 */
+.ui-btn-secondary { background: #FFFFFF; border: 1px solid #D5D5DA; color: #1A1A1E; }
+.ui-btn-secondary:hover:not(:disabled) { background: #ECECEE; }
+.ui-btn-secondary:active:not(:disabled) { background: #E4E4E8; }
+.ui-btn-secondary:disabled { background: #F2F2F4; color: #B8B8C0; border-color: #E3E3E8; }
+
+/* 危险实心 */
+.ui-btn-danger { background: #FF3B30; color: #FFFFFF; }
+.ui-btn-danger:hover:not(:disabled) { background: #E5342A; }
+.ui-btn-danger:active:not(:disabled) { background: #CC2E24; }
+.ui-btn-danger:disabled { background: #D9D9DE; color: #FAFAFB; }
+
+/* 危险次级 */
+.ui-btn-danger-soft { background: #FFFFFF; border: 1px solid #FBC6C2; color: #8A1F16; }
+.ui-btn-danger-soft:hover:not(:disabled) { background: #FEF0EF; }
+.ui-btn-danger-soft:active:not(:disabled) { background: #FCE3E1; }
+.ui-btn-danger-soft:disabled { background: #F2F2F4; color: #B8B8C0; border-color: #E3E3E8; }
+
+/* 幽灵/文字按钮 */
+.ui-btn-ghost { background: transparent; color: #5C5C66; }
+.ui-btn-ghost:hover:not(:disabled) { background: #ECECEE; color: #1A1A1E; }
+.ui-btn-ghost:active:not(:disabled) { background: #E4E4E8; }
+.ui-btn-ghost:disabled { background: transparent; color: #B8B8C0; }
+
+/* 输入框焦点（6.2） */
+.ui-input:focus { border-color: #38BDF8; }
+
+/* 行内删除图标悬停变红（6.8） */
+.ui-ico-danger:hover { color: #D70015 !important; }
+
+/* 打字机光标（§5） */
+.ui-caret { display: inline-block; width: 2px; background: #38BDF8; animation: ui-blink 1s step-end infinite; }

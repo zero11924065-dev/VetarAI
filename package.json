@@ -1,0 +1,14 @@
+{
+  "name": "vetarai",
+  "productName": "VetarAI",
+  "version": "0.1.66",
+  "description": "VetarAI — 一款零生态基础的Agent工具 (An ecosystem-agnostic Agent tool)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "electron": "^33.0.0"
+  }
+}

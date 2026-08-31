@@ -1,0 +1,26 @@
+# 依赖
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# 构建产物 / 安装包
+dist/
+out/
+build/
+*.dmg
+*.exe
+subagent.dmg
+subagent-setup.exe
+
+# 日志 / 缓存 / 系统文件
+*.log
+logs/
+.DS_Store
+
+# 编辑器 / 测试产物
+*.local
+.pytest_cache/
+.coverage
