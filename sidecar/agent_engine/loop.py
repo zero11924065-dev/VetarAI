@@ -385,16 +385,17 @@ async def run_tool_loop(
         step_counts = {"prompt_eval_count": 0, "eval_count": 0}
         had_done = False
 
-        # M6（TS-112）图片入流：第一轮把用户图片传给连接器；后续轮次模型已基于图片上下文。
-        # checkpoint-067 R-4：工具 read_file 读到的图片（_kind="image"）也合并注入，
-        # 让多模态模型真正看到工具读取的图片。
-        # 无图片时不传 images 参数，保持与原调用签名一致（兼容既有 Mock 连接器）。
+        # M6（TS-112）图片入流；checkpoint-067 R-4：工具 read_file 读到的图片合并注入。
+        # checkpoint-070（修复附着图片丢失导致转写错误）：用户附着的图片【每轮都重发】，
+        # 不能只发第一轮。否则模型在第二轮及以后只能看到 read_file 从磁盘读的图，
+        # 会把"磁盘上的图"当成"用户要转写的图"而转写错误对象（用户实测：附着聊天截图
+        # 却转写了磁盘上的营业执照）。
         _imgs: list[str] = []
-        if step == 1 and first_round_images:
-            _imgs.extend(first_round_images)
+        if first_round_images:
+            _imgs.extend(first_round_images)   # 用户附着图片：每轮重发
         if pending_tool_images:
-            _imgs.extend(pending_tool_images)
-            pending_tool_images = []  # 消费后清空，避免重复注入
+            _imgs.extend(pending_tool_images)  # 工具读到的图片：注入后即清空
+            pending_tool_images = []
         _stream_kwargs: dict[str, Any] = {"tools": tools_spec_list}
         if _imgs:
             _stream_kwargs["images"] = _imgs
