@@ -211,6 +211,15 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
             resolved = p.resolve()
         except (OSError, RuntimeError):
             return {"ok": False, "error": f"bad_path: {rel}"}
+        # checkpoint-069 双前缀自纠正：模型常把"沙盒根目录名"当相对路径前缀再叠一层
+        # （如 root=~/Desktop/测试材料 时传 "测试材料/测试存档/..."），导致必然找不到。
+        # 相对路径首层 == 根目录名且解析结果不存在 → 去掉首层重试。
+        if not resolved.exists() and not Path(rel).is_absolute():
+            _parts = Path(rel).parts
+            if _parts and _parts[0] == root.name:
+                _alt = root.joinpath(*_parts[1:]) if len(_parts) > 1 else root
+                if _alt.exists():
+                    resolved = _alt.resolve()
 
     # 敏感判定（用户 2026-08-29 方案 B 定稿，M3 前置安全加固 S1）：
     # 仅【系统敏感位置】的 删除/写入/建目录 需要用户确认；
@@ -227,7 +236,7 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
 
     # 执行（无沙盒拦截；路径校验已在上面完成）
     try:
-        result = await _exec_on_path(tool_name, args, resolved)
+        result = await _exec_on_path(tool_name, args, resolved, root)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     problems = _validate(result, TOOLS[tool_name]["return_schema"])
@@ -236,12 +245,17 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
     return result
 
 
-async def _exec_on_path(tool_name: str, args: dict, target: Path) -> dict:
+async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | None = None) -> dict:
     """在已解析的目标路径上执行工具（无沙盒限制；敏感判定由 execute 前置完成）。"""
     try:
         if tool_name == "list_dir":
             if not target.is_dir():
-                raise ValueError(f"not_a_dir: {args.get('path') or ''}")
+                hint = (f"not_a_dir: {args.get('path') or ''}（解析后: {target}，不存在或不是目录；"
+                        f"沙盒根: {root}。请用绝对路径重试，或先 list_dir 沙盒根确认结构）")
+                if target.is_file():
+                    hint = (f"not_a_dir: {args.get('path') or ''}（该路径是【文件】不是目录；"
+                            f"请用 read_file 读取: {target}）")
+                raise ValueError(hint)
             entries = []
             for p in sorted(target.iterdir(), key=lambda x: x.name):
                 try:
@@ -258,7 +272,9 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path) -> dict:
             return {"ok": True, "entries": entries}
         if tool_name == "read_file":
             if not target.is_file():
-                raise ValueError(f"not_a_file: {target.name}")
+                _root_hint = f"；沙盒根: {root}" if root is not None else ""
+                raise ValueError(f"not_a_file: {target.name}（解析后: {target}，文件不存在{_root_hint}。"
+                                 f"请先 list_dir 确认目录内容，或使用绝对路径）")
             size = target.stat().st_size
             # checkpoint-067 R-4：图片文件不读字节成乱码，改返回 base64 + 图片标记，
             # 由 loop 注入视觉输入，让多模态模型真正读图（修复"自称没 OCR 能力"）。
