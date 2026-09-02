@@ -24,6 +24,35 @@ MAX_READ_BYTES = 1 * 1024 * 1024  # read_file 截断阈值（协议常量，非�
 # 改返回图片标记+base64，由 loop 注入视觉输入，让多模态模型真正读图（而非看到乱码说"没 OCR"）。
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif", ".tiff", ".svg"}
 
+
+def resolve_sandboxed_path(rel: str, sandbox_root: str) -> Path | None:
+    """把相对/绝对路径解析为沙盒根下的绝对路径，含双前缀自纠正（checkpoint-069 F-1）。
+
+    返回解析后的 Path；路径不存在时仍返回解析结果（调用方自行判断存在性），
+    但若首层 == 沙盒根目录名且去首层后存在，则用去首层结果。
+    供 execute() 与委派图片加载（delegate_task image_paths）共用，避免重复实现。
+    """
+    root = Path(sandbox_root).expanduser().resolve()
+    if not isinstance(rel, str) or not rel:
+        return None
+    p = Path(rel).expanduser()
+    if not p.is_absolute():
+        p = root / p
+    try:
+        resolved = p.resolve()
+    except (OSError, RuntimeError):
+        return None
+    # 双前缀自纠正：模型常把"沙盒根目录名"当相对路径前缀再叠一层
+    # （如 root=~/Desktop/测试材料 时传 "测试材料/测试存档/..."），导致必然找不到。
+    # 相对路径首层 == 根目录名且解析结果不存在 → 去掉首层重试。
+    if not resolved.exists() and not Path(rel).is_absolute():
+        _parts = Path(rel).parts
+        if _parts and _parts[0] == root.name:
+            _alt = root.joinpath(*_parts[1:]) if len(_parts) > 1 else root
+            if _alt.exists():
+                resolved = _alt.resolve()
+    return resolved
+
 # ---------- RETURN_SCHEMA 声明 ----------
 LIST_DIR_RETURN = {
     "required": ["ok", "entries"],
@@ -197,29 +226,16 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
     root = Path(sandbox_root).expanduser().resolve()
     action = _ACTION[tool_name]
 
-    # 解析目标路径（相对路径基于工作目录；绝对路径原样；符号链接跟随）
+    # 解析目标路径（相对路径基于工作目录；绝对路径原样；符号链接跟随；双前缀自纠正）
     rel = args.get("path")
     if rel is None and tool_name == "list_dir":
         resolved = root
     else:
         if not isinstance(rel, str) or not rel:
             return {"ok": False, "error": "bad_arg: path"}
-        p = Path(rel).expanduser()
-        if not p.is_absolute():
-            p = root / p
-        try:
-            resolved = p.resolve()
-        except (OSError, RuntimeError):
+        resolved = resolve_sandboxed_path(rel, sandbox_root)
+        if resolved is None:
             return {"ok": False, "error": f"bad_path: {rel}"}
-        # checkpoint-069 双前缀自纠正：模型常把"沙盒根目录名"当相对路径前缀再叠一层
-        # （如 root=~/Desktop/测试材料 时传 "测试材料/测试存档/..."），导致必然找不到。
-        # 相对路径首层 == 根目录名且解析结果不存在 → 去掉首层重试。
-        if not resolved.exists() and not Path(rel).is_absolute():
-            _parts = Path(rel).parts
-            if _parts and _parts[0] == root.name:
-                _alt = root.joinpath(*_parts[1:]) if len(_parts) > 1 else root
-                if _alt.exists():
-                    resolved = _alt.resolve()
 
     # 敏感判定（用户 2026-08-29 方案 B 定稿，M3 前置安全加固 S1）：
     # 仅【系统敏感位置】的 删除/写入/建目录 需要用户确认；

@@ -185,7 +185,9 @@ def tools_spec(with_delegation: bool = True) -> list[dict[str, Any]]:
             "function": {
                 "name": "delegate_task",
                 "description": "把一个子任务委派给项目内的另一个 Agent 独立完成。只在你判断任务需要分工时使用。"
-                               "子 Agent 看不到当前对话历史，任务书必须自包含（目标+必要输入+预期产出）。",
+                               "子 Agent 看不到当前对话历史，任务书必须自包含（目标+必要输入+预期产出）。"
+                               "你本条消息附着的图片会自动随委派传给子 Agent，无需自己读取或描述图片内容；"
+                               "任务书直接写“识别附图”即可。若图片在文件夹中，用 image_paths 传入路径列表。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -195,6 +197,12 @@ def tools_spec(with_delegation: bool = True) -> list[dict[str, Any]]:
                         "suggested_role": {"type": "string",
                                            "description": "目标 Agent 不存在时，按此角色自动新建子 Agent 并执行"
                                                           "（如'数据分析师'）。可不填，不填时直接用 target 名称新建。"},
+                        "image_paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "要随委派传给子 Agent 的图片文件路径列表（相对沙盒根或绝对路径，如 'images/a.png'）。"
+                                           "适用场景：批量图片识别/转写等。不填时仅传聊天附着图。",
+                        },
                     },
                     "required": ["target", "task", "expect"],
                 },
@@ -278,6 +286,10 @@ def build_system_prompt(
             "- 【强制】委派失败/交卷异常后，禁止你自己重新搜索或亲自完成该子任务来代答"
             "（那会让委派失去意义，且你已看不到子 Agent 的中间过程）。正确做法：向用户说明"
             "失败原因，建议重试该子任务或调整任务书后再委派一次。\n"
+            "- 【图片传递】你附着在消息里的图片会自动随 delegate_task 传给子 Agent（每轮都在），"
+            "不要声称“无法把图片发给子 Agent”；任务书里直接引用附图（如“将附图逐张转写为文字”）。"
+            "若图片在文件夹中（不在聊天里），先用 list_dir 拿到清单，再通过 image_paths 参数"
+            "把图片路径列表传入，子 Agent 将直接看到图片，无需自己逐张 read_file。\n"
             "- 不要委派自己，也不要把整个任务原样转丢给子 Agent。"
         )
     return base
@@ -291,6 +303,53 @@ async def _run_tool(name: str, args: dict, sandbox_root: str, authorizer: Author
 def _normalize_query(q: str) -> str:
     """搜索关键词归一化（用于去重判定）：去首尾空白、压缩连续空白、转小写。"""
     return _re.sub(r"\s+", " ", str(q)).strip().lower()
+
+
+# TS-117（3.31 任务2）：委派图片直传——读取 image_paths 图片转 base64 data URI。
+_MIME_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp"}
+_MAX_DELEGATION_IMAGES = 50      # 上限：最多 50 张（任务单 2.2）
+_MAX_DELEGATION_IMAGE_MB = 10    # 单张 ≤10MB（与聊天附件上限一致，需求文档 3.20②）
+
+
+def _load_delegation_images(image_paths: list, sandbox_root: str) -> tuple[list[str], list[str]]:
+    """读取图片路径列表 → (data URI 列表, 跳过的路径列表)。
+
+    复用 sidecar/tools/registry.py 的路径自纠正逻辑（resolve_sandboxed_path，
+    checkpoint-069 F-1），不新写一套。规则：
+    - 路径解析失败/不存在/非图片扩展名 → 跳过该张（不阻塞整体）
+    - 单张 >10MB → 跳过；总数 >50 → 只取前 50
+    - 读文件 → data:image/<mime>;base64, URI
+    单张失败不阻塞：部分成功即传，调用方据返回值报告 loaded / skipped。
+    """
+    import base64 as _b64
+    from pathlib import Path as _Path
+    from sidecar.tools.registry import resolve_sandboxed_path
+
+    loaded: list[str] = []
+    skipped: list[str] = []
+    paths = [p for p in (image_paths or []) if isinstance(p, str) and p.strip()]
+    for rel in paths[:_MAX_DELEGATION_IMAGES]:
+        resolved = resolve_sandboxed_path(rel.strip(), sandbox_root)
+        if resolved is None or not resolved.exists() or not resolved.is_file():
+            skipped.append(rel)
+            continue
+        ext = resolved.suffix.lower()
+        mime = _MIME_BY_EXT.get(ext)
+        if mime is None:
+            skipped.append(rel)  # 非图片扩展名
+            continue
+        if resolved.stat().st_size > _MAX_DELEGATION_IMAGE_MB * 1024 * 1024:
+            skipped.append(rel)  # 超限
+            continue
+        try:
+            b64 = _b64.b64encode(resolved.read_bytes()).decode("ascii")
+            loaded.append(f"data:{mime};base64,{b64}")
+        except (OSError, RuntimeError):
+            skipped.append(rel)
+    if len(paths) > _MAX_DELEGATION_IMAGES:
+        skipped.extend(paths[_MAX_DELEGATION_IMAGES:])  # 超 50 张的部分标记跳过
+    return loaded, skipped
 
 
 def _summarize(result: dict) -> str:
@@ -520,6 +579,13 @@ async def run_tool_loop(
                     else:
                         from sidecar.agent_engine.delegation import (
                             resolve_target, run_delegated_task, auto_create_agent)
+                        # TS-117（3.31 任务2）：加载 image_paths 图片 → base64，随委派传给子 Agent
+                        _image_paths = _args_d.get("image_paths") or []
+                        _loaded_images = []
+                        _skipped_paths = []
+                        if _image_paths:
+                            _loaded_images, _skipped_paths = _load_delegation_images(
+                                _image_paths, sandbox_root)
                         _agent, _terr = resolve_target(
                             delegation_ctx["project_id"], _args_d.get("target", ""), delegation_ctx["agent_id"])
                         _auto_created = False
@@ -541,17 +607,26 @@ async def run_tool_loop(
                                     _terr + "（自动新建子 Agent 功能已关闭。请告知用户：可在设置面板"
                                     "“多 Agent”区开启，或先在 Agent 面板手动创建子 Agent 后再委派。）")}
                         if _agent is not None:
+                            # TS-117（3.31 任务2）：合并聊天附着图 + image_paths 加载图，
+                            # 走 first_round_images 通道（每轮重发，禁走 pending 会中途丢图）
+                            _deleg_images = (first_round_images or []) + _loaded_images
                             result = await run_delegated_task(
                                 delegation_ctx["project_id"], delegation_ctx["agent_id"],
                                 delegation_ctx["session_id"], _agent, _task_arg, _expect_arg,
                                 sandbox_root=sandbox_root, authorizer=authorizer,
                                 max_rounds=max_rounds,
                                 connector=delegation_ctx.get("connector"),
-                                # TS-114（3.27）：主会话附着图片随委派传给子 Agent 视觉流
-                                images=first_round_images)
+                                # TS-114（3.27）+ TS-117（3.31）：主会话附着图片 + image_paths 图片
+                                # 随委派传给子 Agent 视觉流
+                                images=_deleg_images if _deleg_images else None)
                             # TS-108：自动新建场景标注新 Agent，供主 Agent 告知用户
                             if _auto_created and isinstance(result, dict):
                                 result["created_agent"] = _agent.get("name")
+                            # TS-117：报告图片加载结果（loaded / skipped）
+                            if isinstance(result, dict) and (_loaded_images or _skipped_paths):
+                                result["images_loaded"] = len(first_round_images or []) + len(_loaded_images)
+                                if _skipped_paths:
+                                    result["images_skipped"] = _skipped_paths
 
             # ---- authorizer 分工（2026-08-28 权限宽松化重构）----
             # loop 层不再执行前询问（避免每个操作都弹窗骚扰用户）；
