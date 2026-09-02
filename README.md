@@ -7,6 +7,8 @@
 
 > 当前版本：0.1.69（macOS · Apple Silicon）
 
+**Note: This project is developed by a Chinese team. English translations will be provided after the Chinese version. English language support is not yet available and will be included in a future update.**
+
 <div align="center">
 
 **⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
