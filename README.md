@@ -9,36 +9,31 @@
 
 ## 📑 目录 / Table of Contents
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <strong>🇨🇳 中文目录</strong><br><br>
-      🔹 <a href="#下载vetaraidownload-vetarai">下载 VetarAI</a><br>
-      🔹 <a href="#为什么选择-vetarai">为什么选择 VetarAI？</a><br>
-      🔹 <a href="#核心能力一览">核心能力一览</a><br>
-      🔹 <a href="#快速启动开发模式">快速启动（开发模式）</a><br>
-      🔹 <a href="#使用安装包推荐普通用户">使用安装包（推荐普通用户）</a><br>
-      🔹 <a href="#目录结构">目录结构</a><br>
-      🔹 <a href="#数据位置">数据位置</a><br>
-      🔹 <a href="#常见问题">常见问题</a><br>
-      🔹 <a href="#联系我--反馈">联系我 / 反馈</a><br>
-      🔹 <a href="#许可">许可</a>
-    </td>
-    <td width="50%" valign="top">
-      <strong>🇺🇸 English Contents</strong><br><br>
-      🔹 <a href="#下载vetaraidownload-vetarai">Download VetarAI</a><br>
-      🔹 <a href="#why-choose-vetarai">Why Choose VetarAI?</a><br>
-      🔹 <a href="#core-capabilities-overview">Core Capabilities Overview</a><br>
-      🔹 <a href="#quick-start-development-mode">Quick Start (Development Mode)</a><br>
-      🔹 <a href="#using-the-installer-recommended">Using the Installer (Recommended)</a><br>
-      🔹 <a href="#directory-structure">Directory Structure</a><br>
-      🔹 <a href="#data-locations">Data Locations</a><br>
-      🔹 <a href="#faq">FAQ</a><br>
-      🔹 <a href="#contact--feedback">Contact / Feedback</a><br>
-      🔹 <a href="#license">License</a>
-    </td>
-  </tr>
-</table>
+## 📑 目录 / Table of Contents
+
+🇨🇳 **中文目录**
+- [下载 VetarAI](#下载vetaraidownload-vetarai)
+- [为什么选择 VetarAI？](#为什么选择-vetarai)
+- [核心能力一览](#核心能力一览)
+- [快速启动（开发模式）](#快速启动开发模式)
+- [使用安装包（推荐普通用户）](#使用安装包推荐普通用户)
+- [目录结构](#目录结构)
+- [数据位置](#数据位置)
+- [常见问题](#常见问题)
+- [联系我 / 反馈](#联系我--反馈)
+- [许可](#许可)
+---
+🇺🇸 **English Contents**
+- [Download VetarAI](#下载vetaraidownload-vetarai)
+- [Why Choose VetarAI?](#why-choose-vetarai)
+- [Core Capabilities Overview](#core-capabilities-overview)
+- [Quick Start (Development Mode)](#quick-start-development-mode)
+- [Using the Installer (Recommended)](#using-the-installer-recommended)
+- [Directory Structure](#directory-structure)
+- [Data Locations](#data-locations)
+- [FAQ](#faq)
+- [Contact / Feedback](#contact--feedback)
+- [License](#license)
 
 ## 下载VetarAI/Download VetarAI
 **⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
