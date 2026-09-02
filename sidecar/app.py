@@ -33,6 +33,16 @@ from sidecar.agent_engine import roundtable as rt_mod
 from sidecar.storage.store import (
     list_roundtables, get_roundtable, list_roundtable_messages,
 )
+# 0.2.1（TS-119）：工作流模块（一级模块"流程中心"）
+from sidecar.storage.store import (
+    create_workflow, update_workflow, list_workflows, get_workflow, delete_workflow,
+    create_workflow_run, update_workflow_run, get_workflow_run, list_workflow_runs,
+    list_workflow_node_events,
+)
+from sidecar.workflow.engine import (
+    WorkflowEngine, resolve_workflow_approval, request_workflow_cancel,
+)
+from sidecar.workflow.schema import validate_definition
 from sidecar.logging_setup import setup_logging, resolve_log_dir
 import logging
 
@@ -1538,3 +1548,161 @@ async def api_dialog_choose_dir():
     if "User canceled" in stderr or "用户已取消" in stderr or "-128" in stderr:
         return {"canceled": True}
     raise HTTPException(status_code=500, detail=f"文件夹选择器异常: {stderr.strip()[:200]}")
+
+
+# ── 0.2.1（TS-119）：工作流模块（一级模块"流程中心"）──────────────────
+# 工作流是全局资源（与"智能中心"平级的一级模块），API 不挂 project 前缀。
+# 推理节点纯调用（无 tool loop）+ 模型切换即卸载，见 sidecar/workflow/engine.py。
+
+class WorkflowCreateReq(BaseModel):
+    name: str
+    description: str = ""
+    definition: dict[str, Any]
+
+
+class WorkflowUpdateReq(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    definition: dict[str, Any] | None = None
+
+
+class WorkflowRunReq(BaseModel):
+    params: dict[str, Any] | None = None
+    sandbox_root: str | None = None
+
+
+class WorkflowApproveReq(BaseModel):
+    approved: bool
+    comment: str = ""
+
+
+@app.get("/api/workflows")
+async def api_list_workflows():
+    return list_workflows()
+
+
+@app.post("/api/workflows")
+async def api_create_workflow(req: WorkflowCreateReq):
+    errors = validate_definition(req.definition)
+    if errors:
+        raise HTTPException(status_code=422, detail="；".join(errors[:5]))
+    wf_id = create_workflow(req.name.strip() or "未命名工作流", req.definition, req.description)
+    return {"ok": True, "id": wf_id}
+
+
+@app.get("/api/workflows/{wf_id}")
+async def api_get_workflow(wf_id: str):
+    wf = get_workflow(wf_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    return wf
+
+
+@app.put("/api/workflows/{wf_id}")
+async def api_update_workflow(wf_id: str, req: WorkflowUpdateReq):
+    wf = get_workflow(wf_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    if wf.get("built_in"):
+        raise HTTPException(status_code=403, detail="内置工作流不可修改")
+    if req.definition is not None:
+        errors = validate_definition(req.definition)
+        if errors:
+            raise HTTPException(status_code=422, detail="；".join(errors[:5]))
+    ok = update_workflow(wf_id, name=req.name, definition=req.definition,
+                         description=req.description)
+    return {"ok": ok}
+
+
+@app.delete("/api/workflows/{wf_id}")
+async def api_delete_workflow(wf_id: str):
+    wf = get_workflow(wf_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    if wf.get("built_in"):
+        raise HTTPException(status_code=403, detail="内置工作流不可删除")
+    ok = delete_workflow(wf_id)
+    return {"ok": ok}
+
+
+@app.post("/api/workflows/{wf_id}/run")
+async def api_run_workflow(wf_id: str, req: WorkflowRunReq):
+    """运行工作流：SSE 实时推送节点事件（node_start/node_done/node_error/
+    approval_required/workflow_done/workflow_failed/workflow_stopped）。"""
+    wf = get_workflow(wf_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    errors = validate_definition(wf["definition"])
+    if errors:
+        raise HTTPException(status_code=422, detail="工作流定义有错误：" + "；".join(errors[:5]))
+
+    run_id = create_workflow_run(wf_id, req.params or {})
+    sandbox_root = req.sandbox_root or str(_os.path.expanduser("~/Desktop"))
+
+    async def gen():
+        try:
+            conn = get_ollama_connector()
+            engine = WorkflowEngine(run_id, wf["definition"], conn, sandbox_root,
+                                    params=req.params or {})
+            agen = engine.run()
+            try:
+                async for ev in agen:
+                    yield _sse_format(ev["event"], ev["data"])
+            finally:
+                # 客户端断开/正常结束：关闭引擎消费器 → 引擎内部取消生产者任务
+                # 并卸载驻留模型（任何退出路径都不漏释放内存）
+                await agen.aclose()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            try:
+                update_workflow_run(run_id, status="failed", error=str(e))
+            except Exception:
+                pass
+            yield _sse_format("workflow_failed", {"error": str(e)})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/api/workflow-runs")
+async def api_list_workflow_runs(workflow_id: str | None = None, limit: int = 30):
+    return list_workflow_runs(workflow_id, min(max(limit, 1), 100))
+
+
+@app.get("/api/workflow-runs/{run_id}")
+async def api_get_workflow_run(run_id: str):
+    run = get_workflow_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    run["node_events"] = list_workflow_node_events(run_id)
+    return run
+
+
+@app.post("/api/workflow-runs/{run_id}/approve")
+async def api_workflow_approve(run_id: str, req: WorkflowApproveReq):
+    """人工审批决议：唤醒挂起在审批节点的引擎继续/终止。"""
+    run = get_workflow_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    if run["status"] != "awaiting_approval":
+        raise HTTPException(status_code=409, detail=f"当前状态 {run['status']} 不在等待审批")
+    ok = resolve_workflow_approval(run_id, req.approved, req.comment)
+    if not ok:
+        raise HTTPException(status_code=409, detail="审批已失效（运行可能已结束）")
+    # 恢复为运行中（引擎被唤醒后会继续推进节点）
+    update_workflow_run(run_id, status="running")
+    return {"ok": True}
+
+
+@app.post("/api/workflow-runs/{run_id}/stop")
+async def api_workflow_stop(run_id: str):
+    """停止运行中的工作流：引擎在下一节点边界检测标志后中止，并卸载驻留模型。"""
+    run = get_workflow_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    if run["status"] not in ("running", "awaiting_approval"):
+        return {"ok": False, "detail": f"当前状态 {run['status']}，无需停止"}
+    request_workflow_cancel(run_id)
+    # 若卡在审批等待，驳回以解锁引擎（引擎会以取消标志中止）
+    resolve_workflow_approval(run_id, False, "用户已停止")
+    return {"ok": True}

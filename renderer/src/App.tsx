@@ -7,6 +7,8 @@ import { RoundtablePanel } from './panels/RoundtablePanel';
 import { IndependentAgentsPanel } from './panels/IndependentAgentsPanel';
 import { RoundtableView } from './panels/RoundtableView';
 import { SettingsPage } from './panels/SettingsPage';
+import { WorkflowPanel } from './panels/WorkflowPanel';
+import { ModuleNav, ModuleKey } from './panels/ModuleNav';
 import { getApiBase } from './apiBase';
 import { colors, fonts } from './theme';
 import { Icon, Spinner } from './Icon';
@@ -15,6 +17,9 @@ import { alertDialog } from './Dialog';
 export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // 0.2.1（TS-119）：一级模块导航——智能中心（独立Agent+项目组，现有页面原样）/
+  // 流程中心（工作流模块）。切换采用显示/隐藏（不卸载），运行中的聊天流与工作流不中断。
+  const [activeModule, setActiveModule] = useState<ModuleKey>('intelligence');
   // M7（TS-113）手风琴互斥：左栏折叠面板点开一个自动收起其余
   // checkpoint-045：左栏仅保留任务队列/圆桌；其余低频模块收入整页设置
   type PanelKey = 'tasks' | 'roundtable';
@@ -114,6 +119,12 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: colors.bgApp, fontFamily: fonts.base, color: colors.textPrimary }}>
+      {/* 0.2.1（TS-119）：一级模块导航栏（最左竖条） */}
+      <ModuleNav active={activeModule} onSelect={setActiveModule} />
+
+      {/* 智能中心：现有页面整体原样包入（独立 Agent / 项目组 / 聊天），
+          切换模块仅隐藏不卸载——运行中的委派流与工作流不受影响 */}
+      <div style={{ display: activeModule === 'intelligence' ? 'flex' : 'none', flex: 1, minWidth: 0, minHeight: 0 }}>
       {/* Left sidebar（flexShrink:0 防止被右侧超宽内容挤压出屏幕）
           checkpoint-046：打开整页设置时隐藏左栏（全屏展示，视觉体验优先）
           checkpoint-051：亮色主题（规范 §8.0） */}
@@ -248,6 +259,13 @@ export default function App() {
             </div>
           );
         })}
+      </div>
+      </div>
+
+      {/* 0.2.1（TS-119）：流程中心（工作流模块）。同样保持挂载，仅切换显示，
+          运行中的工作流在切回智能中心时继续执行 */}
+      <div style={{ display: activeModule === 'workflow' ? 'flex' : 'none', flex: 1, minWidth: 0, minHeight: 0 }}>
+        <WorkflowPanel />
       </div>
     </div>
   );

@@ -354,6 +354,23 @@ class OllamaConnector:
         r = await client.delete(f"{self._base}/api/delete", json={"name": name})
         return r.status_code == 200
 
+    async def unload_model(self, name: str) -> bool:
+        """0.2.1（TS-119）：立即卸载指定模型，释放显存/内存。
+
+        机制：Ollama 官方语义——发送 keep_alive=0 的请求即令模型立即从内存卸载
+        （用空消息 /api/chat 触发，Ollama 会应用 keep_alive 并卸载）。
+        工作流引擎在"下一节点模型不同"时调用；相同模型连续节点不卸载。
+        失败（Ollama 未运行/模型未加载）静默返回 False，不阻塞流程。
+        """
+        try:
+            client = await self._client()
+            r = await client.post(f"{self._base}/api/chat",
+                                  json={"model": name, "messages": [], "stream": False,
+                                        "keep_alive": 0}, timeout=15)
+            return r.status_code == 200
+        except Exception:
+            return False
+
 
 # TS-103 B18：模块级单例——app.py 各端点共用一个 connector（client 池复用）。
 # 配置变化（ollama_base_url / network_switch / proxy_http_port）由 _client()

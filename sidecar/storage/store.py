@@ -136,6 +136,47 @@ def _ensure_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
         CREATE INDEX IF NOT EXISTS idx_msgs_session ON session_messages(session_id);
         CREATE INDEX IF NOT EXISTS idx_msgs_agent ON session_messages(agent_id);
+        -- 0.2.1（TS-119）：工作流模块（一级模块"流程中心"）
+        -- 工作流定义：全局资源（不挂项目），definition 存完整 JSON（nodes/edges/params）
+        CREATE TABLE IF NOT EXISTS workflows (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            definition TEXT NOT NULL,
+            built_in INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        -- 工作流运行实例：每次"运行"一条，variables 存运行时上下文快照
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running'
+                CHECK(status IN ('running','awaiting_approval','done','failed','stopped')),
+            current_node TEXT,
+            variables TEXT,
+            result TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_wf_runs_workflow ON workflow_runs(workflow_id);
+        -- 节点事件：每个节点执行一条（状态/输入/输出/耗时/重试），供运行监控回放
+        CREATE TABLE IF NOT EXISTS workflow_node_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            node_type TEXT,
+            status TEXT NOT NULL,
+            model_used TEXT,
+            input_summary TEXT,
+            output_summary TEXT,
+            error TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            duration_ms INTEGER,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_wf_events_run ON workflow_node_events(run_id);
     """)
     # B06（TS-101）：旧 DB 缺 tool_steps/truncated 列 → 幂等迁移（禁止靠 CREATE TABLE IF NOT EXISTS 加列）
     cols = {r[1] for r in conn.execute("PRAGMA table_info(session_messages)").fetchall()}
@@ -902,4 +943,186 @@ def delete_roundtable(project_id: str, rt_id: str) -> bool:
                            (rt_id, project_id))
         deleted = cur.rowcount > 0
     return deleted
+
+
+# ---------- 0.2.1（TS-119）：工作流存储（全局库） ----------
+# 写操作一律 _write_gconn()（锁内提交/回滚/必关闭），读操作 _read_gconn()（必关闭）
+# ——禁止裸 _gconn()：with 只提交事务不关闭连接，会犯 checkpoint-050 修过的连接泄漏。
+# UPDATE 一律显式分支（B12 教训：禁止 SET 拼接）。
+
+def create_workflow(name: str, definition: dict, description: str = "",
+                    built_in: bool = False) -> str:
+    """创建工作流定义，返回 id。definition 为完整 JSON（nodes/edges/params）。"""
+    wf_id = str(uuid.uuid4())
+    with _write_gconn() as conn:
+        conn.execute(
+            "INSERT INTO workflows (id, name, description, definition, built_in) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (wf_id, name, description or "", json.dumps(definition, ensure_ascii=False),
+             1 if built_in else 0),
+        )
+    return wf_id
+
+
+def update_workflow(wf_id: str, name: str | None = None, definition: dict | None = None,
+                    description: str | None = None) -> bool:
+    """更新工作流定义（部分更新；显式分支，禁止 SET 拼接——B12 教训）。"""
+    updated = False
+    with _write_gconn() as conn:
+        if name is not None:
+            cur = conn.execute("UPDATE workflows SET name = ?, updated_at = datetime('now') WHERE id = ?",
+                               (name, wf_id))
+            updated = updated or cur.rowcount > 0
+        if description is not None:
+            cur = conn.execute("UPDATE workflows SET description = ?, updated_at = datetime('now') WHERE id = ?",
+                               (description, wf_id))
+            updated = updated or cur.rowcount > 0
+        if definition is not None:
+            cur = conn.execute("UPDATE workflows SET definition = ?, updated_at = datetime('now') WHERE id = ?",
+                               (json.dumps(definition, ensure_ascii=False), wf_id))
+            updated = updated or cur.rowcount > 0
+    return updated
+
+
+def list_workflows() -> list[dict[str, Any]]:
+    """列出全部工作流定义（新→旧）。"""
+    with _read_gconn() as conn:
+        rows = conn.execute(
+            "SELECT id, name, description, definition, built_in, created_at, updated_at "
+            "FROM workflows ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+    result = []
+    for r in rows:
+        try:
+            defn = json.loads(r[3])
+        except json.JSONDecodeError:
+            defn = {"nodes": [], "edges": []}
+        result.append({"id": r[0], "name": r[1], "description": r[2],
+                       "definition": defn, "built_in": bool(r[4]),
+                       "created_at": r[5], "updated_at": r[6]})
+    return result
+
+
+def get_workflow(wf_id: str) -> dict[str, Any] | None:
+    with _read_gconn() as conn:
+        r = conn.execute(
+            "SELECT id, name, description, definition, built_in, created_at, updated_at "
+            "FROM workflows WHERE id = ?", (wf_id,)).fetchone()
+    if not r:
+        return None
+    try:
+        defn = json.loads(r[3])
+    except json.JSONDecodeError:
+        defn = {"nodes": [], "edges": []}
+    return {"id": r[0], "name": r[1], "description": r[2], "definition": defn,
+            "built_in": bool(r[4]), "created_at": r[5], "updated_at": r[6]}
+
+
+def delete_workflow(wf_id: str) -> bool:
+    """删除工作流定义（运行记录与节点事件保留作历史）。内置工作流不可删。"""
+    wf = get_workflow(wf_id)
+    if not wf or wf.get("built_in"):
+        return False
+    with _write_gconn() as conn:
+        cur = conn.execute("DELETE FROM workflows WHERE id = ?", (wf_id,))
+        return cur.rowcount > 0
+
+
+def create_workflow_run(workflow_id: str, variables: dict | None = None) -> str:
+    run_id = str(uuid.uuid4())
+    with _write_gconn() as conn:
+        conn.execute(
+            "INSERT INTO workflow_runs (id, workflow_id, status, variables) VALUES (?, ?, 'running', ?)",
+            (run_id, workflow_id, json.dumps(variables or {}, ensure_ascii=False)),
+        )
+    return run_id
+
+
+def update_workflow_run(run_id: str, status: str | None = None, current_node: str | None = None,
+                        variables: dict | None = None, result: str | None = None,
+                        error: str | None = None) -> bool:
+    """更新运行记录（显式分支，禁止 SET 拼接——B12 教训）。"""
+    updated = False
+    with _write_gconn() as conn:
+        if status is not None:
+            cur = conn.execute("UPDATE workflow_runs SET status = ?, updated_at = datetime('now') WHERE id = ?",
+                               (status, run_id))
+            updated = updated or cur.rowcount > 0
+        if current_node is not None:
+            cur = conn.execute("UPDATE workflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
+                               (current_node, run_id))
+            updated = updated or cur.rowcount > 0
+        if variables is not None:
+            cur = conn.execute("UPDATE workflow_runs SET variables = ?, updated_at = datetime('now') WHERE id = ?",
+                               (json.dumps(variables, ensure_ascii=False), run_id))
+            updated = updated or cur.rowcount > 0
+        if result is not None:
+            cur = conn.execute("UPDATE workflow_runs SET result = ?, updated_at = datetime('now') WHERE id = ?",
+                               (result, run_id))
+            updated = updated or cur.rowcount > 0
+        if error is not None:
+            cur = conn.execute("UPDATE workflow_runs SET error = ?, updated_at = datetime('now') WHERE id = ?",
+                               (error, run_id))
+            updated = updated or cur.rowcount > 0
+    return updated
+
+
+def get_workflow_run(run_id: str) -> dict[str, Any] | None:
+    with _read_gconn() as conn:
+        r = conn.execute(
+            "SELECT id, workflow_id, status, current_node, variables, result, error, "
+            "created_at, updated_at FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+    if not r:
+        return None
+    try:
+        variables = json.loads(r[4]) if r[4] else {}
+    except json.JSONDecodeError:
+        variables = {}
+    return {"id": r[0], "workflow_id": r[1], "status": r[2], "current_node": r[3],
+            "variables": variables, "result": r[5], "error": r[6],
+            "created_at": r[7], "updated_at": r[8]}
+
+
+def list_workflow_runs(workflow_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
+    """列出运行记录（新→旧），可按工作流过滤。"""
+    with _read_gconn() as conn:
+        if workflow_id:
+            rows = conn.execute(
+                "SELECT id, workflow_id, status, current_node, result, error, created_at "
+                "FROM workflow_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT ?",
+                (workflow_id, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, workflow_id, status, current_node, result, error, created_at "
+                "FROM workflow_runs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return [{"id": r[0], "workflow_id": r[1], "status": r[2], "current_node": r[3],
+             "result": r[4], "error": r[5], "created_at": r[6]} for r in rows]
+
+
+def append_workflow_node_event(run_id: str, node_id: str, node_type: str, status: str,
+                               model_used: str | None = None, input_summary: str = "",
+                               output_summary: str = "", error: str | None = None,
+                               retry_count: int = 0, duration_ms: int | None = None) -> None:
+    """追加一条节点事件（运行监控实时读）。"""
+    with _write_gconn() as conn:
+        conn.execute(
+            "INSERT INTO workflow_node_events (run_id, node_id, node_type, status, model_used, "
+            "input_summary, output_summary, error, retry_count, duration_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_id, node_id, node_type, status, model_used,
+             input_summary[:2000], output_summary[:2000], error, retry_count, duration_ms),
+        )
+
+
+def list_workflow_node_events(run_id: str) -> list[dict[str, Any]]:
+    with _read_gconn() as conn:
+        rows = conn.execute(
+            "SELECT id, node_id, node_type, status, model_used, input_summary, "
+            "output_summary, error, retry_count, duration_ms, created_at "
+            "FROM workflow_node_events WHERE run_id = ? ORDER BY id",
+            (run_id,)).fetchall()
+    return [{"id": r[0], "node_id": r[1], "node_type": r[2], "status": r[3],
+             "model_used": r[4], "input_summary": r[5], "output_summary": r[6],
+             "error": r[7], "retry_count": r[8], "duration_ms": r[9],
+             "created_at": r[10]} for r in rows]
 
