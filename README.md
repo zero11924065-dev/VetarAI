@@ -4,23 +4,48 @@
 >VetarAI 是一款运行在本地的桌面应用，让你在同一台 Mac 上自由创建多个隔离项目，每个项目内动态编排主 Agent 与子 Agent。支持任务委派、多 Agent 圆桌讨论、多模态识图，全部数据保存在本地，不依赖任何云端服务。
 <br>VetarAI is a local desktop application that lets you freely create multiple isolated projects on the same Mac, dynamically orchestrating main and sub-agents within each project. It supports task delegation, multi-agent roundtable discussions, and multimodal image recognition. All data is stored locally with zero dependency on any cloud services.
 <br>当前版本：0.1.69（macOS · Apple Silicon）
-
 **Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🇨🇳 中文目录</h3>
+      <ul>
+        <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI / Download VetarAI</a></li>
+        <li><a href="#为什么选择-vetarai">为什么选择 VetarAI？</a></li>
+        <li><a href="#核心能力一览">核心能力一览</a></li>
+        <li><a href="#快速启动开发模式">快速启动（开发模式）</a></li>
+        <li><a href="#使用安装包推荐普通用户">使用安装包（推荐普通用户）</a></li>
+        <li><a href="#目录结构">目录结构</a></li>
+        <li><a href="#数据位置">数据位置</a></li>
+        <li><a href="#常见问题">常见问题</a></li>
+        <li><a href="#联系我--反馈">联系我 / 反馈</a></li>
+        <li><a href="#许可">许可</a></li>
+      </ul>
+    </td>
+    <td width="50%" valign="top">
+      <h3>🇺🇸 English Contents</h3>
+      <ul>
+        <li><a href="#下载vetaraidownload-vetarai">Download VetarAI</a></li>
+        <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
+        <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
+        <li><a href="#quick-start-development-mode">Quick Start (Development Mode)</a></li>
+        <li><a href="#using-the-installer-recommended-for-regular-users">Using the Installer (Recommended for Regular Users)</a></li>
+        <li><a href="#directory-structure">Directory Structure</a></li>
+        <li><a href="#data-locations">Data Locations</a></li>
+        <li><a href="#faq">FAQ</a></li>
+        <li><a href="#contact--feedback">Contact / Feedback</a></li>
+        <li><a href="#license">License</a></li>
+      </ul>
+    </td>
+  </tr>
+</table>
 
 ## 下载VetarAI/Download VetarAI
 **⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
 <br>**⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
 <br>（132MB · macOS Apple Silicon · dmg 格式）
 
-##  目录 (Table of Contents)
-- [为什么选择 VetarAI？](#为什么选择-vetarai)
-- [核心能力一览](#核心能力一览)
-- [快速启动（开发模式）](#快速启动开发模式)
-- [使用安装包（推荐普通用户）](#使用安装包推荐普通用户)
-- [目录结构](#目录结构)
-- [数据位置](#数据位置)
-- [常见问题](#常见问题)
-- [联系我 / 反馈](#联系我--反馈)
 </div>
 
 **如何安装**：下载 `VetarAI-0.1.69-arm64.dmg` → 双击挂载 → 把 VetarAI 拖入「应用程序」文件夹 → 从启动台打开。
@@ -96,14 +121,12 @@ Network Guard: Controls domestic/international outbound traffic and triggers cir
 ## Quick Start (Development Mode)
 
 ### 1. 安装前端依赖
-**Install Frontend Dependencies**
 ```bash
 cd renderer
 npm install
 ```
 
 ### 2. 安装 Python sidecar 依赖
-**Install Python Sidecar Dependencies**
 ```bash
 cd ../sidecar
 python3 -m venv .venv
@@ -111,7 +134,6 @@ python3 -m venv .venv
 ```
 
 ### 3. 启动应用
-**Start the Application**
 ```bash
 cd ..
 npm start          # 或 ./node_modules/electron/Electron.app/Contents/MacOS/Electron .
@@ -119,14 +141,35 @@ npm start          # 或 ./node_modules/electron/Electron.app/Contents/MacOS/Ele
 应用启动时会自动拉起 Python 侧车（默认 `http://127.0.0.1:8765`）。
 
 ### 4. 准备本地模型
-**Prepare Local Models**
 需本机运行 **Ollama** 并拉取模型（如 `ollama pull qwen3.8`）。应用通过 `http://localhost:11434` 连接。
 
+## Quick Start (Development Mode)
+**Install Frontend Dependencies**
+```bash
+cd renderer
+npm install
+```
+**Install Python Sidecar Dependencies**
+```bash
+cd ../sidecar
+python3 -m venv .venv
+.venv/bin/pip install fastapi uvicorn httpx pydantic pypdf python-docx openpyxl
+```
+**Start the Application**
+```bash
+cd ..
+npm start          # 或 ./node_modules/electron/Electron.app/Contents/MacOS/Electron .
+```
+Upon application startup, the Python sidecar is automatically launched (defaulting to http://127.0.0.1:8765).
+**Prepare Local Models**
+Ollama must be running locally with the model pulled (e.g., ollama pull qwen3.8). The application connects via http://localhost:11434.
+
 ## 使用安装包（推荐普通用户）
-**Using the Installer (Recommended for Regular Users)**
+
 
 下载 `VetarAI-<版本>-arm64.dmg`，挂载后拖入「应用程序」即可。首装因未签名可能提示"无法验证开发者"：右键 → 打开，或终端执行 `xattr -cr /Applications/VetarAI.app`。
 
+## Using the Installer (Recommended for Regular Users)
 Download VetarAI-<version>-arm64.dmg, mount it, and drag the app into the "Applications" folder. On first launch, since the app is unsigned, you may see an "unidentified developer" warning: right-click the app → Open, or run xattr -cr /Applications/VetarAI.app in Terminal.
 
 ## 目录结构
