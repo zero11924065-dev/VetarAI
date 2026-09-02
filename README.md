@@ -9,8 +9,6 @@
 
 ## 📑 目录 / Table of Contents
 
-## 📑 目录 / Table of Contents
-
 🇨🇳 **中文目录**
 - [下载 VetarAI](#下载vetaraidownload-vetarai)
 - [为什么选择 VetarAI？](#为什么选择-vetarai)
@@ -36,8 +34,7 @@
 - [License](#license)
 
 ## 下载VetarAI/Download VetarAI
-**⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
-<br>**⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
+**⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)** **⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
 <br>（132MB · macOS Apple Silicon · dmg 格式）
 
 </div>
