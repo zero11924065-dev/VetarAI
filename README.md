@@ -220,10 +220,12 @@ subagent/
 如果你在使用中遇到任何问题，或者有更好的建议，欢迎随时联系我！
 - **微信**：ISEEVetar
 - **邮箱**：zero11924065@foxmail.com
+- **抖音**：VidjeliSteVetar
 ## Contact / Feedback
 If you encounter any issues while using this project, or if you have any suggestions, feel free to reach out to me!
 - **WeChat**: ISEEVetar
 - **Email**: zero11924065@foxmail.com
+- **TikTok**：VidjeliSteVetar （TikTok's Chinese counterpart）
 
 ## 许可
 暂未声明许可证（No license）。如需使用/转载代码，请先联系作者确认。
