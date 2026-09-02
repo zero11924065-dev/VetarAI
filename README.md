@@ -13,6 +13,7 @@
 
 **⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
 **⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
+
 （132MB · macOS Apple Silicon · dmg 格式）
 
 </div>
