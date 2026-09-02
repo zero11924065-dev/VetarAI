@@ -9,11 +9,11 @@
 
 <table>
   <tr>
-    <!-- 左边中文稍微窄一点 -->
-    <td width="40%" valign="top">
+    <!-- 恢复 50% 宽度，保证左右绝对对称 -->
+    <td width="50%" valign="top">
       <h3>🇨🇳 中文目录</h3>
       <ul>
-        <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI </a></li>
+        <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI</a></li>
         <li><a href="#为什么选择-vetarai">为什么选择 VetarAI？</a></li>
         <li><a href="#核心能力一览">核心能力一览</a></li>
         <li><a href="#快速启动开发模式">快速启动（开发模式）</a></li>
@@ -25,15 +25,16 @@
         <li><a href="#许可">许可</a></li>
       </ul>
     </td>
-    <!-- 右边英文宽一点，给长标题留足空间 -->
-    <td width="60%" valign="top">
+    <!-- 恢复 50% 宽度，并精简了长标题 -->
+    <td width="50%" valign="top">
       <h3>🇺🇸 English Contents</h3>
       <ul>
         <li><a href="#下载vetaraidownload-vetarai">Download VetarAI</a></li>
         <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
         <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
         <li><a href="#quick-start-development-mode">Quick Start (Development Mode)</a></li>
-        <li><a href="#using-the-installer-recommended">Using the Installer (Recommended)</a></li>
+        <!-- 标题精简为 Installer (Recommended)，长度完美匹配 -->
+        <li><a href="#installer-recommended">Installer (Recommended)</a></li>
         <li><a href="#directory-structure">Directory Structure</a></li>
         <li><a href="#data-locations">Data Locations</a></li>
         <li><a href="#faq">FAQ</a></li>
@@ -172,7 +173,7 @@ Ollama must be running locally with the model pulled (e.g., ollama pull qwen3.8)
 
 下载 `VetarAI-<版本>-arm64.dmg`，挂载后拖入「应用程序」即可。首装因未签名可能提示"无法验证开发者"：右键 → 打开，或终端执行 `xattr -cr /Applications/VetarAI.app`。
 
-## Using the Installer (Recommended)
+## Installer (Recommended)
 Download VetarAI-<version>-arm64.dmg, mount it, and drag the app into the "Applications" folder. On first launch, since the app is unsigned, you may see an "unidentified developer" warning: right-click the app → Open, or run xattr -cr /Applications/VetarAI.app in Terminal.
 
 ## 目录结构
