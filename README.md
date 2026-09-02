@@ -1,6 +1,6 @@
 # VetarAI — Ollama 驱动的本地多 Agent 编排桌面应用
 
-> 一款零生态基础的 Agent 工具 | An ecosystem-agnostic Agent tool.
+> 一款零生态依赖的 Agent 工具 | An ecosystem-agnostic Agent tool.
 >VetarAI 是一款运行在本地的桌面应用，让你在同一台 Mac 上自由创建多个隔离项目，每个项目内动态编排主 Agent 与子 Agent。支持任务委派、多 Agent 圆桌讨论、多模态识图，全部数据保存在本地，不依赖任何云端服务。
 > 当前版本：0.1.68（macOS · Apple Silicon）
 
