@@ -2,7 +2,8 @@
 
 > 一款零生态依赖的 Agent 工具 | An ecosystem-agnostic Agent tool.
 >VetarAI 是一款运行在本地的桌面应用，让你在同一台 Mac 上自由创建多个隔离项目，每个项目内动态编排主 Agent 与子 Agent。支持任务委派、多 Agent 圆桌讨论、多模态识图，全部数据保存在本地，不依赖任何云端服务。
-> VetarAI is a local desktop application that lets you freely create multiple isolated projects on the same Mac, dynamically orchestrating main and sub-agents within each project. It supports task delegation, multi-agent roundtable discussions, and multimodal image recognition. All data is stored locally with zero dependency on any cloud services.
+
+>VetarAI is a local desktop application that lets you freely create multiple isolated projects on the same Mac, dynamically orchestrating main and sub-agents within each project. It supports task delegation, multi-agent roundtable discussions, and multimodal image recognition. All data is stored locally with zero dependency on any cloud services.
 > 当前版本：0.1.69（macOS · Apple Silicon）
 
 <div align="center">
