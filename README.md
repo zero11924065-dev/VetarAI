@@ -31,7 +31,7 @@
         <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
         <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
         <li><a href="#quick-start-development-mode">Quick Start (Development Mode)</a></li>
-        <li><a href="#using-the-installer-recommended">Using the Installer (Recommended)</a></li>
+        <li><a href="#using-the-installer-recommended"><nobr>Using the Installer (Recommended)</nobr></a></li>
         <li><a href="#directory-structure">Directory Structure</a></li>
         <li><a href="#data-locations">Data Locations</a></li>
         <li><a href="#faq">FAQ</a></li>
