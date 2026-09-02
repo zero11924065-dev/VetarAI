@@ -9,7 +9,8 @@
 
 <table>
   <tr>
-    <td width="50%" valign="top">
+    <!-- 左边中文稍微窄一点 -->
+    <td width="40%" valign="top">
       <h3>🇨🇳 中文目录</h3>
       <ul>
         <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI / Download VetarAI</a></li>
@@ -24,14 +25,15 @@
         <li><a href="#许可">许可</a></li>
       </ul>
     </td>
-    <td width="50%" valign="top">
+    <!-- 右边英文宽一点，给长标题留足空间 -->
+    <td width="60%" valign="top">
       <h3>🇺🇸 English Contents</h3>
       <ul>
         <li><a href="#下载vetaraidownload-vetarai">Download VetarAI</a></li>
         <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
         <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
         <li><a href="#quick-start-development-mode">Quick Start (Development Mode)</a></li>
-        <li><a href="#using-the-installer-recommended" style="white-space: nowrap;">Using the Installer (Recommended)</a></li>
+        <li><a href="#using-the-installer-recommended">Using the Installer (Recommended)</a></li>
         <li><a href="#directory-structure">Directory Structure</a></li>
         <li><a href="#data-locations">Data Locations</a></li>
         <li><a href="#faq">FAQ</a></li>
