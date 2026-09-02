@@ -206,7 +206,9 @@ def _agent_conn(project_id: str) -> sqlite3.Connection:
     pdir = PROJECTS_ROOT / project_id
     pdir.mkdir(parents=True, exist_ok=True)
     db = pdir / "agents.db"
-    conn = sqlite3.connect(str(db), timeout=10.0)
+    # TS-115（3.26）：timeout 10→5s——读路径长时间忙等待会拖垮前端（会话选择器
+    # 只显示部分会话），5s 内拿不到锁就快速失败，前端有超时+重试兜底。
+    conn = sqlite3.connect(str(db), timeout=5.0)
     _ensure_schema(conn)
     return conn
 
@@ -525,20 +527,24 @@ def create_session(project_id: str, agent_id: str, title: str = "新会话") -> 
 
 
 def list_sessions(project_id: str, agent_id: str) -> list[dict[str, Any]]:
+    # TS-115（3.26）：LEFT JOIN 一次查询消除 N+1。
+    # 旧实现每个会话单独 SELECT COUNT(*)，会话多 + 写锁竞争（委派任务运行时
+    # save_message/update_agent_task 频繁写）→ 读连接 10s 忙等待 → 前端拿不到完整列表。
     with _read_conn(project_id) as conn:
-        rows = conn.execute(
-            "SELECT id, title, created_at, updated_at FROM sessions WHERE agent_id = ? ORDER BY updated_at DESC",
-            (agent_id,),
-        ).fetchall()
+        rows = conn.execute("""
+            SELECT s.id, s.title, s.created_at, s.updated_at,
+                   COUNT(m.id) AS message_count
+            FROM sessions s
+            LEFT JOIN session_messages m ON m.session_id = s.id
+            WHERE s.agent_id = ?
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+        """, (agent_id,)).fetchall()
         result = []
         for r in rows:
-            # 统计消息数
-            msg_count = conn.execute(
-                "SELECT COUNT(*) FROM session_messages WHERE session_id = ?", (r[0],)
-            ).fetchone()[0]
             result.append({
                 "id": r[0], "title": r[1], "created_at": r[2],
-                "updated_at": r[3], "message_count": msg_count,
+                "updated_at": r[3], "message_count": r[4],
             })
     return result
 

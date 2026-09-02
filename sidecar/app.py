@@ -27,7 +27,8 @@ from sidecar.storage.store import (
     update_independent_agent, delete_independent_agent,
 )
 from sidecar.compactor import compact_session, export_session_md
-from sidecar.agent_engine.delegation import run_delegated_task
+from sidecar.agent_engine.delegation import (
+    run_delegated_task, request_delegation_cancel)
 from sidecar.agent_engine import roundtable as rt_mod
 from sidecar.storage.store import (
     list_roundtables, get_roundtable, list_roundtable_messages,
@@ -242,7 +243,22 @@ async def api_add_agent(req: AgentCreateReq):
 
 @app.delete("/api/agents/{project_id}/{agent_id}")
 async def api_remove_agent(project_id: str, agent_id: str):
-    return {"removed": remove_agent_config(project_id, agent_id)}
+    # TS-114（3.25）+ TS-115（3.19② 维度 B/C）：删除前 stop 关联 running 委派任务。
+    # 关联 = 该 Agent 是委派目标（target_agent_id）或发起者（parent_agent_id）。
+    # TS-115 增强：stop 后等 1s 让执行循环检测到取消标志。
+    stopped = 0
+    try:
+        for t in list_agent_tasks(project_id, limit=200):
+            if t.get("status") in ("queued", "running") and (
+                    t.get("target_agent_id") == agent_id or t.get("parent_agent_id") == agent_id):
+                request_delegation_cancel(t["id"])
+                stopped += 1
+        if stopped:
+            await asyncio.sleep(1)
+    except Exception:
+        pass  # stop 失败不影响删除
+    removed = remove_agent_config(project_id, agent_id)
+    return {"removed": removed, "stopped_tasks": stopped}
 
 @app.get("/api/agents/{project_id}")
 async def api_list_agents(project_id: str):
@@ -536,10 +552,24 @@ async def api_rename_session(session_id: str, req: SessionRenameReq, project_id:
 
 @app.delete("/api/sessions/{session_id}")
 async def api_delete_session(session_id: str, project_id: str):
+    # TS-114（3.25）+ TS-115（3.19② 维度 B/C）：删除前 stop 关联 running 委派任务。
+    # TS-115 增强：stop 后等 1s 让执行循环检测到取消标志（不再发起新的模型调用），
+    # 并清理该会话挂起的未响应授权请求（_auth_pending，防内存泄漏）。
+    stopped = 0
+    try:
+        for t in list_agent_tasks(project_id, limit=200):
+            if t.get("status") in ("queued", "running") and (
+                    t.get("session_id") == session_id or t.get("parent_session_id") == session_id):
+                request_delegation_cancel(t["id"])
+                stopped += 1
+        if stopped:
+            await asyncio.sleep(1)  # 等执行循环走到下一检查点（发起新模型调用之前）
+    except Exception:
+        pass  # stop 失败不影响删除
     ok = delete_session(project_id, session_id)
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
-    return {"deleted": True}
+    return {"deleted": True, "stopped_tasks": stopped}
 
 @app.get("/api/sessions/{session_id}/messages")
 async def api_load_session_messages(session_id: str, project_id: str):
@@ -1136,6 +1166,21 @@ async def api_retry_agent_task(project_id: str, task_id: str):
         old["task"], old["expect"], sandbox_root=sandbox_root,
         authorizer=None, max_rounds=_max_rounds, connector=None)
     return {"new_task_id": result.get("task_id"), "result": result}
+
+
+@app.post("/api/projects/{project_id}/tasks/{task_id}/stop")
+async def api_stop_delegation_task(project_id: str, task_id: str):
+    """TS-114（3.25）：停止进行中的委派任务（同圆桌 /stop 机制）。
+    置取消标志，执行循环在下一个检查点（当前轮模型调用完成后）中止，
+    任务标 failed（fail_reason 含"已停止"），不再发起新的模型调用。立即返回。"""
+    task = get_agent_task(project_id, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task["status"] in ("done", "failed"):
+        raise HTTPException(status_code=400, detail=f"任务已结束（{task['status']}），无需停止")
+    request_delegation_cancel(task_id)
+    return {"ok": True, "detail": "已请求停止，将在当前步骤完成后中止"}
+
 
 
 # ── M3-3（TS-109）：圆桌讨论端点 ─────────────────────

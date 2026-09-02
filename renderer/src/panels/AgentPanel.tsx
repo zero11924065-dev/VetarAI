@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { colors, fonts, radius, shadow, typo, btnPrimary, btnSecondary, btnGhost, input, textarea as textareaStyle, select as selectStyle, badge, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog, alertDialog } from '../Dialog';
+import { emit } from '../events';
 
 interface Agent { id: string; name: string; role?: string; model_name?: string; type_: string; parent_agent_id?: string | null; system_prompt?: string | null; }
 
@@ -214,6 +215,9 @@ export function AgentPanel({ projectId, selectedAgentId, onSelectAgent }: {
                         });
                         if (!r.ok) { const d = await r.json().catch(() => ({})); console.error('change model failed', d); }
                         fetchAgents();
+                        // TS-115（3.30）：模型切换后通知其他面板（ChatPanel 刷新 agentInfo，
+                        // 确保 getEffectiveModel() 返回新模型，无需刷新页面）
+                        emit('agent:updated', { agent_id: a.id, model_name: v, project_id: projectId });
                       } catch (err) { console.error('change model failed', err); }
                     }}
                     title="切换该 Agent 的模型"

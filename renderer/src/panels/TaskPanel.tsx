@@ -15,7 +15,7 @@ interface AgentTask {
   task: string;
   status: 'queued' | 'running' | 'done' | 'failed';
   fail_reason?: string | null;
-  report?: { status?: string; summary?: string } | null;
+  report?: { status?: string; summary?: string; prompt_eval_count?: number } | null;
   session_id?: string | null;
   created_at?: string;
 }
@@ -46,6 +46,9 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
   const [error, setError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [retryMsg, setRetryMsg] = useState<string | null>(null);
+  // TS-114（3.25）：停止按钮状态
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [stopMsg, setStopMsg] = useState<string | null>(null);
   // M7（TS-113 建议包2）：每秒计时（有进行中任务时才启动）
   const [now, setNow] = useState(() => Date.now());
   const hasActive = tasks.some(t => t.status === 'queued' || t.status === 'running');
@@ -90,6 +93,24 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
     }
   };
 
+  const handleStop = async (taskId: string) => {
+    setStoppingId(taskId);
+    setStopMsg(null);
+    try {
+      const res = await fetch(`${API}/projects/${projectId}/tasks/${taskId}/stop`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      setStopMsg('已请求停止，将在当前步骤完成后中止');
+      // 立即刷新一次拿到最新状态（轮询 8s 之外的人工刷新）
+      await fetchTasks();
+    } catch (e) {
+      setStopMsg('停止失败: ' + (e as Error).message);
+    } finally {
+      setStoppingId(null);
+      setTimeout(() => setStopMsg(null), 6000);
+    }
+  };
+
   // 手风琴头由 App.tsx 统一渲染（checkpoint-051）；本组件只输出内容。
   return (
     <div style={{ fontFamily: fonts.base, padding: '8px 12px' }}>
@@ -116,6 +137,14 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
             <div style={{ ...calloutStyle('warn'), marginBottom: 6 }}>
               <Icon name="info" size={16} style={{ flexShrink: 0, marginTop: 2 }} />
               <span>{retryMsg}</span>
+            </div>
+          )}
+
+          {/* TS-114 停止消息 */}
+          {stopMsg && (
+            <div style={{ ...calloutStyle('warn'), marginBottom: 6 }}>
+              <Icon name="info" size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+              <span>{stopMsg}</span>
             </div>
           )}
 
@@ -170,6 +199,28 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
                       {elapsed}
                     </span>
                   )}
+                  {/* TS-114（3.25）：running 任务停止按钮 */}
+                  {t.status === 'running' && (
+                    <button
+                      className="ui-btn ui-btn-secondary"
+                      onClick={() => handleStop(t.id)}
+                      disabled={stoppingId !== null}
+                      title="停止该委派任务"
+                      style={{
+                        ...btnSecondary,
+                        height: 22,
+                        padding: '0 8px',
+                        fontSize: 12,
+                        gap: 4,
+                        marginLeft: 'auto',
+                        background: colors.dangerBg,
+                        color: colors.dangerText,
+                        borderColor: 'transparent',
+                      }}>
+                      {stoppingId === t.id ? <Spinner size={12} /> : <Icon name="stop" size={14} />}
+                      {stoppingId === t.id ? '停止中…' : '停止'}
+                    </button>
+                  )}
                   {t.status === 'failed' && (
                     <button className="ui-btn ui-btn-secondary" onClick={() => handleRetry(t.id)} disabled={retryingId !== null}
                       style={{ ...btnSecondary, height: 22, padding: '0 8px', fontSize: 12, marginLeft: 'auto', gap: 4 }}>
@@ -196,6 +247,12 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
                 )}
                 {t.status === 'done' && t.report?.summary && (
                   <div style={{ fontSize: 12, color: colors.okText, marginTop: 4 }}>摘要：{String(t.report.summary).slice(0, 60)}</div>
+                )}
+                {/* TS-116（3.20③）：委派上下文用量 */}
+                {t.status === 'done' && t.report?.prompt_eval_count != null && t.report.prompt_eval_count > 0 && (
+                  <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 2 }}>
+                    上下文用量：{t.report.prompt_eval_count} tokens
+                  </div>
                 )}
               </div>
             );

@@ -7,12 +7,31 @@ import { SSEStreamParser } from '../lib/sseParser';
 import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, btnGhost, btnDanger, btnDangerSoft, select as selectStyle, calloutStyle } from '../theme';
 import { Icon, Spinner, IconName } from '../Icon';
 import { confirmDialog, promptDialog } from '../Dialog';
+import { on } from '../events';
 
 interface AgentConfig { id: string; name: string; role?: string; model_name?: string; type_: string; parent_agent_id?: string | null; system_prompt?: string | null; }
 interface Session { id: string; title: string; message_count: number; }
 interface PendingItem { name: string; dataUri: string; isImage: boolean; size: number; parsedText?: string; parsing?: boolean; parseFailed?: boolean; }
 
 const API = getApiBase();
+
+// TS-116（3.28）：消息时间戳格式化（SQLite datetime('now') 是 UTC，补 'Z' 解析）
+function formatTime(isoString: string): string {
+  if (!isoString) return '';
+  const date = new Date(isoString.includes('T') ? isoString : isoString.replace(' ', 'T') + 'Z');
+  if (isNaN(date.getTime())) return '';
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return '刚刚';
+  if (diffMins < 60) return `${diffMins} 分钟前`;
+  const isToday = date.toDateString() === now.toDateString();
+  if (isToday) return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const isYesterday = new Date(now.getTime() - 86400000).toDateString() === date.toDateString();
+  if (isYesterday) return `昨天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) + ' ' +
+         date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
 const IMAGE_MIMES = ['image/png','image/jpeg','image/webp','image/gif','image/bmp'];
 // checkpoint-048：聊天上传支持办公文档（走后端附件解析端点）
 const PARSEABLE_EXTS = ['.pdf','.docx','.xlsx','.xlsm','.csv','.txt','.md','.json','.yaml','.yml','.log','.ini'];
@@ -405,20 +424,61 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     } catch (e) { console.error('agent data:', e); }
   }, [projectId, agentId]);
 
-  const fetchSessions = useCallback(async () => {
+  // TS-115（3.26）：5s 超时 + 失败重试 1 次（后端 list_sessions JOIN 已消除 N+1，
+  // 前端兜底防"委派任务运行时写锁竞争 → 前端挂起 → 只显示部分会话"）
+  const fetchSessions = useCallback(async (retry = false): Promise<Session[] | null> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
     try {
-      const res = await fetch(`${API}/sessions?project_id=${projectId}&agent_id=${agentId}`);
-      if (!res.ok) return;
+      const res = await fetch(`${API}/sessions?project_id=${projectId}&agent_id=${agentId}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setSessions(data as Session[]);
         return data as Session[];
       }
-    } catch (e) { console.error('sessions:', e); }
-    return [];
+    } catch (e) {
+      if (!retry) {
+        // 失败重试 1 次（含超时 / 网络错 / HTTP 错）
+        return fetchSessions(true);
+      }
+      console.error('sessions:', e);
+    } finally {
+      clearTimeout(timer);
+    }
+    return null;
   }, [projectId, agentId]);
+  // 刷新按钮 loading 态
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefreshSessions = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchSessions();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchSessions]);
 
   useEffect(() => { fetchAgentData(); }, [fetchAgentData]);
+
+  // TS-115（3.30）：AgentPanel 修改模型后 emit('agent:updated') → 此处刷新 agentInfo，
+  // 确保 getEffectiveModel() 立即返回新模型（无需刷新页面/重启应用）。
+  useEffect(() => {
+    const unsub = on('agent:updated', (data: any) => {
+      if (data && data.agent_id === agentId && data.project_id === projectId) {
+        fetch(`${API}/agents/${projectId}`)
+          .then(r => r.json())
+          .then((list: any) => {
+            const updated = Array.isArray(list) ? list.find((a: any) => a.id === agentId) : null;
+            if (updated) setAgentInfo(updated);
+          })
+          .catch(e => console.error('agent:updated refresh failed:', e));
+      }
+    });
+    return unsub;
+  }, [agentId, projectId]);
 
   // 初始化：加载会话列表 → 选第一个或新建 → 加载消息
   useEffect(() => {
@@ -742,6 +802,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       id: newLocalMsgId(), // TS-102 B14：改用单调序号生成器，杜绝同毫秒碰撞
       role: 'assistant', content: '', model_used: modelUsed,
       toolSteps: [], step: 0, maxStep: 5, tokensUsed: 0,
+      startedAt: Date.now(), // TS-116（3.29）：气泡出现时间
     };
     setLocalMessages(prev => [...prev, assistantMsg]);
     const streamMsgId = assistantMsg.id!;
@@ -828,7 +889,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           ...(typeof d.prompt_eval_count === 'number' ? { prompt_eval_count: d.prompt_eval_count } : {}) }));
         if (typeof d.prompt_eval_count === 'number') setTokenUsed(d.prompt_eval_count);
       } else if (ev.event === 'error') {
-        patchStreamMsg(m => ({ ...m, streamError: d.detail || '生成出错', thinking: false }));
+        patchStreamMsg(m => {
+          const completedDuration = m.startedAt
+            ? Math.round((Date.now() - m.startedAt) / 1000)
+            : undefined;
+          return {
+            ...m, streamError: d.detail || '生成出错', thinking: false, stopped: true,
+            ...(completedDuration !== undefined ? { completedDuration } : {}),
+          };
+        });
       } else if (ev.event === 'auth_request') {
         // 敏感操作授权弹窗（2026-08-28 权限宽松化）：仅当 Agent 要【删除】系统敏感位置
         // （系统目录/用户关键资产/应用数据）时弹出确认框。其余操作默认放行，不弹窗。
@@ -863,7 +932,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           let content = m.content || '';
           if (typeof d.content === 'string') content = d.content;
           else if (accContent) content = content + accContent;
-          return { ...m, content, thinking: false }; // TS-102 B13：done 兜底收起思考指示
+          // TS-116（3.29）：计算完成用时（气泡出现 → done）
+          const completedDuration = m.startedAt
+            ? Math.round((Date.now() - m.startedAt) / 1000)
+            : undefined;
+          return {
+            ...m, content, thinking: false, stopped: true,
+            ...(completedDuration !== undefined ? { completedDuration } : {}),
+          };
         });
         if (accContent) { /* done 已覆盖，丢弃残留 */ }
         accContent = '';
@@ -1037,6 +1113,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             ))}
           </select>
           {/* 图标按钮组 */}
+          {/* TS-115（3.26）：会话列表刷新按钮 */}
+          <button className="ui-btn ui-btn-ghost" onClick={handleRefreshSessions} title="刷新会话列表" disabled={refreshing}
+            style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
+            {refreshing
+              ? <Spinner size={14} />
+              : <Icon name="rotate-cw" size={15} style={{color:colors.textSecondary}} />}
+          </button>
           <button className="ui-btn ui-btn-ghost" onClick={handleNewSession} title="新建会话"
             style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
             <Icon name="plus" size={16} style={{color:colors.textSecondary}} />
@@ -1155,6 +1238,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               <div style={{fontSize:11,color:colors.textTertiary,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
                 <Icon name={isUser ? 'user' : isSystem ? 'info' : 'bot'} size={12} />
                 {isUser ? '你' : isSystem ? '系统' : (msg.model_used || 'AI')}
+                {msg.created_at && <span style={{marginLeft:4,opacity:0.7}}>{formatTime(msg.created_at)}</span>}
               </div>
               {/* 气泡 */}
               <div style={{ maxWidth:'78%', padding:'10px 14px', borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
@@ -1169,9 +1253,18 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                   </div>
                 )}
                 {/* checkpoint-067b D-1：思考完成后保留显示思考用时 */}
-                {msg.role === 'assistant' && !msg.thinking && msg.thinkingDuration != null && msg.thinkingDuration > 0 && (
-                  <div style={{ fontSize:11, color:colors.textTertiary, marginBottom:6, display:'inline-flex', alignItems:'center', gap:4 }}>
-                    <Icon name="clock" size={12} /> 思考用时 {msg.thinkingDuration}s
+                {msg.role === 'assistant' && !msg.thinking && (
+                  <div style={{ fontSize:11, color:colors.textTertiary, marginBottom:6, display:'inline-flex', alignItems:'center', gap:8 }}>
+                    {msg.thinkingDuration != null && msg.thinkingDuration > 0 && (
+                      <span style={{display:'inline-flex',alignItems:'center',gap:4}}>
+                        <Icon name="clock" size={12} /> 思考 {msg.thinkingDuration}s
+                      </span>
+                    )}
+                    {msg.completedDuration != null && msg.completedDuration > 0 && (
+                      <span style={{display:'inline-flex',alignItems:'center',gap:4}}>
+                        <Icon name="check-circle" size={12} /> 完成 {msg.completedDuration}s
+                      </span>
+                    )}
                   </div>
                 )}
                 {/* M1-4：工具折叠条（在 content 上方，顺序堆叠） */}

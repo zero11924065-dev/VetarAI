@@ -33,6 +33,10 @@ export interface Message {
   errorKind?: 'business' | 'network';
   // M5（TS-111）：长加载提示（发送后长时间无事件时的已等待秒数，>0 显示）
   waitingSeconds?: number;
+  // TS-116（3.29）：完成用时（秒）= 气泡出现 → done/error 事件
+  completedDuration?: number;
+  // TS-116（3.29）：气泡出现时间戳（ms，Date.now()）
+  startedAt?: number;
 }
 
 const STORAGE_KEY = 'subagent_messages_v4';

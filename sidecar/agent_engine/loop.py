@@ -266,6 +266,8 @@ def build_system_prompt(
             "如'人事专员'）时，必须先调用 delegate_task 委派给 XX（不存在时系统会自动新建），"
             "不得自己直接做该事、不得自己搜索后代答、更不得在未调用 delegate_task 的情况下"
             "把回答描述成'已派XX查询'。\n"
+            "- 【串行约束】同一时间只委派一个子任务，等前一个交卷后再委派下一个"
+            "（本机性能受限，同时只跑 1 个大模型）。\n"
             "- 需要分工时用 delegate_task 委派：任务书必须自包含，子 Agent 看不到本对话历史，"
             "目标/输入/预期产出都要写进任务书。\n"
             "- 委派目标可以是项目内已有的 Agent；若目标不存在，系统会按建议角色"
@@ -327,12 +329,14 @@ async def run_tool_loop(
     connector: Any = None,
     delegation_ctx: dict | None = None,
     first_round_images: list[str] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> AsyncIterator[dict]:
     """tool-calling 循环。yield 事件 dict（与 SSE event 一一对应）：
       token / tool_call / tool_result / state / done / error
     熔断双保险：轮次上限 + 连续 CONSECUTIVE_FAIL_LIMIT 轮工具全部失败。
     delegation_ctx（TS-107 M3-1）：主会话传 {"project_id","agent_id","session_id","connector"}，
     此时 delegate_task 路由到委派执行器；None 时不允许委派（子会话双保险）。
+    cancel_check（TS-114 3.25）：回调为真时，本轮开始前（未发起模型调用）yield cancelled 事件并返回。
     """
     from sidecar.ollama.connector import get_ollama_connector
     conn = connector or get_ollama_connector()  # TS-103 B18：默认走单例，连接池复用
@@ -355,6 +359,15 @@ async def run_tool_loop(
     pending_tool_images: list[str] = []
 
     for step in range(1, max_rounds + 1):
+        # TS-114（3.25 委派停止）检查点：每轮开始前（发起模型调用之前）检测取消标志
+        if cancel_check is not None:
+            try:
+                _cancelled = bool(cancel_check())
+            except Exception:
+                _cancelled = False
+            if _cancelled:
+                yield {"event": "cancelled", "data": {"detail": "已停止"}}
+                return
         # M2 溢出预警（每轮开始前判定）
         if prompt_eval_history:
             last_pe = prompt_eval_history[-1]
@@ -533,7 +546,9 @@ async def run_tool_loop(
                                 delegation_ctx["session_id"], _agent, _task_arg, _expect_arg,
                                 sandbox_root=sandbox_root, authorizer=authorizer,
                                 max_rounds=max_rounds,
-                                connector=delegation_ctx.get("connector"))
+                                connector=delegation_ctx.get("connector"),
+                                # TS-114（3.27）：主会话附着图片随委派传给子 Agent 视觉流
+                                images=first_round_images)
                             # TS-108：自动新建场景标注新 Agent，供主 Agent 告知用户
                             if _auto_created and isinstance(result, dict):
                                 result["created_agent"] = _agent.get("name")

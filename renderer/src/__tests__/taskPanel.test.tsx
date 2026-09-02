@@ -94,3 +94,80 @@ describe('TaskPanel 任务状态面板', () => {
     }, { timeout: 3000 });
   });
 });
+
+// TS-114（3.25）：running 任务停止按钮
+describe('TaskPanel 停止按钮（TS-114 3.25）', () => {
+  const TASKS_WITH_RUNNING = [
+    { id: 't1', target_agent_name: '文员', task: '整理会议纪要', status: 'done', report: { summary: '已整理' } },
+    { id: 't2', target_agent_name: '研究员', task: '调研竞品', status: 'running' },
+    { id: 't3', target_agent_name: '翻译员', task: '翻译文档', status: 'failed', fail_reason: '交卷格式两次校验未通过' },
+  ];
+
+  it('running 任务显示停止按钮（failed/done 不显示）', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+      const u = String(url);
+      if (u.includes('/tasks')) return { ok: true, status: 200, json: async () => TASKS_WITH_RUNNING };
+      return { ok: true, status: 200, json: async () => ({}) };
+    }) as any);
+
+    render(<TaskPanel projectId="p1" />);
+    await waitFor(() => {
+      expect(screen.getByText('进行中')).toBeTruthy();
+    }, { timeout: 3000 });
+
+    const stopBtns = screen.getAllByText('停止');
+    expect(stopBtns.length).toBe(1); // 仅 running 任务
+    // failed/done 没有停止按钮
+    expect(screen.getAllByText('重试').length).toBe(1);
+  });
+
+  it('点击停止 → POST /tasks/{id}/stop → 刷新任务列表', async () => {
+    const calls: string[] = [];
+    let listCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+      const u = String(url);
+      calls.push(`${init?.method || 'GET'} ${u}`);
+      if (u.includes('/stop')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, detail: '已请求停止' }) };
+      }
+      if (u.includes('/tasks')) {
+        listCalls += 1;
+        return { ok: true, status: 200, json: async () => TASKS_WITH_RUNNING };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }) as any);
+
+    render(<TaskPanel projectId="p1" />);
+    await waitFor(() => {
+      expect(screen.getAllByText('停止').length).toBe(1);
+    }, { timeout: 3000 });
+    const before = listCalls;
+    fireEvent.click(screen.getByText('停止'));
+    await waitFor(() => {
+      expect(calls.some(c => c.startsWith('POST') && c.includes('/tasks/t2/stop'))).toBe(true);
+      expect(listCalls).toBeGreaterThan(before); // 点击后触发一次刷新
+    }, { timeout: 3000 });
+  });
+
+  it('停止端点 400（任务已结束）→ 显示停止失败提示', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+      const u = String(url);
+      if (u.includes('/stop')) {
+        return { ok: false, status: 400, json: async () => ({ detail: '任务已结束（done），无需停止' }) };
+      }
+      if (u.includes('/tasks')) {
+        return { ok: true, status: 200, json: async () => TASKS_WITH_RUNNING };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }) as any);
+
+    render(<TaskPanel projectId="p1" />);
+    await waitFor(() => {
+      expect(screen.getAllByText('停止').length).toBe(1);
+    }, { timeout: 3000 });
+    fireEvent.click(screen.getByText('停止'));
+    await waitFor(() => {
+      expect(screen.getByText(/停止失败/)).toBeTruthy();
+    }, { timeout: 3000 });
+  });
+});

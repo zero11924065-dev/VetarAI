@@ -48,6 +48,27 @@ _NOOP_LOCK = _NoopAsyncLock()
 # checkpoint-068（3.22 D-7 活性超时；默认值由配置项覆盖，0=关闭）
 DEFAULT_ACTIVITY_TIMEOUT = 900
 
+# TS-114（3.25 委派任务停止）：取消标志注册表（同圆桌 _CANCEL_FLAGS 机制）。
+# request_delegation_cancel(task_id) 置标志；执行循环在检查点（拿锁后/每轮前/追问前）
+# 检测到标志即中止：任务标 failed（fail_reason 含"已停止"），不再发起新的模型调用。
+_DELEGATION_CANCEL: dict[str, bool] = {}
+
+# TS-116（3.21④）：记录上一次委派使用的模型，用于检测模型切换。
+# model_parallel=false 时，切换模型需等待 5s 让 Ollama 自动 GC 旧模型（无 unload API）。
+_LAST_DELEGATED_MODEL: dict[str, str] = {}  # project_id → model_name
+
+
+def request_delegation_cancel(task_id: str) -> None:
+    _DELEGATION_CANCEL[str(task_id)] = True
+
+
+def clear_delegation_cancel(task_id: str) -> None:
+    _DELEGATION_CANCEL.pop(str(task_id), None)
+
+
+def _is_delegation_cancelled(task_id: str) -> bool:
+    return bool(_DELEGATION_CANCEL.get(str(task_id)))
+
 
 def _norm_task_text(t: str) -> str:
     """归一化任务书文本用于去重比对：去首尾空白、压缩连续空白、去首尾标点。"""
@@ -269,16 +290,23 @@ def auto_create_agent(project_id: str, suggested_role: str, model_name: str) -> 
 # checkpoint-068（3.22 D-7）：活性超时——防止模型进入僵死（吞吐近零、不产出）时
 # 委派无限等待。超时由 _run_pass_with_timeout 用 asyncio.wait_for 实现（0=关闭）。
 async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
-                        authorizer: Any, max_rounds: int, connector: Any) -> tuple[str, list[dict], str | None]:
+                        authorizer: Any, max_rounds: int, connector: Any,
+                        cancel_check: Any = None,
+                        first_round_images: list[str] | None = None) -> tuple[str, list[dict], str | None, int]:
     """跑一次子会话 loop，返回 (最终文本, tool_steps, 错误)。
-    子任务不做压缩交互：compact 事件按跳过处理（不弹窗、不中断）。"""
+    子任务不做压缩交互：compact 事件按跳过处理（不弹窗、不中断）。
+    TS-114（3.25）：cancel_check 回调为真时，run_tool_loop 在下一轮开始前中止。
+    TS-114（3.27）：first_round_images 把委派附着的图片传给子会话视觉流。"""
     from sidecar.ollama.connector import get_ollama_connector
     conn = connector or get_ollama_connector()
     full_text = ""
     steps: list[dict] = []
+    _pe_max_box = [0]  # TS-116：本轮最大 prompt_eval_count（列表包装避免闭包 reassignment）
     async for ev in run_tool_loop(model, msgs, tools_spec(with_delegation=False), sandbox_root,
                                   authorizer=authorizer, max_rounds=max_rounds,
-                                  context_limit=0, connector=conn):
+                                  context_limit=0, connector=conn,
+                                  cancel_check=cancel_check,
+                                  first_round_images=first_round_images):
         e, d = ev.get("event"), ev.get("data") or {}
         if e == "token":
             full_text += d.get("delta", "")
@@ -299,12 +327,23 @@ async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
             if isinstance(d.get("content"), str) and d["content"].strip():
                 full_text = d["content"]
         elif e == "error":
-            return full_text, steps, str(d.get("detail", "子任务执行出错"))
-        # compact_auto / compact_required / state / thinking：跳过（子任务不压缩不交互）
-    return full_text, steps, None
+            return full_text, steps, str(d.get("detail", "子任务执行出错")), _pe_max_box[0]
+        elif e == "cancelled":
+            # TS-114（3.25）：loop 检查点检测到取消标志 → 中止子会话
+            return full_text, steps, "已停止", _pe_max_box[0]
+        elif e == "state":
+            # TS-116（3.20③）：收集 prompt_eval_count 回传给主会话
+            pe = d.get("prompt_eval_count")
+            if isinstance(pe, int) and pe > 0 and pe > _pe_max_box[0]:
+                _pe_max_box[0] = pe
+        # compact_auto / compact_required / thinking：跳过（子任务不压缩不交互）
+    return full_text, steps, None, _pe_max_box[0]
 
 
-def _task_user_message(task_id: str, task: str, expect: str) -> str:
+def _task_user_message(task_id: str, task: str, expect: str, image_count: int = 0) -> str:
+    # TS-114（3.27）：附图提示——图片已随任务书进入视觉流，子 Agent 直接看，无需 read_file
+    img_hint = (f"附图 {image_count} 张已随任务书发送，请直接识别，无需 read_file。\n\n"
+                if image_count > 0 else "")
     return (
         "【委派任务】\n"
         f"任务ID：{task_id}\n"
@@ -312,6 +351,7 @@ def _task_user_message(task_id: str, task: str, expect: str) -> str:
         f"{task}\n\n"
         "交卷标准：\n"
         f"{expect}\n\n"
+        f"{img_hint}"
         "【执行须知】读取文件前必须先用 list_dir 列出目录确认文件真实存在，"
         "禁止凭猜测的文件名直接 read_file；找不到文件就如实说明，不要编造。\n"
         "【防幻觉硬约束】\n"
@@ -329,12 +369,15 @@ def _task_user_message(task_id: str, task: str, expect: str) -> str:
 # timeout>0 时整个执行超过该秒数即抛 asyncio.TimeoutError（由调用方判卡死）；0=不限制。
 async def _run_pass_with_timeout(model: str, msgs: list[dict], sandbox_root: str,
                                authorizer: Any, max_rounds: int, connector: Any,
-                               timeout: float) -> tuple[str, list[dict], str | None]:
+                               timeout: float, cancel_check: Any = None,
+                               first_round_images: list[str] | None = None) -> tuple[str, list[dict], str | None, int]:
     if timeout and timeout > 0:
         return await asyncio.wait_for(
-            _run_one_pass(model, msgs, sandbox_root, authorizer, max_rounds, connector),
+            _run_one_pass(model, msgs, sandbox_root, authorizer, max_rounds, connector,
+                          cancel_check=cancel_check, first_round_images=first_round_images),
             timeout=timeout)
-    return await _run_one_pass(model, msgs, sandbox_root, authorizer, max_rounds, connector)
+    return await _run_one_pass(model, msgs, sandbox_root, authorizer, max_rounds, connector,
+                               cancel_check=cancel_check, first_round_images=first_round_images)
 
 
 async def run_delegated_task(
@@ -342,8 +385,10 @@ async def run_delegated_task(
     target_agent: dict, task: str, expect: str,
     sandbox_root: str, authorizer: Any = None, max_rounds: int = 200,
     connector: Any = None,
+    images: list[str] | None = None,
 ) -> dict:
     """执行一次委派（默认串行锁内；task_concurrency 开启时并行）。
+    TS-114（3.27）：images=委派附着图片（base64 列表），传入子会话视觉流。
 
     成功：{"ok": True, "task_id", "status", "summary", "artifacts"}
     失败：{"ok": False, "task_id"?, "error": 缺失/失败原因}
@@ -397,6 +442,24 @@ async def run_delegated_task(
         _lock_ctx = _NOOP_LOCK if _concurrent else _DELEGATION_LOCK
         async with _lock_ctx:
             update_agent_task(project_id, task_id, status="running")
+            # TS-114（3.25）检查点1：排队期间被请求停止 → 直接标失败，不再发起模型调用
+            if _is_delegation_cancelled(task_id):
+                clear_delegation_cancel(task_id)
+                update_agent_task(project_id, task_id, status="failed",
+                                  fail_reason="用户已停止该委派任务（已停止，未执行）")
+                return {"ok": False, "task_id": task_id,
+                        "error": f"子 Agent「{target_name}」任务已被用户停止。"}
+            # TS-116（3.21④）：model_parallel=false + 模型切换 → 等待 5s 让 Ollama GC 旧模型
+            try:
+                import sidecar.config as _cfg_mp
+                _mp = bool(_cfg_mp.get_config().get("model_parallel", False))
+            except Exception:
+                _mp = False
+            if not _mp:
+                _last_model = _LAST_DELEGATED_MODEL.get(project_id)
+                if _last_model and _last_model != model:
+                    await asyncio.sleep(5)  # 等待 Ollama 自动 GC 旧模型
+            _LAST_DELEGATED_MODEL[project_id] = model
             # 上下文隔离（决策 2）：为子 Agent 新建独立会话，只有任务书，无主对话历史
             child_sid = create_session(project_id, target_agent_id, title=f"委派任务 {task_id[:8]}")
             update_agent_task(project_id, task_id, session_id=child_sid)
@@ -430,16 +493,28 @@ async def run_delegated_task(
                 skills_list_text=_sk_text,
             ) + _REPORT_CONTRACT_PROMPT
 
-            user_msg = _task_user_message(task_id, task, expect)
+            user_msg = _task_user_message(task_id, task, expect,
+                                          image_count=len(images) if images else 0)
             save_message(project_id, child_sid, target_agent_id, "user", user_msg)
 
+            # TS-114（3.25）：本任务取消检查回调（loop 每轮开始前调用）
+            _cc = (lambda: _is_delegation_cancelled(task_id))
+            _pe_final_box = [0]  # TS-116：交卷报告 prompt_eval_count（追问路径可能不赋值）
             try:
                 # 第一轮：任务书 → 子 Agent 执行 → 交卷
                 msgs = [{"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_msg}]
-                full_text, steps, err = await _run_pass_with_timeout(
+                full_text, steps, err, pe1 = await _run_pass_with_timeout(
                     model, msgs, sandbox_root, authorizer, max_rounds, connector,
-                    _activity_timeout)
+                    _activity_timeout, cancel_check=_cc, first_round_images=images)
+                if pe1: _pe_final_box[0] = pe1
+                # TS-114（3.25）检查点2：第一轮结束后、交卷解析前
+                if _is_delegation_cancelled(task_id):
+                    clear_delegation_cancel(task_id)
+                    update_agent_task(project_id, task_id, status="failed",
+                                      fail_reason="用户已停止该委派任务（已停止）")
+                    return {"ok": False, "task_id": task_id,
+                            "error": f"子 Agent「{target_name}」任务已被用户停止。"}
                 save_message(project_id, child_sid, target_agent_id, "assistant", full_text,
                              model_used=model, tool_steps=steps or None)
                 if err:
@@ -450,14 +525,29 @@ async def run_delegated_task(
                 report = parse_report(full_text, task_id)
                 _final_text = full_text
                 if report is None:
+                    # TS-114（3.25）检查点3：追问前
+                    if _is_delegation_cancelled(task_id):
+                        clear_delegation_cancel(task_id)
+                        update_agent_task(project_id, task_id, status="failed",
+                                          fail_reason="用户已停止该委派任务（已停止）")
+                        return {"ok": False, "task_id": task_id,
+                                "error": f"子 Agent「{target_name}」任务已被用户停止。"}
                     # 追问 1 次（决策 3）：子会话完整历史 + 固定追问文案
                     retry_msg = _RETRY_PROMPT_TMPL.format(task_id=task_id)
                     save_message(project_id, child_sid, target_agent_id, "user", retry_msg)
                     msgs2 = msgs + [{"role": "assistant", "content": full_text},
                                     {"role": "user", "content": retry_msg}]
-                    full_text2, steps2, err2 = await _run_pass_with_timeout(
+                    full_text2, steps2, err2, pe2 = await _run_pass_with_timeout(
                         model, msgs2, sandbox_root, authorizer, max_rounds, connector,
-                        _activity_timeout)
+                        _activity_timeout, cancel_check=_cc)
+                    if pe2: _pe_final_box[0] = pe2
+                    # TS-114（3.25）检查点4：追问结束后
+                    if _is_delegation_cancelled(task_id):
+                        clear_delegation_cancel(task_id)
+                        update_agent_task(project_id, task_id, status="failed",
+                                          fail_reason="用户已停止该委派任务（已停止）")
+                        return {"ok": False, "task_id": task_id,
+                                "error": f"子 Agent「{target_name}」任务已被用户停止。"}
                     save_message(project_id, child_sid, target_agent_id, "assistant", full_text2,
                                  model_used=model, tool_steps=steps2 or None)
                     _final_text = full_text2
@@ -479,7 +569,12 @@ async def run_delegated_task(
                                 "error": (f"子 Agent「{target_name}」两次交卷均未通过格式校验，"
                                           f"该子任务标记异常。缺失的产出：{str(expect)[:200]}")}
                 # M7（TS-113）交卷契约扩容：>1000 字自动落盘全文 + 截断回传（确定性系统行为）
+                # TS-116（3.20③）：交卷报告回传 prompt_eval_count（主会话可显示"委派上下文用量"）
+                _pe_final = _pe_final_box[0]
+                if _pe_final:
+                    report["prompt_eval_count"] = _pe_final
                 report = _finalize_summary(project_id, task_id, report, _final_text)
+                clear_delegation_cancel(task_id)  # TS-114：标志残留清理（防误伤后续重试）
                 update_agent_task(project_id, task_id, status="done", report=json.dumps(report, ensure_ascii=False))
                 # checkpoint-068（3.21 D-2）：委派成功后自动清理子 Agent 与会话。
                 # 前提（用户拍板）：开关开启 + 交卷确实 success（确实委派且确实完成）；

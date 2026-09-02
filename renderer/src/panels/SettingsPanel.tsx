@@ -320,14 +320,14 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs }: { onClose?: () 
                 onChange={e => save({ model_parallel: e.target.checked })} />
               <span style={{ fontSize: 13, color: colors.textPrimary }}>大模型并行</span>
             </label>
-            <div style={hintStyle}>开启后允许多个大模型同时加载推理；关闭时同一时间只运行一个大模型，任务切换时自动串行切换模型。</div>
+            <div style={hintStyle}>开启后多个模型可同时运行（消耗更多内存）；关闭时切换模型会等待 5s 让旧模型释放（Ollama 无 unload API，等待 GC）。</div>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 8 }}>
               <input type="checkbox" checked={cfg.task_concurrency ?? false}
                 onChange={e => save({ task_concurrency: e.target.checked })} />
               <span style={{ fontSize: 13, color: colors.textPrimary }}>任务并发</span>
             </label>
-            <div style={hintStyle}>开启后多个委派/圆桌任务可并行执行；关闭时任务排队依次运行（配合大模型并行开关使用）。</div>
+            <div style={hintStyle}>开启后多个委派任务可并行执行；关闭时任务排队依次运行（串行排队，本机性能受限时推荐关闭）。</div>
           </div>
 
           {/* ===== 网络 ===== */}
