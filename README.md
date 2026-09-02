@@ -7,7 +7,7 @@
 
 > 当前版本：0.1.69（macOS · Apple Silicon）
 
-**Note: This project is developed by a Chinese team. English translations will be provided after the Chinese version. English language support is not yet available and will be included in a future update.**
+**Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
 
 <div align="center">
 
