@@ -90,14 +90,17 @@ Network Guard: Controls domestic/international outbound traffic and triggers cir
 
 
 ## 快速启动（开发模式）
+## Quick Start (Development Mode)
 
 ### 1. 安装前端依赖
+**Install Frontend Dependencies**
 ```bash
 cd renderer
 npm install
 ```
 
 ### 2. 安装 Python sidecar 依赖
+**Install Python Sidecar Dependencies**
 ```bash
 cd ../sidecar
 python3 -m venv .venv
@@ -105,6 +108,7 @@ python3 -m venv .venv
 ```
 
 ### 3. 启动应用
+**Start the Application**
 ```bash
 cd ..
 npm start          # 或 ./node_modules/electron/Electron.app/Contents/MacOS/Electron .
@@ -112,11 +116,15 @@ npm start          # 或 ./node_modules/electron/Electron.app/Contents/MacOS/Ele
 应用启动时会自动拉起 Python 侧车（默认 `http://127.0.0.1:8765`）。
 
 ### 4. 准备本地模型
+**Prepare Local Models**
 需本机运行 **Ollama** 并拉取模型（如 `ollama pull qwen3.8`）。应用通过 `http://localhost:11434` 连接。
 
 ## 使用安装包（推荐普通用户）
+**Using the Installer (Recommended for Regular Users)**
 
 下载 `VetarAI-<版本>-arm64.dmg`，挂载后拖入「应用程序」即可。首装因未签名可能提示"无法验证开发者"：右键 → 打开，或终端执行 `xattr -cr /Applications/VetarAI.app`。
+
+Download VetarAI-<version>-arm64.dmg, mount it, and drag the app into the "Applications" folder. On first launch, since the app is unsigned, you may see an "unidentified developer" warning: right-click the app → Open, or run xattr -cr /Applications/VetarAI.app in Terminal.
 
 ## 目录结构
 ```
@@ -135,17 +143,43 @@ subagent/
 │   └── skills_mgr/          # 本地技能管理
 └── build/                   # 打包脚本与产物（不随仓库公开）
 ```
+## Directory Structure
+```
+subagent/
+├── main.js                  # Electron main process (window/menu/sidecar launch/about)
+├── splash.html              # Splash screen
+├── renderer/                # React frontend (Vite + TS)
+│   └── src/
+│       ├── App.tsx          # Root component (three-column layout: sidebar + chat + roundtable)
+│       └── panels/          # Panels (projects/agents/chat/roundtable/settings/reasoning/plugins…)
+├── sidecar/                 # Python sidecar (FastAPI)
+│   ├── app.py               # Routes (projects/agents/sessions/delegation/roundtable/plugins/skills…)
+│   ├── ollama/              # Dual backend connector for Ollama + OpenAI-compatible APIs
+│   ├── agent_engine/        # Delegation/roundtable/tool-use loop
+│   ├── storage/store.py     # SQLite storage (one database per project)
+│   └── skills_mgr/          # Local skills manager
+└── build/                   # Build scripts and artifacts (not included in the public repository)
+```
 
 ## 数据位置
 - 应用数据：`~/.subagent/`（配置/项目/技能/插件/压缩归档/日志）
 - 项目库：`~/.subagent/projects/<project-id>/`（每项目独立 SQLite）
 - 独立 Agent：`~/.subagent/projects/ia-<id>/`
+## Data Locations
+- Application Data: ~/.subagent/ (configuration/projects/skills/plugins/archives/logs)
+- Project Databases: ~/.subagent/projects/<project-id>/ (independent SQLite database per project)
+- Standalone Agents: ~/.subagent/projects/ia-<id>/
 
 ## 常见问题
-
 - **换电脑迁移**：复制整个 `~/.subagent/` 目录即可。
 - **技能/插件升级不丢**：它们在数据目录，不在应用包内。
 - **模型僵死/任务卡住**：已内置活性超时与重试上限；也可在设置中调整并发开关。
+## FAQ
+- **Migrating to a new computer**: Simply copy the entire ~/.subagent/ directory.
+- **Skills/plugins persist after upgrades**: They are stored in the data directory, not within the application bundle.
+- **Model hangs/stuck tasks**: Built-in activity timeouts and retry limits are included; concurrency settings can also be adjusted in Settings.
 
 ## 许可
 暂未声明许可证（No license）。如需使用/转载代码，请先联系作者确认。
+## License
+No license declared. Please contact the author for permission before using or redistributing the code.
