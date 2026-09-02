@@ -31,7 +31,7 @@
       <ul>
         <li><a href="#下载vetaraidownload-vetarai">Download VetarAI</a></li>
         <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
-        <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
+        <li><a href="#core-capabilities-overview">Capabilities Overview</a></li>
         <li><a href="#quick-start-development-mode">Development Mode</a></li>
         <li><a href="#installer-recommended">installer</a></li>
         <li><a href="#directory-structure">Directory Structure</a></li>
