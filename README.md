@@ -7,26 +7,33 @@
 
 **Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
 
-<div align="center">
+##  目录 (Table of Contents)
+- [下载 VetarAI](#下载-vetarai)
+- [为什么选择 VetarAI？](#为什么选择-vetarai)
+- [核心能力一览](#核心能力一览)
+- [快速启动（开发模式）](#快速启动开发模式)
+- [使用安装包（推荐普通用户）](#使用安装包推荐普通用户)
+- [目录结构](#目录结构)
+- [数据位置](#数据位置)
+- [常见问题](#常见问题)
+- [联系我 / 反馈](#联系我--反馈)
 
+## 下载VetarAI/Download VetarAI
 **⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
-**⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
-
-（132MB · macOS Apple Silicon · dmg 格式）
+<br>**⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
+<br>（132MB · macOS Apple Silicon · dmg 格式）
 
 </div>
 
 **如何安装**：下载 `VetarAI-0.1.69-arm64.dmg` → 双击挂载 → 把 VetarAI 拖入「应用程序」文件夹 → 从启动台打开。
 > 首装因未签名可能提示"无法验证开发者"：右键 → 打开，或终端执行 `xattr -cr /Applications/VetarAI.app`。
-
-How to Install: Download VetarAI-0.1.69-arm64.dmg → Double-click to mount → Drag VetarAI into the "Applications" folder → Open from Launchpad.
+<br>How to Install: Download VetarAI-0.1.69-arm64.dmg → Double-click to mount → Drag VetarAI into the "Applications" folder → Open from Launchpad.
 > For first-time installations, you may see an "Unable to verify developer" warning because the app is unsigned. To bypass this, right-click the app and select "Open," or run the following command in Terminal: xattr -cr /Applications/VetarAI.app.
 
 VetarAI 是一个运行在本地的桌面应用，让你在应用内自由创建/管理多个**项目**，每个项目内动态创建**主 Agent** 与**子 Agent**。各 Agent 独立运行、独立上下文，通过 Ollama 调用本地大模型对话，并支持把大任务**委派**给子 Agent、让多个 Agent **圆桌讨论**。全部数据保存在本地，不依赖任何云端服务。
+<br>VetarAI is a local desktop application that allows you to freely create and manage multiple projects within the app, dynamically generating main agents and sub-agents within each project. Each agent operates independently with its own isolated context. By leveraging Ollama to invoke local large language models (LLMs) for conversations, it supports delegating complex tasks to sub-agents and facilitating roundtable discussions among multiple agents. All data is stored entirely locally, with zero dependency on any cloud services.
 
-VetarAI is a local desktop application that allows you to freely create and manage multiple projects within the app, dynamically generating main agents and sub-agents within each project. Each agent operates independently with its own isolated context. By leveraging Ollama to invoke local large language models (LLMs) for conversations, it supports delegating complex tasks to sub-agents and facilitating roundtable discussions among multiple agents. All data is stored entirely locally, with zero dependency on any cloud services.
-
-## ✨ 为什么选择 VetarAI？
+## 为什么选择 VetarAI？
 | 痛点 | VetarAI 的解法 |
 |------|---------------|
 | Agent 工具绑定特定云服务商，数据外泄风险 |  100% 本地运行，模型/对话/知识库全在磁盘上 |
