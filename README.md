@@ -16,8 +16,8 @@
         <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI</a></li>
         <li><a href="#为什么选择-vetarai">为什么选择 VetarAI？</a></li>
         <li><a href="#核心能力一览">核心能力一览</a></li>
-        <li><a href="#快速启动开发模式">快速启动（开发模式）</a></li>
-        <li><a href="#使用安装包推荐普通用户">使用安装包（推荐普通用户）</a></li>
+        <li><a href="#快速启动开发模式">开发模式</a></li>
+        <li><a href="#使用安装包推荐普通用户">使用安装包</a></li>
         <li><a href="#目录结构">目录结构</a></li>
         <li><a href="#数据位置">数据位置</a></li>
         <li><a href="#常见问题">常见问题</a></li>
@@ -32,9 +32,8 @@
         <li><a href="#下载vetaraidownload-vetarai">Download VetarAI</a></li>
         <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
         <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
-        <li><a href="#quick-start-development-mode">Quick Start (Development Mode)</a></li>
-        <!-- 标题精简为 Installer (Recommended)，长度完美匹配 -->
-        <li><a href="#installer-recommended">Installer (Recommended)</a></li>
+        <li><a href="#quick-start-development-mode">Development Mode</a></li>
+        <li><a href="#installer-recommended">installer</a></li>
         <li><a href="#directory-structure">Directory Structure</a></li>
         <li><a href="#data-locations">Data Locations</a></li>
         <li><a href="#faq">FAQ</a></li>
