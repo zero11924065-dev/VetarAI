@@ -362,6 +362,30 @@ async def main():
     check("S1h 运行列表", len(s.list_workflow_runs(wid)) == 1)
     check("S1i 删除工作流", s.delete_workflow(wid) is True)
 
+    # ===== A1 端点层：半成品工作流可创建/保存（0.2.1 用户报障修复）=====
+    # 现象：新建空白工作流（只有开始节点）被"必须至少有一个结束节点"拦截，无法创建。
+    # 修复：创建/保存端点不做结构校验（编辑中途的半成品必须能存），
+    #       严格校验只把"运行"关（/run 返回 422）。
+    import sidecar.logging_setup as _ls
+    _ls.setup_logging = lambda: ""  # 隔离：不触碰真实日志目录
+    from fastapi.testclient import TestClient
+    import sidecar.app as app_mod
+    client = TestClient(app_mod.app)
+
+    half_def = default_start_definition()  # 只有开始节点
+    r = client.post("/api/workflows", json={"name": "半成品测试", "definition": half_def})
+    check("A1a 创建半成品工作流成功（0.2.1 修复）", r.status_code == 200 and r.json().get("ok"),
+          f"{r.status_code} {r.text[:150]}")
+    half_id = r.json().get("id", "")
+    r = client.put(f"/api/workflows/{half_id}", json={"name": "半成品测试2", "definition": half_def})
+    check("A1b 保存半成品工作流成功（0.2.1 修复）", r.status_code == 200 and r.json().get("ok"),
+          f"{r.status_code} {r.text[:150]}")
+    r = client.post(f"/api/workflows/{half_id}/run", json={"params": {}})
+    check("A1c 运行半成品被校验拦截（422）", r.status_code == 422 and "结束节点" in r.text,
+          f"{r.status_code} {r.text[:150]}")
+    # 清理
+    client.delete(f"/api/workflows/{half_id}")
+
     # ===== L11 模板渲染（含嵌套/列表） =====
     from sidecar.workflow.engine import render_template, resolve_value
     v = {"params": {"dir": "/tmp"}, "n1": {"output": "hello"}, "lst": [1, 2, 3]}

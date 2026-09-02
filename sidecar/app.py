@@ -1583,7 +1583,10 @@ async def api_list_workflows():
 
 @app.post("/api/workflows")
 async def api_create_workflow(req: WorkflowCreateReq):
-    errors = validate_definition(req.definition)
+    # 0.2.1 修正：创建用宽松校验（strict=False）——新建的空白工作流只有开始节点，
+    # 属于合法的"半成品"（用户边搭边存）。节点类型/连线引用等硬伤仍拦截；
+    # 完整性（开始/结束/连通）只把运行关（/run 走严格校验）。
+    errors = validate_definition(req.definition, strict=False)
     if errors:
         raise HTTPException(status_code=422, detail="；".join(errors[:5]))
     wf_id = create_workflow(req.name.strip() or "未命名工作流", req.definition, req.description)
@@ -1605,8 +1608,10 @@ async def api_update_workflow(wf_id: str, req: WorkflowUpdateReq):
         raise HTTPException(status_code=404, detail="工作流不存在")
     if wf.get("built_in"):
         raise HTTPException(status_code=403, detail="内置工作流不可修改")
+    # 0.2.1 修正：保存用宽松校验（strict=False）——编辑中途的半成品也要能存；
+    # 完整性（开始/结束/连通）只把运行关（/run 走严格校验）。
     if req.definition is not None:
-        errors = validate_definition(req.definition)
+        errors = validate_definition(req.definition, strict=False)
         if errors:
             raise HTTPException(status_code=422, detail="；".join(errors[:5]))
     ok = update_workflow(wf_id, name=req.name, definition=req.definition,

@@ -67,16 +67,19 @@ def _node_errors(node: dict, idx: int) -> list[str]:
     return errs
 
 
-def validate_definition(definition: dict[str, Any]) -> list[str]:
+def validate_definition(definition: dict[str, Any], *, strict: bool = True) -> list[str]:
     """校验工作流定义，返回错误列表（空 = 合法）。
 
     校验项：
     1. nodes/edges 为列表
     2. 每个节点类型合法 + 必填字段
-    3. 恰好一个 start、至少一个 end
+    3. （仅 strict）恰好一个 start、至少一个 end
     4. edges 引用的节点都存在
     5. 节点 id 唯一
-    6. start 可达所有节点（无孤岛节点，end 除外多分支也须被引用）
+    6. （仅 strict）start 可达所有节点（无孤岛节点）
+
+    0.2.1 修正：创建/保存用 strict=False——编辑中的半成品工作流（如只有
+    开始节点）必须能存；完整性（开始/结束/连通）只在运行前把关（strict=True）。
     """
     errs: list[str] = []
     if not isinstance(definition, dict):
@@ -101,10 +104,11 @@ def validate_definition(definition: dict[str, Any]) -> list[str]:
 
     start_count = sum(1 for n in nodes if isinstance(n, dict) and n.get("type") == "start")
     end_count = sum(1 for n in nodes if isinstance(n, dict) and n.get("type") == "end")
-    if start_count != 1:
-        errs.append(f"必须恰好有一个开始节点（当前 {start_count} 个）")
-    if end_count < 1:
-        errs.append("必须至少有一个结束节点")
+    if strict:
+        if start_count != 1:
+            errs.append(f"必须恰好有一个开始节点（当前 {start_count} 个）")
+        if end_count < 1:
+            errs.append("必须至少有一个结束节点")
 
     for i, edge in enumerate(edges):
         if not isinstance(edge, dict):
@@ -115,31 +119,32 @@ def validate_definition(definition: dict[str, Any]) -> list[str]:
         if str(edge.get("to") or "") not in ids:
             errs.append(f"边[{i}] 终点不存在：{edge.get('to')!r}")
 
-    # 孤岛检测：从 start 出发 BFS，未访问到的节点报错
-    node_map = {str(n.get("id")): n for n in nodes if isinstance(n, dict) and n.get("id")}
-    start_nodes = [n for n in nodes if isinstance(n, dict) and n.get("type") == "start"]
-    if start_nodes and node_map:
-        adj: dict[str, list[str]] = {nid: [] for nid in node_map}
-        for edge in edges:
-            if isinstance(edge, dict):
-                f, t = str(edge.get("from") or ""), str(edge.get("to") or "")
-                if f in adj and t in node_map:
-                    adj[f].append(t)
-        # parallel 的 branches 也算可达边
-        for nid, node in node_map.items():
-            if node.get("type") == "parallel":
-                for b in (node.get("branches") or []):
-                    if str(b) in node_map:
-                        adj[nid].append(str(b))
-        visited: set[str] = set()
-        queue = [str(start_nodes[0].get("id"))]
-        while queue:
-            cur = queue.pop(0)
-            if cur in visited:
-                continue
-            visited.add(cur)
-            queue.extend(adj.get(cur, []))
-        for nid in node_map:
-            if nid not in visited:
-                errs.append(f"节点「{node_map[nid].get('label') or nid}」未与开始节点连通")
+    # 孤岛检测：从 start 出发 BFS，未访问到的节点报错（仅严格模式）
+    if strict:
+        node_map = {str(n.get("id")): n for n in nodes if isinstance(n, dict) and n.get("id")}
+        start_nodes = [n for n in nodes if isinstance(n, dict) and n.get("type") == "start"]
+        if start_nodes and node_map:
+            adj: dict[str, list[str]] = {nid: [] for nid in node_map}
+            for edge in edges:
+                if isinstance(edge, dict):
+                    f, t = str(edge.get("from") or ""), str(edge.get("to") or "")
+                    if f in adj and t in node_map:
+                        adj[f].append(t)
+            # parallel 的 branches 也算可达边
+            for nid, node in node_map.items():
+                if node.get("type") == "parallel":
+                    for b in (node.get("branches") or []):
+                        if str(b) in node_map:
+                            adj[nid].append(str(b))
+            visited: set[str] = set()
+            queue = [str(start_nodes[0].get("id"))]
+            while queue:
+                cur = queue.pop(0)
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                queue.extend(adj.get(cur, []))
+            for nid in node_map:
+                if nid not in visited:
+                    errs.append(f"节点「{node_map[nid].get('label') or nid}」未与开始节点连通")
     return errs
