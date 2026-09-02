@@ -4,6 +4,7 @@
 >VetarAI 是一款运行在本地的桌面应用，让你在同一台 Mac 上自由创建多个隔离项目，每个项目内动态编排主 Agent 与子 Agent。支持任务委派、多 Agent 圆桌讨论、多模态识图，全部数据保存在本地，不依赖任何云端服务。
 <br>VetarAI is a local desktop application that lets you freely create multiple isolated projects on the same Mac, dynamically orchestrating main and sub-agents within each project. It supports task delegation, multi-agent roundtable discussions, and multimodal image recognition. All data is stored locally with zero dependency on any cloud services.
 <br>当前版本：0.1.69（macOS · Apple Silicon）
+
 **Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
 
 <table>
@@ -30,7 +31,7 @@
         <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
         <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
         <li><a href="#quick-start-development-mode">Quick Start (Development Mode)</a></li>
-        <li><a href="#using-the-installer-recommended-for-regular-users">Using the Installer (Recommended for Regular Users)</a></li>
+        <li><a href="#using-the-installer-recommended">Using the Installer (Recommended)</a></li>
         <li><a href="#directory-structure">Directory Structure</a></li>
         <li><a href="#data-locations">Data Locations</a></li>
         <li><a href="#faq">FAQ</a></li>
@@ -169,7 +170,7 @@ Ollama must be running locally with the model pulled (e.g., ollama pull qwen3.8)
 
 下载 `VetarAI-<版本>-arm64.dmg`，挂载后拖入「应用程序」即可。首装因未签名可能提示"无法验证开发者"：右键 → 打开，或终端执行 `xattr -cr /Applications/VetarAI.app`。
 
-## Using the Installer (Recommended for Regular Users)
+## Using the Installer (Recommended)
 Download VetarAI-<version>-arm64.dmg, mount it, and drag the app into the "Applications" folder. On first launch, since the app is unsigned, you may see an "unidentified developer" warning: right-click the app → Open, or run xattr -cr /Applications/VetarAI.app in Terminal.
 
 ## 目录结构
