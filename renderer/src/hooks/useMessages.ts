@@ -15,6 +15,8 @@ export interface Message {
   content: string;
   model_used?: string;
   pending_images?: string[];
+  /** 0.1.71（TS-118）：历史消息落库的委派附着图片（API 字段，子会话回看可见） */
+  images?: string[];
   created_at?: string;
   // M1-4 流式过程可视化
   toolSteps?: ToolStep[];

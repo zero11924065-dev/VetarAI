@@ -203,6 +203,12 @@ def tools_spec(with_delegation: bool = True) -> list[dict[str, Any]]:
                             "description": "要随委派传给子 Agent 的图片文件路径列表（相对沙盒根或绝对路径，如 'images/a.png'）。"
                                            "适用场景：批量图片识别/转写等。不填时仅传聊天附着图。",
                         },
+                        "simple_mode": {
+                            "type": "boolean",
+                            "description": "简单委派模式：子 Agent 直接输出结果本身，不要求 JSON 交卷、不追问重交。"
+                                           "带图委派会自动启用，无需填写；仅当无图但任务属于纯产出型"
+                                           "（如逐字转写、摘录，目标为不擅长 JSON 的小模型）时可显式传 true。",
+                        },
                     },
                     "required": ["target", "task", "expect"],
                 },
@@ -278,9 +284,13 @@ def build_system_prompt(
             "（本机性能受限，同时只跑 1 个大模型）。\n"
             "- 需要分工时用 delegate_task 委派：任务书必须自包含，子 Agent 看不到本对话历史，"
             "目标/输入/预期产出都要写进任务书。\n"
+            "- 【target 必填】委派必须写明 target（目标 Agent 名称）。调用失败提示缺参时，"
+            "按返回的可用 Agent 名单补填 target 后重新调用，不要凭空编造目标。\n"
             "- 委派目标可以是项目内已有的 Agent；若目标不存在，系统会按建议角色"
             "（不填则按目标名称）自动新建子 Agent 并执行，无需先询问用户。\n"
-            "- 子 Agent 交卷是固定 JSON（task_id/status/summary/artifacts），你负责整合各交卷，"
+            "- 子 Agent 交卷一般是固定 JSON（task_id/status/summary/artifacts）；"
+            "但带图委派（识别/转写）自动启用简单模式：子 Agent 直接返回内容本身，"
+            "没有 JSON 外壳，你直接采用其返回内容即可。你负责整合各交卷，"
             "最终回复中标注每部分来自哪个子 Agent。\n"
             "- 交卷标记异常（ok=false）时，如实告知用户哪个子任务缺失及原因，不要虚构其产出。\n"
             "- 【强制】委派失败/交卷异常后，禁止你自己重新搜索或亲自完成该子任务来代答"
@@ -574,8 +584,20 @@ async def run_tool_loop(
                     _args_d = tc["args"] or {}
                     _task_arg = str(_args_d.get("task") or "").strip()
                     _expect_arg = str(_args_d.get("expect") or "").strip()
-                    if not _task_arg or not _expect_arg:
-                        result = {"ok": False, "error": "delegate_task 需要 target/task/expect 三个参数，请补全。"}
+                    _target_arg = str(_args_d.get("target") or "").strip()
+                    _role_arg = str(_args_d.get("suggested_role") or "").strip()
+                    # 0.1.71（TS-118）：target 必填回错——漏填时列出可用 Agent 名单，
+                    # 让主模型补填后重试；绝不静默新建（0.1.70 实测：漏填 target
+                    # 被当作"不存在"→ 自动新建继承主模型的错误子 Agent，把用户配置好的
+                    # OCR 专员晾在一边，纯文本模型幻觉全文）
+                    if not _task_arg or not _expect_arg or not _target_arg:
+                        from sidecar.storage.store import list_agent_configs as _lac0
+                        _names0 = "、".join(str(a.get("name", "")) for a in _lac0(
+                            delegation_ctx["project_id"])
+                            if a.get("id") != delegation_ctx["agent_id"]) or "（暂无其他 Agent）"
+                        result = {"ok": False, "error": (
+                            "delegate_task 需要 target（目标 Agent 名称）/task/expect 三个参数，"
+                            f"请补全后重新调用。当前可用 Agent：{_names0}。")}
                     else:
                         from sidecar.agent_engine.delegation import (
                             resolve_target, run_delegated_task, auto_create_agent)
@@ -587,8 +609,15 @@ async def run_tool_loop(
                             _loaded_images, _skipped_paths = _load_delegation_images(
                                 _image_paths, sandbox_root)
                         _agent, _terr = resolve_target(
-                            delegation_ctx["project_id"], _args_d.get("target", ""), delegation_ctx["agent_id"])
+                            delegation_ctx["project_id"], _target_arg, delegation_ctx["agent_id"])
                         _auto_created = False
+                        # 0.1.71（TS-118）：suggested_role 兜底搜索——弱模型常把角色名
+                        # 填进 suggested_role 而 target 写错/写别名；新建前先用
+                        # suggested_role 在现有 Agent 中搜一轮（如'ocr专员'命中用户配置好的
+                        # OCR 专员），命中即复用，避免新建重复/错误的子 Agent
+                        if _agent is None and _role_arg and _role_arg != _target_arg:
+                            _agent, _ = resolve_target(
+                                delegation_ctx["project_id"], _role_arg, delegation_ctx["agent_id"])
                         if _agent is None:
                             # TS-108 决策 9：目标不存在 → 按开关决定自动新建或转述用户。
                             # checkpoint-030 H14：弱模型常不填 suggested_role，
@@ -596,10 +625,8 @@ async def run_tool_loop(
                             import sidecar.config as _cfgmod
                             _cfg_d = _cfgmod.get_config()
                             if _cfg_d.get("auto_create_sub_agents", True):
-                                _role_arg = str(_args_d.get("suggested_role") or "").strip() \
-                                    or str(_args_d.get("target", "")).strip()
                                 _agent = auto_create_agent(
-                                    delegation_ctx["project_id"], _role_arg,
+                                    delegation_ctx["project_id"], _role_arg or _target_arg,
                                     delegation_ctx.get("model") or "qwen3.8")
                                 _auto_created = True
                             else:
@@ -618,7 +645,9 @@ async def run_tool_loop(
                                 connector=delegation_ctx.get("connector"),
                                 # TS-114（3.27）+ TS-117（3.31）：主会话附着图片 + image_paths 图片
                                 # 随委派传给子 Agent 视觉流
-                                images=_deleg_images if _deleg_images else None)
+                                images=_deleg_images if _deleg_images else None,
+                                # 0.1.71（TS-118）：简单委派模式（主模型显式声明；带图时执行层强制启用）
+                                simple_mode=bool(_args_d.get("simple_mode") or False) or None)
                             # TS-108：自动新建场景标注新 Agent，供主 Agent 告知用户
                             if _auto_created and isinstance(result, dict):
                                 result["created_agent"] = _agent.get("name")

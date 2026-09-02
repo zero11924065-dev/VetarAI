@@ -1242,9 +1242,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               </div>
               {/* 气泡 */}
               <div style={{ maxWidth:'78%', padding:'10px 14px', borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
-                {msg.pending_images && msg.pending_images.length > 0 && (
-                  <div style={{marginBottom:6}}>{msg.pending_images.map((uri,j) => <img key={j} src={uri} alt="img" style={{maxWidth:150,maxHeight:150,borderRadius:radius.s,marginRight:4,verticalAlign:'top',border:`1px solid ${colors.borderDefault}`}} />)}</div>
-                )}
+                {(() => {
+                  // 0.1.71（TS-118）：pending_images=本地流式附着图；images=DB 落库的委派附着图（子会话回看）
+                  const _imgs = msg.pending_images ?? msg.images;
+                  return _imgs && _imgs.length > 0 ? (
+                    <div style={{marginBottom:6}}>{_imgs.map((uri,j) => <img key={j} src={uri} alt="img" style={{maxWidth:150,maxHeight:150,borderRadius:radius.s,marginRight:4,verticalAlign:'top',border:`1px solid ${colors.borderDefault}`}} />)}</div>
+                  ) : null;
+                })()}
                 {/* TS-102 B13：思考中指示（thinking 期间显示，正文首 token 到达即收起） */}
                 {msg.role === 'assistant' && msg.thinking && (
                   <div style={{ ...calloutStyle('info'), marginBottom:8 }}>

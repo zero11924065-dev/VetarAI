@@ -119,6 +119,99 @@ _REPORT_CONTRACT_PROMPT = (
 )
 
 
+# ---------- 0.1.71（TS-118）：简单委派模式 ----------
+# 背景（用户实测 2026-09-02）：带图委派给 OCR 专用模型（如 glm-ocr）时，
+# 子模型已正确识别图片，但【交卷契约】强制要求 JSON 报告 → 小模型做不到 →
+# 系统追问"重新交卷" → 小模型崩溃输出乱码，正确结果被丢弃。
+# 同时任务消息无条件拼接大段模板文字，违背用户"只发图片给子 Agent"的意图。
+# 简单模式三件事：不拼交卷契约、任务消息只留任务书、第一轮原文直接作为结果
+# （不做 JSON 校验、不追问重交）。触发全自动：带图 / 目标为 OCR 专用模型 /
+# 主模型显式传 simple_mode=true，用户无需任何操作。
+
+def is_simple_delegation_model(model: str) -> bool:
+    """OCR 专用小模型（名称含 ocr，如 glm-ocr）只输出识别文字，不适合 JSON 交卷。"""
+    return "ocr" in str(model or "").lower()
+
+
+def resolve_simple_mode(images: list[str] | None, model: str,
+                        simple_mode: bool | None = None) -> bool:
+    """判定本次委派是否走简单模式。带图 → 强制启用（识别类任务天然不需要
+    交卷格式）；其余看显式参数或目标模型类型。"""
+    if images:
+        return True
+    if simple_mode:
+        return True
+    return is_simple_delegation_model(model)
+
+
+def _task_user_message_simple(task_id: str, task: str, expect: str,
+                              image_count: int = 0) -> str:
+    """简单模式任务消息：只保留任务书本身 + 最小交付要求。
+    不拼执行须知/防幻觉硬约束/交卷契约提醒（这些会压垮 OCR 类小模型，
+    且违背用户"只发图片不发文字"的意图）。"""
+    img_hint = (f"附图 {image_count} 张已随任务书发送，请直接识别，无需 read_file。\n\n"
+                if image_count > 0 else "")
+    return (
+        "【委派任务】\n"
+        f"任务ID：{task_id}\n"
+        f"任务目标与输入：\n{task}\n\n"
+        f"交卷标准：\n{expect}\n\n"
+        f"{img_hint}"
+        "完成后直接输出结果本身（纯内容，不要包装成 JSON、不要附加格式说明）。"
+    )
+
+
+def _build_simple_report(full_text: str, task_id: str) -> dict | None:
+    """简单模式交卷：第一轮原文直接打包为结果（不做 JSON 校验、不追问）。
+    空回复返回 None（调用方标失败）。超长由 _finalize_summary 落盘+截断。"""
+    body = (full_text or "").strip()
+    if not body:
+        return None
+    return {"task_id": task_id, "status": "success",
+            "summary": body, "artifacts": [], "simple": True}
+
+
+# ---------- 0.1.71（TS-118）：目标模型视觉能力检测 ----------
+# 背景：带图委派给纯文本模型（如 qwen3.6:35b）时，模型看不见图片却编造
+# "已完成 OCR"（用户实测 2026-09-02 第一批委派全文幻觉）。检测失败不阻塞，
+# 检测确认无视觉能力才拦截，并提示改派多模态模型。
+_MULTIMODAL_NAME_PATTERNS = (
+    "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "qwen3.5-vl",
+    "llava", "minicpm-v", "glm-4v", "glm-ocr", "moondream", "bakllava",
+    "gemma3", "llama3.2-vision", "mllama", "llama4", "granite-vision",
+    "aya-vision", "qwen2.5-omni", "omni",
+)
+_VISION_METADATA_MARKERS = ("vision", "clip", "siglip", "projector", "mmproj", ".images")
+
+
+def model_name_suggests_vision(model: str) -> bool | None:
+    """按模型名快速判断视觉能力：已知多模态家族 → True；无法判断 → None
+    （由调用方继续查模型元数据）。纯名称层不判 False，避免误杀自定义标签模型。"""
+    ml = str(model or "").lower()
+    for p in _MULTIMODAL_NAME_PATTERNS:
+        if p in ml:
+            return True
+    return None
+
+
+async def model_supports_vision(model: str, connector: Any) -> bool:
+    """目标模型是否支持图片输入。名称层判不了时查 /api/show 元数据；
+    查询失败/模型不存在 → 返回 True（不阻塞，宁可放过不误杀，
+    模型不存在等错误由后续调用自然暴露）。"""
+    hit = model_name_suggests_vision(model)
+    if hit is not None:
+        return hit
+    try:
+        client = await connector._client()
+        r = await client.post(f"{connector._base}/api/show", json={"name": model}, timeout=5)
+        if r.status_code != 200:
+            return True
+        txt = json.dumps(r.json(), ensure_ascii=False).lower()
+        return any(m in txt for m in _VISION_METADATA_MARKERS)
+    except Exception:
+        return True
+
+
 # ---------- 交卷解析与校验（决策 3） ----------
 def _extract_json_candidate(text: str) -> str | None:
     """从回复中截取首个 JSON 对象候选：第一个 { 到最后一个 } 的子串。
@@ -386,9 +479,12 @@ async def run_delegated_task(
     sandbox_root: str, authorizer: Any = None, max_rounds: int = 200,
     connector: Any = None,
     images: list[str] | None = None,
+    simple_mode: bool | None = None,
 ) -> dict:
     """执行一次委派（默认串行锁内；task_concurrency 开启时并行）。
     TS-114（3.27）：images=委派附着图片（base64 列表），传入子会话视觉流。
+    0.1.71（TS-118）：simple_mode=简单委派模式（带图自动启用，见
+    resolve_simple_mode）；带图委派遇无视觉能力模型直接拦截报错。
 
     成功：{"ok": True, "task_id", "status", "summary", "artifacts"}
     失败：{"ok": False, "task_id"?, "error": 缺失/失败原因}
@@ -402,6 +498,16 @@ async def run_delegated_task(
     target_agent_id = str(target_agent.get("id", ""))
     target_name = str(target_agent.get("name", "")) or target_agent_id[:8]
     model = target_agent.get("model_name") or "qwen3.8"
+
+    # 0.1.71（TS-118）：简单模式判定（带图强制启用 / 显式传参 / OCR 专用模型）
+    _simple = resolve_simple_mode(images, model, simple_mode)
+
+    # 0.1.71（TS-118）：带图委派的视觉能力守卫——目标模型不支持图片输入时
+    # 直接拦截，避免纯文本模型看不见图片却编造"已完成识别"（用户实测幻觉重灾区）
+    if images and not await model_supports_vision(model, connector):
+        return {"ok": False,
+                "error": (f"「{target_name}」的模型 {model} 不支持图片输入，无法完成带图任务。"
+                          f"请改派多模态模型（如 qwen-vl / glm-ocr / llava 等）后再委派。")}
 
     # checkpoint-068 D-8：委派前置守卫（去重 + 失败重试上限），在落库前拦截
     dup_id, failed_count = _dup_or_over_retry_limit(project_id, target_agent_id, task)
@@ -491,11 +597,18 @@ async def run_delegated_task(
                 memory_text=_m_text,
                 prohibitions=_proh,
                 skills_list_text=_sk_text,
-            ) + _REPORT_CONTRACT_PROMPT
+            ) + ("" if _simple else _REPORT_CONTRACT_PROMPT)
 
-            user_msg = _task_user_message(task_id, task, expect,
-                                          image_count=len(images) if images else 0)
-            save_message(project_id, child_sid, target_agent_id, "user", user_msg)
+            # 0.1.71（TS-118）：简单模式任务消息只留任务书本身（不拼执行须知/
+            # 防幻觉约束/契约提醒），符合用户"只发图片不发文字"的委派意图
+            user_msg = (_task_user_message_simple(task_id, task, expect,
+                                                  image_count=len(images) if images else 0)
+                        if _simple else
+                        _task_user_message(task_id, task, expect,
+                                           image_count=len(images) if images else 0))
+            # 0.1.71（TS-118）：委派附着的图片落库存档，子会话回看可见
+            save_message(project_id, child_sid, target_agent_id, "user", user_msg,
+                         images=images or None)
 
             # TS-114（3.25）：本任务取消检查回调（loop 每轮开始前调用）
             _cc = (lambda: _is_delegation_cancelled(task_id))
@@ -522,8 +635,21 @@ async def run_delegated_task(
                     return {"ok": False, "task_id": task_id,
                             "error": f"子 Agent「{target_name}」执行出错：{err}"}
 
-                report = parse_report(full_text, task_id)
-                _final_text = full_text
+                # 0.1.71（TS-118）：简单模式交卷——第一轮原文直接作为结果，
+                # 不做 JSON 校验、不追问重交（追问会压垮 OCR 类小模型致乱码）
+                if _simple:
+                    report = _build_simple_report(full_text, task_id)
+                    _final_text = full_text
+                    if report is None:
+                        reason = "子 Agent 未返回任何内容"
+                        update_agent_task(project_id, task_id, status="failed",
+                                          fail_reason=reason)
+                        return {"ok": False, "task_id": task_id,
+                                "error": (f"子 Agent「{target_name}」{reason}，"
+                                          f"请检查图片可读性后重试。")}
+                else:
+                    report = parse_report(full_text, task_id)
+                    _final_text = full_text
                 if report is None:
                     # TS-114（3.25）检查点3：追问前
                     if _is_delegation_cancelled(task_id):
