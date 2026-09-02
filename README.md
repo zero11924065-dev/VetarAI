@@ -13,7 +13,7 @@
     <td width="40%" valign="top">
       <h3>🇨🇳 中文目录</h3>
       <ul>
-        <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI / Download VetarAI</a></li>
+        <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI </a></li>
         <li><a href="#为什么选择-vetarai">为什么选择 VetarAI？</a></li>
         <li><a href="#核心能力一览">核心能力一览</a></li>
         <li><a href="#快速启动开发模式">快速启动（开发模式）</a></li>
