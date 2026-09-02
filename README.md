@@ -2,6 +2,7 @@
 
 > 一款零生态依赖的 Agent 工具 | An ecosystem-agnostic Agent tool.
 >VetarAI 是一款运行在本地的桌面应用，让你在同一台 Mac 上自由创建多个隔离项目，每个项目内动态编排主 Agent 与子 Agent。支持任务委派、多 Agent 圆桌讨论、多模态识图，全部数据保存在本地，不依赖任何云端服务。
+>VetarAI is a local desktop application that lets you freely create multiple isolated projects on the same Mac, dynamically orchestrating main and sub-agents within each project. It supports task delegation, multi-agent roundtable discussions, and multimodal image recognition. All data is stored locally with zero dependency on any cloud services.
 > 当前版本：0.1.69（macOS · Apple Silicon）
 
 <div align="center">
@@ -26,6 +27,14 @@ VetarAI 是一个运行在本地的桌面应用，让你在应用内自由创建
 | 模型僵死/无限重试/无代理空转 |  三重防护：活性超时 + 去重重试 + 网络熔断 |
 | 被某个插件生态绑架 |  生态无关设计，GitHub 克隆或本地路径即装即用 |
 
+## Why Choose VetarAI?
+| Pain Point | The VetarAI Solution |
+|------|---------------|
+| Agent tools tied to specific cloud providers pose data leakage risks | 100% local execution; models, conversations, and knowledge bases all reside on your disk |
+| Context gets mixed up when switching between different projects | Complete isolation across multiple projects, featuring independent directories, databases, and sessions |
+| Single agents struggle with complex tasks, and manual breakdown is exhausting | Main-sub delegation + roundtable discussions for automatic task decomposition, collaboration, and reporting |
+| Models freeze, enter infinite retry loops, or idle without proxy | Triple protection: liveness timeout, deduplicated retries, and network circuit breaking |
+| Held hostage by a specific plugin ecosystem | Ecosystem-agnostic design; ready to use instantly via GitHub clone or local path |
 
 ## 核心能力一览
 ### 多 Agent 协作
@@ -47,6 +56,28 @@ agent删写系统目录和应用目录时需要单次授权
 推理后端自由切换：默认 Ollama，兼容任意 OpenAI API 服务（LM Studio / llama.cpp / vLLM / 远程中转，支持 API Key）
 插件系统：从 GitHub 克隆或本地路径安装，钩子手动触发，逐项启用/禁用
 网络守卫：境内/境外出站管控 + 失败熔断，防止无代理空转死循环
+
+## Core Capabilities Overview
+### Multi-Agent Collaboration
+Main-Sub Delegation: The main agent automatically breaks down tasks and delegates them to sub-agents, which execute independently and "submit" results according to a fixed contract. If a task fails, it is automatically retried once; if it still fails, it is flagged as an exception without blocking the main workflow.
+Roundtable Discussions: Multiple agents share discussion minutes on a specific topic. Discussions can be hosted by the user or AI, with the user retaining the right to end or manually stop the session at any time.
+Independent Agents: First-class citizens on par with projects. They can be created or deleted individually, and deleting a project does not affect them.
+### Smart Context Management
+Real-time Token Indicators + Overflow Warnings + Smart Compression: Archives are kept with a complete trace.
+Multimodal Ingestion: Images are processed directly through a visual channel, allowing multimodal models to read them (OCR/Recognition).
+Three-Tier System (Knowledge/Memory/Skills): Project knowledge bases, global/project memory, and local skills (SKILL.md) can be enabled independently for each project.
+### Robustness for High-Volume Tasks
+Delegation Liveness Timeout: Prevents infinite waiting caused by frozen models.
+Auto-Deduplication & Retry Limits: Identical tasks are automatically deduplicated with a maximum retry limit to prevent cascading retry storms.
+Auto-Cleanup: After successful completion, sub-agents can be optionally cleaned up automatically to keep the workspace tidy.
+### Core System Directory Authorization
+Single-Use Authorization: Agents require one-time authorization when deleting or writing to system and application directories.
+System Protection: Prevents agents from independently modifying and potentially damaging the system environment.
+### Extensible & Replaceable
+Flexible Inference Backends: Defaults to Ollama, but is compatible with any OpenAI API service (LM Studio / llama.cpp / vLLM / Remote Relay, with API Key support).
+Plugin System: Install via GitHub clone or local path. Hooks are manually triggered, and plugins can be enabled or disabled individually.
+Network Guard: Controls domestic/international outbound traffic and triggers circuit breaking upon failure to prevent infinite loops of unproxied idling.
+
 
 ## 快速启动（开发模式）
 
