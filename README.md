@@ -2,17 +2,17 @@
 
 > 一款零生态依赖的 Agent 工具 | An ecosystem-agnostic Agent tool.
 >VetarAI 是一款运行在本地的桌面应用，让你在同一台 Mac 上自由创建多个隔离项目，每个项目内动态编排主 Agent 与子 Agent。支持任务委派、多 Agent 圆桌讨论、多模态识图，全部数据保存在本地，不依赖任何云端服务。
-> 当前版本：0.1.68（macOS · Apple Silicon）
+> 当前版本：0.1.69（macOS · Apple Silicon）
 
 <div align="center">
 
-**⬇️ [下载 VetarAI 0.1.68 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.68)**
+**⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
 
 （132MB · macOS Apple Silicon · dmg 格式）
 
 </div>
 
-**如何安装**：下载 `VetarAI-0.1.68-arm64.dmg` → 双击挂载 → 把 VetarAI 拖入「应用程序」文件夹 → 从启动台打开。
+**如何安装**：下载 `VetarAI-0.1.69-arm64.dmg` → 双击挂载 → 把 VetarAI 拖入「应用程序」文件夹 → 从启动台打开。
 > 首装因未签名可能提示"无法验证开发者"：右键 → 打开，或终端执行 `xattr -cr /Applications/VetarAI.app`。
 
 VetarAI 是一个运行在本地的桌面应用，让你在应用内自由创建/管理多个**项目**，每个项目内动态创建**主 Agent** 与**子 Agent**。各 Agent 独立运行、独立上下文，通过 Ollama 调用本地大模型对话，并支持把大任务**委派**给子 Agent、让多个 Agent **圆桌讨论**。全部数据保存在本地，不依赖任何云端服务。
