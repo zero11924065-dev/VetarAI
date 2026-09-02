@@ -8,7 +8,7 @@
 **Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
 
 ##  目录 (Table of Contents)
-- [下载 VetarAI](#下载-vetarai)
+- [下载 VetarAI](#下载VetarAI/Download VetarAI)  - [Download VetarAI](#下载VetarAI/Download VetarAI) 
 - [为什么选择 VetarAI？](#为什么选择-vetarai)
 - [核心能力一览](#核心能力一览)
 - [快速启动（开发模式）](#快速启动开发模式)
