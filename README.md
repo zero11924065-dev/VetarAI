@@ -7,8 +7,12 @@
 
 **Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
 
+## 下载VetarAI/Download VetarAI
+**⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
+<br>**⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
+<br>（132MB · macOS Apple Silicon · dmg 格式）
+
 ##  目录 (Table of Contents)
-- [下载 VetarAI](#下载VetarAI/Download VetarAI)  - [Download VetarAI](#下载VetarAI/Download VetarAI) 
 - [为什么选择 VetarAI？](#为什么选择-vetarai)
 - [核心能力一览](#核心能力一览)
 - [快速启动（开发模式）](#快速启动开发模式)
@@ -17,12 +21,6 @@
 - [数据位置](#数据位置)
 - [常见问题](#常见问题)
 - [联系我 / 反馈](#联系我--反馈)
-
-## 下载VetarAI/Download VetarAI
-**⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
-<br>**⬇️ [Download VetarAI 0.1.69 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
-<br>（132MB · macOS Apple Silicon · dmg 格式）
-
 </div>
 
 **如何安装**：下载 `VetarAI-0.1.69-arm64.dmg` → 双击挂载 → 把 VetarAI 拖入「应用程序」文件夹 → 从启动台打开。
