@@ -7,42 +7,38 @@
 
 **Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
 
-<div align="center">
-<table width="100%">
+## 📑 目录 / Table of Contents
+
+<table>
   <tr>
     <td width="50%" valign="top">
-      <h3>🇨🇳 中文目录</h3>
-      <ul>
-        <li><a href="#下载vetaraidownload-vetarai">下载 VetarAI / Download VetarAI</a></li>
-        <li><a href="#为什么选择-vetarai">为什么选择 VetarAI？</a></li>
-        <li><a href="#核心能力一览">核心能力一览</a></li>
-        <li><a href="#快速启动开发模式">快速启动（开发模式）</a></li>
-        <li><a href="#使用安装包推荐普通用户">使用安装包（推荐普通用户）</a></li>
-        <li><a href="#目录结构">目录结构</a></li>
-        <li><a href="#数据位置">数据位置</a></li>
-        <li><a href="#常见问题">常见问题</a></li>
-        <li><a href="#联系我--反馈">联系我 / 反馈</a></li>
-        <li><a href="#许可">许可</a></li>
-      </ul>
+      <strong>🇨🇳 中文目录</strong><br><br>
+      🔹 <a href="#下载vetaraidownload-vetarai">下载 VetarAI</a><br>
+      🔹 <a href="#为什么选择-vetarai">为什么选择 VetarAI？</a><br>
+      🔹 <a href="#核心能力一览">核心能力一览</a><br>
+      🔹 <a href="#快速启动开发模式">快速启动（开发模式）</a><br>
+      🔹 <a href="#使用安装包推荐普通用户">使用安装包（推荐普通用户）</a><br>
+      🔹 <a href="#目录结构">目录结构</a><br>
+      🔹 <a href="#数据位置">数据位置</a><br>
+      🔹 <a href="#常见问题">常见问题</a><br>
+      🔹 <a href="#联系我--反馈">联系我 / 反馈</a><br>
+      🔹 <a href="#许可">许可</a>
     </td>
     <td width="50%" valign="top">
-      <h3>🇺🇸 English Contents</h3>
-      <ul>
-        <li><a href="#下载vetaraidownload-vetarai">Download VetarAI</a></li>
-        <li><a href="#why-choose-vetarai">Why Choose VetarAI?</a></li>
-        <li><a href="#core-capabilities-overview">Core Capabilities Overview</a></li>
-        <li><a href="#quick-start-development-mode">Quick Start (Development Mode)</a></li>
-        <li><a href="#using-the-installer-recommended">Using the Installer (Recommended)</a></li>
-        <li><a href="#directory-structure">Directory Structure</a></li>
-        <li><a href="#data-locations">Data Locations</a></li>
-        <li><a href="#faq">FAQ</a></li>
-        <li><a href="#contact--feedback">Contact / Feedback</a></li>
-        <li><a href="#license">License</a></li>
-      </ul>
+      <strong>🇺🇸 English Contents</strong><br><br>
+      🔹 <a href="#下载vetaraidownload-vetarai">Download VetarAI</a><br>
+      🔹 <a href="#why-choose-vetarai">Why Choose VetarAI?</a><br>
+      🔹 <a href="#core-capabilities-overview">Core Capabilities Overview</a><br>
+      🔹 <a href="#quick-start-development-mode">Quick Start (Development Mode)</a><br>
+      🔹 <a href="#using-the-installer-recommended">Using the Installer (Recommended)</a><br>
+      🔹 <a href="#directory-structure">Directory Structure</a><br>
+      🔹 <a href="#data-locations">Data Locations</a><br>
+      🔹 <a href="#faq">FAQ</a><br>
+      🔹 <a href="#contact--feedback">Contact / Feedback</a><br>
+      🔹 <a href="#license">License</a>
     </td>
   </tr>
 </table>
-</div>
 
 ## 下载VetarAI/Download VetarAI
 **⬇️ [下载 VetarAI 0.1.69 安装包](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.1.69)**
