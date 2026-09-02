@@ -2,10 +2,8 @@
 
 > 一款零生态依赖的 Agent 工具 | An ecosystem-agnostic Agent tool.
 >VetarAI 是一款运行在本地的桌面应用，让你在同一台 Mac 上自由创建多个隔离项目，每个项目内动态编排主 Agent 与子 Agent。支持任务委派、多 Agent 圆桌讨论、多模态识图，全部数据保存在本地，不依赖任何云端服务。
-
->VetarAI is a local desktop application that lets you freely create multiple isolated projects on the same Mac, dynamically orchestrating main and sub-agents within each project. It supports task delegation, multi-agent roundtable discussions, and multimodal image recognition. All data is stored locally with zero dependency on any cloud services.
-
-> 当前版本：0.1.69（macOS · Apple Silicon）
+<br>VetarAI is a local desktop application that lets you freely create multiple isolated projects on the same Mac, dynamically orchestrating main and sub-agents within each project. It supports task delegation, multi-agent roundtable discussions, and multimodal image recognition. All data is stored locally with zero dependency on any cloud services.
+<br>当前版本：0.1.69（macOS · Apple Silicon）
 
 **Note: This project is developed by a Chinese team. English translations will be provided immediately following each corresponding Chinese section. Full English language support is not yet available and will be included in a future update.**
 
@@ -178,6 +176,15 @@ subagent/
 - **Migrating to a new computer**: Simply copy the entire ~/.subagent/ directory.
 - **Skills/plugins persist after upgrades**: They are stored in the data directory, not within the application bundle.
 - **Model hangs/stuck tasks**: Built-in activity timeouts and retry limits are included; concurrency settings can also be adjusted in Settings.
+
+## 联系我 / 反馈
+如果你在使用中遇到任何问题，或者有更好的建议，欢迎随时联系我！
+- **微信**：ISEEVetar
+- **邮箱**：zero11924065@foxmail.com
+## Contact / Feedback
+If you encounter any issues while using this project, or if you have any suggestions, feel free to reach out to me!
+- **WeChat**: ISEEVetar
+- **Email**: zero11924065@foxmail.com
 
 ## 许可
 暂未声明许可证（No license）。如需使用/转载代码，请先联系作者确认。
