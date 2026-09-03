@@ -98,6 +98,11 @@ async def main():
     from sidecar.workflow.schema import validate_definition, default_start_definition
     import sidecar.storage.store as store
 
+    # 0.2.2 修正：必须最先隔离存储——引擎测试（L1/F1~F7 等）内部的
+    # update_workflow_run / append_workflow_node_event 会写 store._GDB；
+    # 若延后隔离，引擎测试会污染真实全局库（~/.subagent）。
+    s, stmp = _store_isolate()
+
     # ===== V1 定义校验 =====
     errs = validate_definition(_defn([_n("s", "start"), _n("e", "end")], [{"from": "s", "to": "e"}]))
     check("V1a 合法最简流程", errs == [], str(errs))
@@ -385,6 +390,118 @@ async def main():
           f"{r.status_code} {r.text[:150]}")
     # 清理
     client.delete(f"/api/workflows/{half_id}")
+
+    # ===== F1~F9 文件输入/输出节点（0.2.2） =====
+    # F1 文件输入：单文件 → 单元素路径列表
+    ftmp = Path(tempfile.mkdtemp(prefix="ck077_files_"))
+    (ftmp / "a.jpg").write_text("img-a", encoding="utf-8")
+    conn_f = FakeConn({})
+    defn_f1 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(ftmp / "a.jpg")),
+         _n("e", "end", output="{{fin.output}}")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "e"}])
+    evs = await _run_engine(defn_f1, conn_f, run_id="run-f1")
+    fin_out = None
+    done_f1 = [e for e in evs if e["event"] == "workflow_done"]
+    check("F1 文件输入单文件", len(done_f1) == 1, str([e["event"] for e in evs]))
+
+    # F2 文件输入：文件夹 + 扩展名过滤
+    (ftmp / "b.png").write_text("img-b", encoding="utf-8")
+    (ftmp / "c.txt").write_text("txt-c", encoding="utf-8")
+    defn_f2 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(ftmp), extensions="jpg, png"),
+         _n("e", "end", output="{{fin.output}}")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "e"}])
+    conn_f2 = FakeConn({})
+    eng_f2 = None
+    from sidecar.workflow.engine import WorkflowEngine as _WE2
+    eng_f2 = _WE2("run-f2", defn_f2, conn_f2, str(ftmp))
+    events_f2 = []
+    async for ev in eng_f2.run():
+        events_f2.append(ev)
+    out_f2 = eng_f2.variables["fin"]["output"]
+    check("F2 扩展名过滤", len(out_f2) == 2 and all(p.endswith((".jpg", ".png")) for p in out_f2), str(out_f2))
+
+    # F3 文件输入：递归子目录
+    sub = ftmp / "sub"
+    sub.mkdir(exist_ok=True)
+    (sub / "d.jpg").write_text("img-d", encoding="utf-8")
+    defn_f3 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(ftmp), extensions="jpg", recursive=True),
+         _n("e", "end")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "e"}])
+    eng_f3 = _WE2("run-f3", defn_f3, FakeConn({}), str(ftmp))
+    async for _ in eng_f3.run():
+        pass
+    out_f3 = eng_f3.variables["fin"]["output"]
+    check("F3 递归子目录", len(out_f3) == 2, str(out_f3))
+
+    # F4 文件输入：路径不存在 → 失败
+    defn_f4 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(ftmp / "不存在")),
+         _n("e", "end")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "e"}])
+    evs_f4 = await _run_engine(defn_f4, FakeConn({}), run_id="run-f4")
+    check("F4 路径不存在→失败", any(e["event"] == "workflow_failed" for e in evs_f4),
+          str([e["event"] for e in evs_f4]))
+
+    # F5 文件输出：写文件 + 内容模板
+    out_dir = ftmp / "out"
+    defn_f5 = _defn(
+        [_n("s", "start"),
+         _n("gen", "inference", model="m", prompt="产出"),
+         _n("fout", "file_output", dir=str(out_dir), filename="result.md",
+            content="# 结果\n{{gen.output}}"),
+         _n("e", "end", output="{{fout.output}}")],
+        [{"from": "s", "to": "gen"}, {"from": "gen", "to": "fout"}, {"from": "fout", "to": "e"}])
+    conn_f5 = FakeConn({"m": "识别出的文字"})
+    evs_f5 = await _run_engine(defn_f5, conn_f5, run_id="run-f5")
+    fp5 = out_dir / "result.md"
+    check("F5a 文件输出写入", fp5.exists(), str(fp5))
+    check("F5b 内容模板渲染", fp5.exists() and "识别出的文字" in fp5.read_text(encoding="utf-8"),
+          fp5.read_text(encoding="utf-8") if fp5.exists() else "")
+
+    # F6 文件输出：filename 路径穿越防护
+    defn_f6 = _defn(
+        [_n("s", "start"),
+         _n("fout", "file_output", dir=str(out_dir), filename="../escape.md", content="x"),
+         _n("e", "end")],
+        [{"from": "s", "to": "fout"}, {"from": "fout", "to": "e"}])
+    evs_f6 = await _run_engine(defn_f6, FakeConn({}), run_id="run-f6")
+    check("F6 文件名路径穿越被拒", any(e["event"] == "workflow_failed" for e in evs_f6),
+          str([e["event"] for e in evs_f6]))
+
+    # F7 文件输入→循环（顺序链：推理→保存）完整管线（每图一文件）
+    # 注意：有依赖的步骤必须用顺序链（分支为列表），不能用 parallel（并发竞态读空）
+    out_dir7 = ftmp / "out7"
+    defn_f7 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(ftmp / "sub"), extensions="jpg"),
+         _n("loop", "loop", items="{{fin.output}}", branch=["gen", "fout"]),
+         _n("gen", "inference", model="m", prompt="识别 {{item}}"),
+         _n("fout", "file_output", dir=str(out_dir7), filename="{{item_index}}.md",
+            content="{{gen.output}}"),
+         _n("e", "end")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "loop"}, {"from": "loop", "to": "e"}])
+    conn_f7 = FakeConn({"m": "OCR结果"})
+    eng_f7 = _WE2("run-f7", defn_f7, conn_f7, str(ftmp))
+    evs_f7 = []
+    async for ev in eng_f7.run():
+        evs_f7.append(ev)
+    check("F7a 管线完成", any(e["event"] == "workflow_done" for e in evs_f7),
+          str([e["event"] for e in evs_f7][-3:]))
+    md_files = sorted(out_dir7.glob("*.md")) if out_dir7.exists() else []
+    check("F7b 每图一个md文件", len(md_files) == 1, str(md_files))
+    check("F7c md内容为模型输出", md_files and "OCR结果" in md_files[0].read_text(encoding="utf-8"),
+          md_files[0].read_text(encoding="utf-8") if md_files else "")
+
+    # 清理文件测试目录
+    import shutil as _sh
+    _sh.rmtree(ftmp, ignore_errors=True)
 
     # ===== L11 模板渲染（含嵌套/列表） =====
     from sidecar.workflow.engine import render_template, resolve_value

@@ -9,7 +9,7 @@ let sidecarProcess = null;
 
 // checkpoint-053（用户需求：应用名全局改为 VetarAI + 关于信息放原生菜单栏）
 const APP_NAME = 'VetarAI';
-const APP_VERSION = '0.2.1';
+const APP_VERSION = '0.2.2';
 const APP_TAGLINE_CN = '一款零生态基础的Agent工具';
 const APP_TAGLINE_EN = 'An ecosystem-agnostic Agent tool.';
 
@@ -274,6 +274,22 @@ ipcMain.handle('choose-working-dir', async (_event, options = {}) => {
     return res.filePaths[0];
   } catch (e) {
     console.log('[ipc choose-working-dir]', e);
+    return null;
+  }
+});
+
+// ── IPC: 0.2.2 工作流文件输入节点——选择本机单个文件（只读对话框，不读取内容）──
+ipcMain.handle('choose-input-file', async () => {
+  if (!mainWindow) return null;
+  try {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: '选择文件',
+      properties: ['openFile'],
+    });
+    if (res.canceled || !res.filePaths || res.filePaths.length === 0) return null;
+    return res.filePaths[0];
+  } catch (e) {
+    console.log('[ipc choose-input-file]', e);
     return null;
   }
 });

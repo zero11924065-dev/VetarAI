@@ -15,6 +15,8 @@ const NODE_TYPE_OPTIONS = [
   { value: 'parallel', label: '并行' },
   { value: 'loop', label: '循环' },
   { value: 'approval', label: '人工审批' },
+  { value: 'file_input', label: '文件输入（读本机文件）' },
+  { value: 'file_output', label: '文件输出（保存到本机）' },
   { value: 'end', label: '结束' },
 ];
 
@@ -63,7 +65,8 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
     while (nodes.some((n: any) => n.id === id)) id = `${id}_${Math.floor(Math.random() * 900 + 100)}`;
     const labelMap: Record<string, string> = {
       inference: '推理节点', tool: '工具节点', condition: '条件分支',
-      parallel: '并行节点', loop: '循环节点', approval: '人工审批', end: '结束',
+      parallel: '并行节点', loop: '循环节点', approval: '人工审批',
+      file_input: '文件输入', file_output: '文件输出', end: '结束',
     };
     const nn: any = { id, type: newNodeType, label: labelMap[newNodeType] || id };
     if (newNodeType === 'inference') { nn.model = models[0] || ''; nn.prompt = ''; nn.retry = 0; }
@@ -72,6 +75,8 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
     if (newNodeType === 'parallel') { nn.branches = []; }
     if (newNodeType === 'loop') { nn.items = ''; nn.branch = ''; }
     if (newNodeType === 'approval') { nn.message = '请确认是否继续。'; }
+    if (newNodeType === 'file_input') { nn.path = ''; nn.extensions = ''; nn.recursive = false; }
+    if (newNodeType === 'file_output') { nn.dir = ''; nn.filename = ''; nn.content = ''; }
     onChange({ ...definition, nodes: [...nodes, nn] });
   };
 
@@ -221,6 +226,67 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
                 <label style={FIELD_LABEL}>审批提示（可用变量）</label>
                 <textarea style={{ ...textarea, width: '100%', minHeight: 60 }} value={node.message || ''}
                   onChange={e => patchNode(node.id, { message: e.target.value })} />
+              </>
+            )}
+
+            {node.type === 'file_input' && (
+              <>
+                <label style={FIELD_LABEL}>本机路径（文件或文件夹，支持 {'{{params.名称}}'}）</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input style={{ ...input, flex: 1 }} value={node.path || ''} placeholder="/Users/你/材料/聊天记录"
+                    onChange={e => patchNode(node.id, { path: e.target.value })} />
+                  <button style={{ ...btnSecondary, height: 30, fontSize: 12, padding: '0 8px', flexShrink: 0 }}
+                    onClick={async () => {
+                      const bridge = (window as any).subagent;
+                      if (bridge?.chooseInputFile) {
+                        const f = await bridge.chooseInputFile().catch(() => null);
+                        if (f) patchNode(node.id, { path: f });
+                      } else if (bridge?.chooseWorkingDir) {
+                        const d = await bridge.chooseWorkingDir().catch(() => null);
+                        if (d) patchNode(node.id, { path: d });
+                      }
+                    }}>选择</button>
+                </div>
+                <label style={FIELD_LABEL}>扩展名过滤（逗号分隔，留空 = 全部）</label>
+                <input style={{ ...input, width: '100%' }} value={node.extensions || ''} placeholder="jpg, png, pdf"
+                  onChange={e => patchNode(node.id, { extensions: e.target.value })} />
+                <label style={FIELD_LABEL}>
+                  <input type="checkbox" checked={!!node.recursive}
+                    onChange={e => patchNode(node.id, { recursive: e.target.checked })}
+                    style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                  文件夹时递归搜索子目录
+                </label>
+                <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
+                  输出：文件路径列表，可用循环节点 + {'{{item}}'} 逐个处理。
+                </div>
+              </>
+            )}
+
+            {node.type === 'file_output' && (
+              <>
+                <label style={FIELD_LABEL}>保存目录（支持 {'{{变量}}'}）</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input style={{ ...input, flex: 1 }} value={node.dir || ''} placeholder="/Users/你/材料/聊天文本"
+                    onChange={e => patchNode(node.id, { dir: e.target.value })} />
+                  <button style={{ ...btnSecondary, height: 30, fontSize: 12, padding: '0 8px', flexShrink: 0 }}
+                    onClick={async () => {
+                      const bridge = (window as any).subagent;
+                      if (bridge?.chooseWorkingDir) {
+                        const d = await bridge.chooseWorkingDir().catch(() => null);
+                        if (d) patchNode(node.id, { dir: d });
+                      }
+                    }}>选择</button>
+                </div>
+                <label style={FIELD_LABEL}>文件名（支持 {'{{item}}'} / {'{{item_index}}'} / {'{{节点.output}}'}）</label>
+                <input style={{ ...input, width: '100%' }} value={node.filename || ''} placeholder="{{item_index}}.md"
+                  onChange={e => patchNode(node.id, { filename: e.target.value })} />
+                <label style={FIELD_LABEL}>文件内容（支持 {'{{变量}}'}）</label>
+                <textarea style={{ ...textarea, width: '100%', minHeight: 70, fontFamily: fonts.mono, fontSize: 12 }}
+                  value={node.content || ''} placeholder="{{ocr.output}}"
+                  onChange={e => patchNode(node.id, { content: e.target.value })} />
+                <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
+                  循环节点内使用时，每一轮写入一个文件（文件名用 {'{{item_index}}'} 或 {'{{item}}'} 区分）。
+                </div>
               </>
             )}
 

@@ -26,7 +26,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "approval", "end")
+NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
+              "approval", "file_input", "file_output", "end")
 
 # 推理节点：纯模型调用
 CONDITION_OPERATORS = ("contains", "not_contains", "equals", "starts_with", "regex", "empty", "not_empty")
@@ -64,6 +65,14 @@ def _node_errors(node: dict, idx: int) -> list[str]:
     if ntype == "approval":
         # 审批节点无必填项，但建议有 label
         pass
+    if ntype == "file_input":
+        if not str(node.get("path") or "").strip():
+            errs.append(f"节点[{idx}]（文件输入）缺少 path")
+    if ntype == "file_output":
+        if not str(node.get("dir") or "").strip():
+            errs.append(f"节点[{idx}]（文件输出）缺少 dir")
+        if not str(node.get("filename") or "").strip():
+            errs.append(f"节点[{idx}]（文件输出）缺少 filename")
     return errs
 
 
@@ -130,12 +139,21 @@ def validate_definition(definition: dict[str, Any], *, strict: bool = True) -> l
                     f, t = str(edge.get("from") or ""), str(edge.get("to") or "")
                     if f in adj and t in node_map:
                         adj[f].append(t)
-            # parallel 的 branches 也算可达边
+            # parallel 的 branches 与 loop 的 branch 也算可达边（隐式调用，不画连线）
             for nid, node in node_map.items():
                 if node.get("type") == "parallel":
                     for b in (node.get("branches") or []):
                         if str(b) in node_map:
                             adj[nid].append(str(b))
+                if node.get("type") == "loop":
+                    b = node.get("branch")
+                    if isinstance(b, str) and b in node_map:
+                        adj[nid].append(b)
+                    elif isinstance(b, list):
+                        # 顺序链：链内全部节点可达
+                        for bb in b:
+                            if str(bb) in node_map:
+                                adj[nid].append(str(bb))
             visited: set[str] = set()
             queue = [str(start_nodes[0].get("id"))]
             while queue:

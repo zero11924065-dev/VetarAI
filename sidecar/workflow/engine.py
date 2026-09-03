@@ -1,6 +1,7 @@
 """0.2.1（TS-119）：工作流执行引擎。
 
-节点类型：start / inference / tool / condition / parallel / loop / approval / end
+节点类型：start / inference / tool / condition / parallel / loop / approval /
+file_input / file_output / end
 
 关键设计（用户拍板 2026-09-02）：
 1. 推理节点纯调用：不走 tool loop、无系统提示词、无工具列表——直接
@@ -15,6 +16,9 @@
    端点决议；客户端断开 → 取消生产者任务并卸载模型。
 5. 并行：parallel 节点的 branches 列表内各节点（单节点粒度）并发执行。
 6. 循环：loop 节点对列表变量逐项执行 branch 节点（{{item}} 可用）。
+7. 文件输入/输出（0.2.2）：file_input 读本机路径（文件/文件夹+扩展名过滤）
+   输出文件路径列表；file_output 把上游结果按模板写入本机文件。
+   两者均为纯本地操作，不联网（应用铁律：除搜索外一律不联网）。
 
 事件流架构：执行主体在独立任务中运行，事件经异步队列输出——
 审批挂起期间仍可发心跳，客户端断开时能安全取消并卸载模型。
@@ -27,11 +31,13 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
 from sidecar.storage.store import update_workflow_run, append_workflow_node_event
 
-NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop", "approval", "end")
+NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
+              "approval", "file_input", "file_output", "end")
 
 # 人工审批等待注册表：run_id → {"event": asyncio.Event, "approved": bool, "comment": str}
 _APPROVALS: dict[str, dict[str, Any]] = {}
@@ -316,25 +322,43 @@ class WorkflowEngine:
         return NodeResult(node["id"], ok=True, output=outputs)
 
     async def _run_loop(self, node: dict) -> NodeResult:
-        """循环节点：对 items 列表逐项执行 branch 节点（{{item}} / {{item_index}} 可用）。"""
+        """循环节点：对 items 列表逐项执行分支（{{item}} / {{item_index}} 可用）。
+
+        分支两种形态：
+        - 单节点：branch = "node_id"
+        - 顺序链：branch = ["id1", "id2", ...] —— 按序执行（如"推理→保存"），
+          每步输出可被后续步骤用 {{id.output}} 读取；链的输出 = 最后节点输出。
+          （有依赖关系的步骤禁止用 parallel 分支——并发执行会竞态读空。）
+        """
         items = resolve_value(node.get("items", ""), self.variables)
         if not isinstance(items, list):
             return NodeResult(node["id"], ok=False,
                               error=f"loop.items 不是列表：{type(items).__name__}")
-        branch_id = str(node.get("branch") or "")
-        branch_node = self.nodes.get(branch_id)
-        if branch_node is None:
+        raw_branch = node.get("branch")
+        if isinstance(raw_branch, str):
+            chain_ids = [raw_branch]
+        elif isinstance(raw_branch, list):
+            chain_ids = [str(b) for b in raw_branch]
+        else:
+            chain_ids = []
+        chain_nodes = [self.nodes.get(cid) for cid in chain_ids]
+        if not chain_nodes or any(n is None for n in chain_nodes):
             return NodeResult(node["id"], ok=False, error="loop.branch 节点不存在")
         outputs: list[Any] = []
         for idx, item in enumerate(items):
             self._check_cancel()
             self.variables["item"] = item
             self.variables["item_index"] = idx
-            r = await self._execute_node(branch_node)
-            if not r.ok:
-                return NodeResult(node["id"], ok=False, output=outputs,
-                                  error=f"第 {idx + 1} 项失败：{r.error}")
-            outputs.append(r.output)
+            last_output: Any = None
+            for cnode in chain_nodes:
+                r = await self._execute_node(cnode)
+                if not r.ok:
+                    return NodeResult(node["id"], ok=False, output=outputs,
+                                      error=f"第 {idx + 1} 项失败：{r.error}")
+                # 链内中间节点输出写入变量空间，供后续步骤模板引用
+                self.variables[str(cnode["id"])] = {"output": r.output}
+                last_output = r.output
+            outputs.append(last_output)
         self.variables.pop("item", None)
         self.variables.pop("item_index", None)
         return NodeResult(node["id"], ok=True, output=outputs)
@@ -367,6 +391,73 @@ class WorkflowEngine:
                               error=f"审批被驳回：{entry.get('comment') or '用户驳回'}")
         return NodeResult(node["id"], ok=True, output=entry.get("comment") or "approved")
 
+    # ---------- 0.2.2：文件输入 / 文件输出节点（纯本地，不联网） ----------
+    async def _run_file_input(self, node: dict) -> NodeResult:
+        """文件输入节点：读本机路径（单文件或文件夹），输出文件路径列表。
+
+        配置项：
+          path（必填）：本机文件或文件夹路径（支持 {{变量}}）
+          extensions（可选）：扩展名过滤，如 "jpg, png"（不填 = 不过滤）
+          recursive（可选 bool）：文件夹是否递归（默认 False）
+
+        输出：绝对路径列表（供循环节点 {{item}} 逐项消费）。
+        """
+        raw_path = render_template(str(node.get("path") or ""), self.variables)
+        if not raw_path.strip():
+            return NodeResult(node["id"], ok=False, error="文件输入节点未配置 path")
+        p = Path(raw_path).expanduser()
+        if not p.exists():
+            return NodeResult(node["id"], ok=False, error=f"路径不存在：{p}")
+
+        exts = {e.strip().lower().lstrip(".") for e in
+                str(node.get("extensions") or "").split(",") if e.strip()}
+        recursive = bool(node.get("recursive"))
+
+        if p.is_file():
+            files = [p]
+        else:
+            it = p.rglob("*") if recursive else p.iterdir()
+            files = [f for f in it if f.is_file()]
+        if exts:
+            files = [f for f in files if f.suffix.lower().lstrip(".") in exts]
+        files.sort(key=lambda f: str(f))
+        out = [str(f) for f in files]
+        if not out:
+            return NodeResult(node["id"], ok=False,
+                              error=f"文件夹内没有匹配的文件：{p}（extensions={sorted(exts) or '全部'}）")
+        return NodeResult(node["id"], ok=True, output=out)
+
+    async def _run_file_output(self, node: dict) -> NodeResult:
+        """文件输出节点：把上游结果按模板写入本机文件（纯本地，不联网）。
+
+        配置项：
+          dir（必填）：保存目录（支持 {{变量}}，不存在会自动创建）
+          filename（必填）：文件名模板（支持 {{item}} / {{node.output}} / {{item_index}}）
+          content（必填）：内容模板（同上；也可用 {{变量}} 引用上游输出）
+          encoding（可选）：默认 utf-8
+
+        输出：写入的文件绝对路径（单个）；循环内使用时每轮写一个文件。
+        """
+        directory = render_template(str(node.get("dir") or ""), self.variables)
+        filename = render_template(str(node.get("filename") or ""), self.variables)
+        content = render_template(str(node.get("content") or ""), self.variables)
+        encoding = str(node.get("encoding") or "utf-8")
+        if not directory.strip() or not filename.strip():
+            return NodeResult(node["id"], ok=False, error="文件输出节点需配置 dir 与 filename")
+        target_dir = Path(directory).expanduser()
+        # 防路径穿越：文件名不允许含分隔符/..（目录本身是用户配置的保存目录，放行）
+        fname = Path(filename).name
+        if not fname or fname != filename or ".." in filename:
+            return NodeResult(node["id"], ok=False,
+                              error=f"filename 不合法（不允许路径分隔符/..）：{filename!r}")
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / fname
+            target.write_text(content, encoding=encoding)
+        except (OSError, UnicodeEncodeError, LookupError) as e:
+            return NodeResult(node["id"], ok=False, error=f"写入失败：{e}")
+        return NodeResult(node["id"], ok=True, output=str(target))
+
     async def _execute_node(self, node: dict) -> NodeResult:
         """执行单个节点（含重试）。"""
         retry_limit = int(node.get("retry") or 0)
@@ -385,6 +476,10 @@ class WorkflowEngine:
                 res = await self._run_loop(node)
             elif ntype == "approval":
                 res = await self._run_approval(node)
+            elif ntype == "file_input":
+                res = await self._run_file_input(node)
+            elif ntype == "file_output":
+                res = await self._run_file_output(node)
             elif ntype in ("start", "end"):
                 res = NodeResult(node["id"], ok=True, output=None)
             elif ntype == "condition":
