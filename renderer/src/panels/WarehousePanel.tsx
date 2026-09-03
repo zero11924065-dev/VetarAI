@@ -9,7 +9,7 @@
  *      / 发送到会话窗（作为用户消息注入，仅勾选的条目）。
  * 面板可收起/展开由父组件（ChatPanel）控制；本组件只负责面板内容。
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { getApiBase } from '../apiBase';
 import { colors, radius, shadow } from '../theme';
 import { Icon, Spinner } from '../Icon';
@@ -60,6 +60,10 @@ export function WarehousePanel({ projectId, onInject, onClose }: {
       setSearching(false);
     }
   }, [query, scope, projectId]);
+
+  // TS-121（问题2）：面板每次展开/挂载都拉取当前作用域最新条目——
+  // 转移入库后自动展开时立即可见新条目，外部增删文件（经后端对账）也即时反映。
+  useEffect(() => { doSearch(); }, [doSearch]);
 
   const toggleCheck = (id: string) => {
     setChecked(prev => {

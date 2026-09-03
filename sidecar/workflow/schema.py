@@ -27,7 +27,9 @@ import re
 from typing import Any
 
 NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
-              "approval", "file_input", "file_output", "file_read", "end")
+              "approval", "file_input", "file_output", "file_read",
+              # TS-121（0.3.1 补遗1）：文本输出/变量赋值/代码执行/消息回复
+              "text_output", "variable_set", "code", "reply", "end")
 
 # 推理节点：纯模型调用
 CONDITION_OPERATORS = ("contains", "not_contains", "equals", "starts_with", "regex", "empty", "not_empty")
@@ -76,6 +78,22 @@ def _node_errors(node: dict, idx: int) -> list[str]:
             errs.append(f"节点[{idx}]（文件输出）缺少 dir")
         if not str(node.get("filename") or "").strip():
             errs.append(f"节点[{idx}]（文件输出）缺少 filename")
+    # TS-121（0.3.1 补遗1）：4 个新节点的必填校验
+    if ntype == "text_output":
+        if not str(node.get("template") or "").strip():
+            errs.append(f"节点[{idx}]（文本输出）缺少 template（内容模板）")
+    if ntype == "variable_set":
+        name = str(node.get("name") or "").strip()
+        if not name:
+            errs.append(f"节点[{idx}]（变量赋值）缺少变量名")
+        elif "." in name or "/" in name:
+            errs.append(f"节点[{idx}]（变量赋值）变量名不能含 . 或 /：{name!r}")
+    if ntype == "code":
+        if not str(node.get("code") or "").strip():
+            errs.append(f"节点[{idx}]（代码执行）缺少 code")
+    if ntype == "reply":
+        if not str(node.get("text") or "").strip():
+            errs.append(f"节点[{idx}]（消息回复）缺少 text")
     return errs
 
 

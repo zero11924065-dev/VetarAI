@@ -135,6 +135,20 @@ def main():
     auto_title = first_content[:20]
     check("W8 标题取首条前20字", auto_title == first_content[:20] and len(auto_title) == 20, auto_title)
 
+    # W9 外部删除对账（TS-121 问题4/5：Finder 删 .md 后索引必须同步清除）
+    e1 = wh.add_entry("global", None, "外部删除测试", "这是一条将被外部删除的测试条目")
+    check("W9a 条目创建成功", e1 is not None)
+    if e1:
+        Path(e1["file_path"]).unlink()  # 模拟用户在 Finder 直接删除 .md
+        n = wh.prune_missing()
+        check("W9b 对账清除 1 条", n == 1, str(n))
+        check("W9c list 不再包含已删条目",
+              all(x["id"] != e1["id"] for x in wh.list_entries("global")))
+        check("W9d search 不再命中已删条目",
+              all(x["id"] != e1["id"] for x in wh.search_entries("外部删除测试", "global")))
+        # 第二次对账应清除 0 条（幂等）
+        check("W9e 二次对账清除 0 条", wh.prune_missing() == 0)
+
     # 清理
     wh._DATA_ROOT_OVERRIDE = None
     wh._INDEX_DB_PATH = None

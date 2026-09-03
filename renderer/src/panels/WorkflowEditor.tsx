@@ -18,6 +18,11 @@ const NODE_TYPE_OPTIONS = [
   { value: 'file_input', label: '文件输入（选本机文件）' },
   { value: 'file_read', label: '文件读取（批量读内容）' },
   { value: 'file_output', label: '文件输出（保存到本机）' },
+  // TS-121（0.3.1 补遗1）：4 个新节点
+  { value: 'text_output', label: '文本输出（模板拼文本）' },
+  { value: 'variable_set', label: '变量赋值' },
+  { value: 'code', label: '代码执行（本地 Python）' },
+  { value: 'reply', label: '消息回复（推给会话）' },
   { value: 'end', label: '结束' },
 ];
 
@@ -67,7 +72,9 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
     const labelMap: Record<string, string> = {
       inference: '推理节点', tool: '工具节点', condition: '条件分支',
       parallel: '并行节点', loop: '循环节点', approval: '人工审批',
-      file_input: '文件输入', file_read: '文件读取', file_output: '文件输出', end: '结束',
+      file_input: '文件输入', file_read: '文件读取', file_output: '文件输出',
+      text_output: '文本输出', variable_set: '变量赋值', code: '代码执行', reply: '消息回复',
+      end: '结束',
     };
     const nn: any = { id, type: newNodeType, label: labelMap[newNodeType] || id };
     if (newNodeType === 'inference') { nn.model = models[0] || ''; nn.prompt = ''; nn.retry = 0; }
@@ -79,6 +86,10 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
     if (newNodeType === 'file_input') { nn.path = ''; nn.extensions = ''; nn.recursive = false; }
     if (newNodeType === 'file_read') { nn.path = ''; nn.extensions = ''; nn.separator = ''; }
     if (newNodeType === 'file_output') { nn.dir = ''; nn.filename = ''; nn.content = ''; }
+    if (newNodeType === 'text_output') { nn.template = ''; }
+    if (newNodeType === 'variable_set') { nn.name = ''; nn.value = ''; }
+    if (newNodeType === 'code') { nn.code = ''; }
+    if (newNodeType === 'reply') { nn.text = ''; }
     onChange({ ...definition, nodes: [...nodes, nn] });
   };
 
@@ -346,6 +357,52 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
                 <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
                   循环节点内使用时，每一轮写入一个文件（文件名用 {'{{item_index}}'} 或 {'{{item}}'} 区分）。
                 </div>
+              </>
+            )}
+
+            {/* TS-121（0.3.1 补遗1）：文本输出/变量赋值/代码执行/消息回复 表单 */}
+            {node.type === 'text_output' && (
+              <>
+                <label style={FIELD_LABEL}>内容模板（支持 {'{{节点.output}}'} / {'{{params.名称}}'} / {'{{变量名}}'}）</label>
+                <textarea style={{ ...textarea, width: '100%', minHeight: 80 }} value={node.template || ''}
+                  placeholder={"汇总：\n{{n1.output}}"}
+                  onChange={e => patchNode(node.id, { template: e.target.value })} />
+                <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
+                  渲染结果作为本节点输出，可继续流转到下游或作为结束结果（不落盘）。
+                </div>
+              </>
+            )}
+
+            {node.type === 'variable_set' && (
+              <>
+                <label style={FIELD_LABEL}>变量名（下游用 {'{{变量名}}'} 引用，不能含 . 或 /）</label>
+                <input style={{ ...input, width: '100%' }} value={node.name || ''} placeholder="total"
+                  onChange={e => patchNode(node.id, { name: e.target.value })} />
+                <label style={FIELD_LABEL}>值（整串 {'{{x.output}}'} = 保持原值类型；混合文本 = 渲染为字符串）</label>
+                <input style={{ ...input, width: '100%' }} value={node.value || ''} placeholder="{{n1.output}}"
+                  onChange={e => patchNode(node.id, { value: e.target.value })} />
+              </>
+            )}
+
+            {node.type === 'code' && (
+              <>
+                <label style={FIELD_LABEL}>Python 代码（本机执行，不联网）</label>
+                <textarea style={{ ...textarea, width: '100%', minHeight: 120, fontFamily: fonts.mono, fontSize: 12 }}
+                  value={node.code || ''}
+                  placeholder={"# 读上游：variables['n1']['output'] 或自定义变量 variables['total']\nresult = '处理完成'"}
+                  onChange={e => patchNode(node.id, { code: e.target.value })} />
+                <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
+                  约定：用 variables 字典读上游输出/变量；把结果赋给 result 即本节点输出。代码以本应用权限在本机运行。
+                </div>
+              </>
+            )}
+
+            {node.type === 'reply' && (
+              <>
+                <label style={FIELD_LABEL}>回复内容（支持 {'{{变量}}'}，执行时作为一条助手消息推给会话）</label>
+                <textarea style={{ ...textarea, width: '100%', minHeight: 70 }} value={node.text || ''}
+                  placeholder={"已完成：{{n1.output}}"}
+                  onChange={e => patchNode(node.id, { text: e.target.value })} />
               </>
             )}
 

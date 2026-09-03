@@ -76,7 +76,7 @@ export function WarehouseManager() {
     <div style={{ ...cardL, padding: '16px 20px' }}>
       <div style={{ fontSize: 12, color: colors.textTertiary, marginBottom: 12, lineHeight: 1.6 }}>
         知识仓库（拉模式）：从会话转移进来的对话/知识，保存为 .md 文件永久存储；只有你在会话框右侧面板显式搜索/勾选时才读取，
-        永不自动注入模型上下文。与「知识库」（自动注入）是不同的东西。项目知识存于项目文件夹的"知识库/"目录，全局知识存于应用数据目录。
+        永不自动注入模型上下文。与「知识库」（自动注入）是不同的东西。项目知识存于项目文件夹的"知识库"目录，全局知识存于应用数据目录。在 Finder 删除 .md 文件后，索引会在下次读取时自动对账清除。
       </div>
       {error && (
         <div style={{ ...calloutStyle('error'), marginBottom: 12 }}>

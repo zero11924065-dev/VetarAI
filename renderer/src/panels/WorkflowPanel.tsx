@@ -298,7 +298,7 @@ export function WorkflowPanel() {
               {events.length === 0 && <div style={{ color: colors.textTertiary }}>运行事件将显示在这里。</div>}
               {events.map((ev, i) => (
                 <div key={i} style={{ color: ev.event.includes('error') || ev.event === 'workflow_failed' ? colors.dangerText : colors.textSecondary, lineHeight: 1.7 }}>
-                  {ev.event}{ev.data.node_id ? ` · ${ev.data.node_id}` : ''}{ev.data.error ? ` · ${ev.data.error}` : ''}{ev.data.output_preview ? ` · ${String(ev.data.output_preview).slice(0, 80)}` : ''}
+                  {ev.event}{ev.data.node_id ? ` · ${ev.data.node_id}` : ''}{ev.data.error ? ` · ${ev.data.error}` : ''}{ev.data.output_preview ? ` · ${String(ev.data.output_preview).slice(0, 80)}` : ''}{ev.event === 'workflow_reply' && ev.data.text ? ` 💬 ${String(ev.data.text).slice(0, 120)}` : ''}
                 </div>
               ))}
               {running && <div style={{ color: colors.accentText }}><Spinner size={12} /> 运行中…</div>}

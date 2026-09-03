@@ -338,6 +338,23 @@ def search_entries(query: str, scope: str | None = None,
     return results
 
 
+def prune_missing() -> int:
+    """索引与磁盘对账：索引中 .md 文件已不存在（用户在 Finder 外部删除）→
+    从索引表与 FTS 中清除。文件是本体（source of truth），索引单向跟随。
+    返回清除的条目数。"""
+    conn = _iconn()
+    try:
+        rows = conn.execute("SELECT id, file_path FROM knowledge_entries").fetchall()
+        missing = [rid for rid, fp in rows if not Path(str(fp)).is_file()]
+        for rid in missing:
+            conn.execute("DELETE FROM knowledge_entries WHERE id = ?", (rid,))
+            conn.execute("DELETE FROM knowledge_fts WHERE entry_id = ?", (rid,))
+        conn.commit()
+    finally:
+        conn.close()
+    return len(missing)
+
+
 def rebuild_index() -> int:
     """重建索引：扫描作用域目录内全部 .md，清空索引后重新写入。返回条目数。"""
     from sidecar.storage.store import list_projects

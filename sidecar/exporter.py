@@ -114,6 +114,55 @@ def export_session_md(project_id: str, session_id: str,
     return {"path": str(path), "name": fname}
 
 
+def export_workgroup_json(project_id: str) -> dict[str, str]:
+    """TS-121（0.3.1 补遗2）：工作组 JSON 导出。
+
+    工作组 = 一个项目下的完整协作快照：项目元信息 + 全部 Agent 配置 +
+    每个 Agent 的会话列表与会话消息（含任务队列、圆桌讨论）。纯本地读取，
+    不联网。目录走 resolve_export_dir（与会话导出同策略）。
+    返回 {"path": 绝对路径, "name": 文件名}。项目不存在抛 ValueError。
+    """
+    from sidecar.storage.store import (
+        get_project, list_agent_configs, list_sessions, load_messages,
+        list_agent_tasks, list_roundtables, list_roundtable_messages)
+
+    project = get_project(project_id)
+    if not project:
+        raise ValueError("项目不存在")
+
+    agents: list[dict[str, Any]] = []
+    for cfg in list_agent_configs(project_id):
+        agent_id = str(cfg.get("id") or "")
+        sessions: list[dict[str, Any]] = []
+        for s in list_sessions(project_id, agent_id):
+            sid = str(s.get("id") or "")
+            msgs = load_messages(project_id, sid)
+            sessions.append({**s, "messages": msgs})
+        agents.append({**cfg, "sessions": sessions})
+
+    payload = {
+        "export_type": "vetarai_workgroup",
+        "version": 1,
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "project": project,
+        "agents": agents,
+        "task_queue": list_agent_tasks(project_id, limit=200),
+        "roundtables": [
+            {**rt, "messages": list_roundtable_messages(project_id, str(rt.get("id") or ""))}
+            for rt in list_roundtables(project_id, limit=50)
+        ],
+    }
+
+    out_dir = resolve_export_dir(project_id) / "workgroup"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    safe_name = "".join(c for c in str(project.get("name") or "project") if c.isalnum() or c in " _-（）()")[:20] or "project"
+    fname = f"工作组-{safe_name}-{ts}.json"
+    path = out_dir / fname
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"path": str(path), "name": fname}
+
+
 def save_delegation_report_md(project_id: str, task_id: str,
                               report: dict[str, Any], full_text: str) -> str | None:
     """交卷全文落盘（3.17 第一项：>1000 字自动保存）。

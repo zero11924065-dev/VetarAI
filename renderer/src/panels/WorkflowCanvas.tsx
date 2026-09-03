@@ -20,6 +20,11 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   file_input: { label: '文件输入', color: '#0EA5E9' },
   file_read: { label: '文件读取', color: '#0EA5E9' },
   file_output: { label: '文件输出', color: '#0EA5E9' },
+  // TS-121（0.3.1 补遗1）
+  text_output: { label: '文本输出', color: '#10B981' },
+  variable_set: { label: '变量赋值', color: '#10B981' },
+  code: { label: '代码执行', color: '#F59E0B' },
+  reply: { label: '消息回复', color: '#10B981' },
   end: { label: '结束', color: colors.textSecondary },
 };
 

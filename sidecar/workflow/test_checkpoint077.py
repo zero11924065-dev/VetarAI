@@ -807,6 +807,80 @@ async def main():
     import shutil as _shg
     _shg.rmtree(gtmp, ignore_errors=True)
 
+    # ===== H 组（TS-121，0.3.1 补遗1）：文本输出/变量赋值/代码执行/消息回复 =====
+    htmp = Path(tempfile.mkdtemp(prefix="ck077_h_"))
+    from sidecar.workflow.engine import WorkflowEngine as _WE3
+
+    # H1 文本输出：模板渲染上游输出
+    defn_h1 = _defn([_n("s", "start"),
+                     _n("a", "inference", model="m", prompt="识别"),
+                     _n("t", "text_output", template="汇总：{{a.output}}"),
+                     _n("e", "end", output="{{t.output}}")],
+                    [{"from": "s", "to": "a"}, {"from": "a", "to": "t"}, {"from": "t", "to": "e"}])
+    evs_h1 = []
+    async for ev in _WE3("run-h1", defn_h1, FakeConn({"m": "原文内容"}), str(htmp)).run():
+        evs_h1.append(ev)
+    done_h1 = [e for e in evs_h1 if e["event"] == "node_done" and e["data"].get("node_id") == "t"]
+    wf_h1 = [e for e in evs_h1 if e["event"] == "workflow_done"]
+    check("H1a 文本输出渲染上游", done_h1 and "原文内容" in str(done_h1[0]["data"].get("output_preview", "")), str(evs_h1[-2:]))
+    check("H1b 结束结果取文本输出", wf_h1 and "汇总：原文内容" in json.dumps(wf_h1[0]["data"], ensure_ascii=False), str(wf_h1))
+
+    # H2 变量赋值：整串引用保持类型 + 下游可读
+    defn_h2 = _defn([_n("s", "start"),
+                     _n("v", "variable_set", name="total", value="{{params.num}}"),
+                     _n("t", "text_output", template="总数={{total}}"),
+                     _n("e", "end", output="{{t.output}}")],
+                    [{"from": "s", "to": "v"}, {"from": "v", "to": "t"}, {"from": "t", "to": "e"}])
+    evs_h2 = []
+    async for ev in _WE3("run-h2", defn_h2, FakeConn({}), str(htmp), params={"num": 42}).run():
+        evs_h2.append(ev)
+    t_h2 = [e for e in evs_h2 if e["event"] == "node_done" and e["data"].get("node_id") == "t"]
+    check("H2 变量赋值+文本引用", t_h2 and "总数=42" in str(t_h2[0]["data"].get("output_preview", "")), str(evs_h2[-2:]))
+
+    # H3 代码执行：读变量、写 result
+    defn_h3 = _defn([_n("s", "start"),
+                     _n("v", "variable_set", name="nums", value="{{params.list}}"),
+                     _n("c", "code", code="result = sum(variables['nums'])"),
+                     _n("t", "text_output", template="和={{c.output}}"),
+                     _n("e", "end", output="{{t.output}}")],
+                    [{"from": "s", "to": "v"}, {"from": "v", "to": "c"}, {"from": "c", "to": "t"}, {"from": "t", "to": "e"}])
+    evs_h3 = []
+    async for ev in _WE3("run-h3", defn_h3, FakeConn({}), str(htmp), params={"list": [1, 2, 3]}).run():
+        evs_h3.append(ev)
+    t_h3 = [e for e in evs_h3 if e["event"] == "node_done" and e["data"].get("node_id") == "t"]
+    check("H3a 代码执行求和", t_h3 and "和=6" in str(t_h3[0]["data"].get("output_preview", "")), str(evs_h3[-2:]))
+    # H3b 代码异常 → 节点失败
+    defn_h3b = _defn([_n("s", "start"), _n("c", "code", code="1/0"), _n("e", "end")],
+                     [{"from": "s", "to": "c"}, {"from": "c", "to": "e"}])
+    evs_h3b = []
+    async for ev in _WE3("run-h3b", defn_h3b, FakeConn({}), str(htmp)).run():
+        evs_h3b.append(ev)
+    err_h3b = [e for e in evs_h3b if e["event"] == "node_error" and e["data"].get("node_id") == "c"]
+    check("H3b 代码异常报节点错误", err_h3b and "ZeroDivisionError" in str(err_h3b[0]["data"].get("error", "")), str(evs_h3b[-2:]))
+
+    # H4 消息回复：发 workflow_reply 事件
+    defn_h4 = _defn([_n("s", "start"),
+                     _n("r", "reply", text="你好，{{params.name}}"),
+                     _n("e", "end")],
+                    [{"from": "s", "to": "r"}, {"from": "r", "to": "e"}])
+    evs_h4 = []
+    async for ev in _WE3("run-h4", defn_h4, FakeConn({}), str(htmp), params={"name": "测试员"}).run():
+        evs_h4.append(ev)
+    rep_h4 = [e for e in evs_h4 if e["event"] == "workflow_reply"]
+    check("H4 消息回复事件含渲染文本", rep_h4 and rep_h4[0]["data"].get("text") == "你好，测试员", str(evs_h4))
+
+    # H5 校验：新节点必填缺失报错
+    from sidecar.workflow.schema import validate_definition
+    errs_h5 = validate_definition(_defn(
+        [_n("s", "start"), _n("t", "text_output"), _n("v", "variable_set"),
+         _n("c", "code"), _n("r", "reply"), _n("e", "end")],
+        [{"from": "s", "to": "t"}, {"from": "t", "to": "v"}, {"from": "v", "to": "c"},
+         {"from": "c", "to": "r"}, {"from": "r", "to": "e"}]))
+    check("H5 四节点缺必填均报错", len(errs_h5) >= 4, str(errs_h5))
+
+    import shutil as _shh
+    _shh.rmtree(htmp, ignore_errors=True)
+
     print(f"\n===== 结果：{PASS} PASS / {FAIL} FAIL =====")
     if FAILURES:
         print("失败项：", "、".join(FAILURES))

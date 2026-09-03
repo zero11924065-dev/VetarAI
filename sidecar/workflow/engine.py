@@ -37,7 +37,8 @@ from typing import Any, AsyncIterator, Callable
 from sidecar.storage.store import update_workflow_run, append_workflow_node_event
 
 NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
-              "approval", "file_input", "file_output", "file_read", "end")
+              "approval", "file_input", "file_output", "file_read",
+              "text_output", "variable_set", "code", "reply", "end")
 
 # 人工审批等待注册表：run_id → {"event": asyncio.Event, "approved": bool, "comment": str}
 _APPROVALS: dict[str, dict[str, Any]] = {}
@@ -676,6 +677,60 @@ class WorkflowEngine:
             return NodeResult(node["id"], ok=False, error=f"写入失败：{e}")
         return NodeResult(node["id"], ok=True, output=str(target))
 
+    # ---- TS-121（0.3.1 补遗1）：文本输出/变量赋值/代码执行/消息回复 ----
+    async def _run_text_output(self, node: dict) -> NodeResult:
+        """文本输出节点：按模板渲染文本作为输出（可再经边流转到下游/结束节点）。
+
+        配置项：template（必填，支持 {{node.output}} / {{params.x}} / {{item}}）。
+        与文件输出的区别：不落盘，只产出文本变量。"""
+        tpl = str(node.get("template") or "")
+        if not tpl.strip():
+            return NodeResult(node["id"], ok=False, error="文本输出节点缺少 template")
+        return NodeResult(node["id"], ok=True, output=render_template(tpl, self.variables))
+
+    async def _run_variable_set(self, node: dict) -> NodeResult:
+        """变量赋值节点：把值写入变量空间（{{name}} 可供下游引用）。
+
+        配置项：name（必填，变量名，不含 .）、value（支持 {{...}} 引用；
+        整串 {{x}} 保持原值类型，混合模板渲染为字符串）。
+        变量空间与 node 输出空间并列：variables[name] = 值（不包 output 壳）。"""
+        name = str(node.get("name") or "").strip()
+        if not name or "." in name or "/" in name:
+            return NodeResult(node["id"], ok=False, error=f"变量名非法：{name!r}（不能为空或含 . /）")
+        value = resolve_value(node.get("value", ""), self.variables)
+        self.variables[name] = value
+        return NodeResult(node["id"], ok=True, output=value)
+
+    async def _run_code(self, node: dict) -> NodeResult:
+        """代码执行节点：纯本地 exec 一段 Python，不联网（应用铁律）。
+
+        配置项：code（必填 Python 源码）。约定：代码内通过 variables 字典
+        读上游（variables['节点id']['output'] / variables['变量名']），
+        把结果赋给 result 变量即为本节点输出。超时 30s。
+        安全提示：代码在本机以本应用权限运行，与 tool 节点同级信任面。"""
+        code_src = str(node.get("code") or "")
+        if not code_src.strip():
+            return NodeResult(node["id"], ok=False, error="代码执行节点缺少 code")
+        # 给代码一个可读的只读引用 env（同时保留 variables 原引用供高级用法）
+        env: dict[str, Any] = {"variables": self.variables, "result": None}
+        try:
+            compiled = compile(code_src, f"<workflow-node-{node['id']}>", "exec")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, exec, compiled, env)  # 同步代码不阻塞事件循环
+        except Exception as e:
+            return NodeResult(node["id"], ok=False, error=f"代码执行异常：{type(e).__name__}: {e}")
+        return NodeResult(node["id"], ok=True, output=env.get("result"))
+
+    async def _run_reply(self, node: dict) -> NodeResult:
+        """消息回复节点：把模板文本作为一条助手回复推给会话前端（纯本地展示）。
+
+        配置项：text（必填，支持 {{...}} 变量）。输出同时写入节点变量供下游引用。"""
+        text = render_template(str(node.get("text") or ""), self.variables)
+        if not text.strip():
+            return NodeResult(node["id"], ok=False, error="消息回复节点缺少 text")
+        self._emit("workflow_reply", {"node_id": node["id"], "text": text})
+        return NodeResult(node["id"], ok=True, output=text)
+
     async def _run_file_read(self, node: dict) -> NodeResult:
         """文件读取节点：批量读取本机文件内容，拼接成一段文本输出（纯本地，不联网）。
 
@@ -750,6 +805,14 @@ class WorkflowEngine:
                 res = await self._run_file_output(node)
             elif ntype == "file_read":
                 res = await self._run_file_read(node)
+            elif ntype == "text_output":
+                res = await self._run_text_output(node)
+            elif ntype == "variable_set":
+                res = await self._run_variable_set(node)
+            elif ntype == "code":
+                res = await self._run_code(node)
+            elif ntype == "reply":
+                res = await self._run_reply(node)
             elif ntype in ("start", "end"):
                 res = NodeResult(node["id"], ok=True, output=None)
             elif ntype == "condition":

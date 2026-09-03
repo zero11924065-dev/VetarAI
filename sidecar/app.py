@@ -1326,6 +1326,16 @@ async def api_list_roundtables(project_id: str, limit: int = 20):
         lim = 20
     return list_roundtables(project_id, limit=lim)
 
+# TS-121（0.3.1 补遗2）：工作组 JSON 导出（项目+agents+会话+任务队列+圆桌）
+@app.post("/api/projects/{project_id}/export-workgroup")
+async def api_export_workgroup(project_id: str):
+    from sidecar.exporter import export_workgroup_json
+    try:
+        result = export_workgroup_json(project_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "path": result["path"], "name": result["name"]}
+
 @app.get("/api/roundtables/{rt_id}")
 async def api_get_roundtable(rt_id: str, project_id: str):
     rt = get_roundtable(project_id, rt_id)
@@ -1780,7 +1790,8 @@ async def api_knowledge_transfer(req: KnowledgeTransferReq):
 
 @app.get("/api/knowledge/entries")
 async def api_knowledge_list(scope: str | None = None, project_id: str | None = None):
-    """列出知识条目（可按作用域/项目过滤）。"""
+    """列出知识条目（可按作用域/项目过滤）。读取前对账：外部删除的 .md 同步清出索引。"""
+    _wh.prune_missing()
     return _wh.list_entries(scope, project_id)
 
 
@@ -1803,7 +1814,8 @@ async def api_knowledge_delete(entry_id: str):
 @app.get("/api/knowledge/search")
 async def api_knowledge_search(q: str, scope: str | None = None,
                                project_id: str | None = None, limit: int = 20):
-    """关键词检索（FTS5 + jieba 分词）。"""
+    """关键词检索（FTS5 + jieba 分词）。读取前对账：外部删除的 .md 不再命中。"""
+    _wh.prune_missing()
     return _wh.search_entries(q, scope, project_id, min(max(limit, 1), 100))
 
 
@@ -1833,8 +1845,9 @@ async def api_knowledge_rebuild():
 
 @app.get("/api/knowledge/groups")
 async def api_knowledge_groups():
-    """设置页资产管理器：全局知识组 + 各项目知识组（含条数与目录路径）。"""
+    """设置页资产管理器：全局知识组 + 各项目知识组（含条数与目录路径）。读取前对账。"""
     from sidecar.storage.store import list_projects
+    _wh.prune_missing()
     groups = []
     # 全局
     g_entries = _wh.list_entries("global")

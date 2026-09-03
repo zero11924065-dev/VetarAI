@@ -24,6 +24,25 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
   const [renameValue, setRenameValue] = useState('');
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // TS-121（0.3.1 补遗2）：工作组 JSON 导出
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const flash = (msg: string) => { setNotice(msg); setTimeout(() => setNotice(null), 6000); };
+
+  async function handleExportWorkgroup(pid: string, _pname: string) {
+    if (exportingId) return;
+    setExportingId(pid);
+    try {
+      const res = await fetch(`${API}/projects/${encodeURIComponent(pid)}/export-workgroup`, { method: 'POST' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.detail || `HTTP ${res.status}`);
+      flash(`工作组已导出：${d.name}（目录：${String(d.path).replace(/\/[^/]*$/, '')}）`);
+    } catch (e: any) {
+      flash(`导出失败：${e?.message || e}`);
+    } finally {
+      setExportingId(null);
+    }
+  }
 
   // checkpoint-057：外部切换项目（如从独立 Agent 面板联动）时同步高亮
   useEffect(() => { setSelectedId(selectedProjectId ?? null); }, [selectedProjectId]);
@@ -227,6 +246,14 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
         </div>
       )}
 
+      {/* TS-121（0.3.1 补遗2）：工作组导出结果提示 */}
+      {notice && (
+        <div style={{ ...calloutStyle(notice.startsWith('导出失败') ? 'error' : 'success'), marginBottom: 8 }}>
+          <Icon name={notice.startsWith('导出失败') ? 'alert-circle' : 'check'} size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span style={{ flex: 1, wordBreak: 'break-all' }}>{notice}</span>
+        </div>
+      )}
+
       {/* 手动输入工作目录（内联 fallback，任何环境可用） */}
       {manualMode && (
         <div style={{ marginTop: 8, background: colors.bgCard, padding: '8px 10px', borderRadius: radius.m, border: `1px solid ${colors.borderDefault}`, marginBottom: 8 }}>
@@ -301,6 +328,13 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
                     <span style={{ ...typo.body, fontWeight: isSelected ? 500 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                   </div>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 2, opacity: isHover ? 1 : 0, transition: 'opacity .15s ease' }}>
+                    {/* TS-121（0.3.1 补遗2）：工作组 JSON 导出 */}
+                    <button title="导出工作组（JSON：项目+Agent+会话+任务+圆桌）"
+                      className="ui-btn ui-btn-ghost"
+                      onClick={e => { e.stopPropagation(); handleExportWorkgroup(p.id, p.name); }}
+                      style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }}>
+                      {exportingId === p.id ? <Spinner size={14} /> : <Icon name="download" size={14} />}
+                    </button>
                     <button title="重命名"
                       className="ui-btn ui-btn-ghost"
                       onClick={e => { e.stopPropagation(); setRenamingId(p.id); setRenameValue(p.name); }}

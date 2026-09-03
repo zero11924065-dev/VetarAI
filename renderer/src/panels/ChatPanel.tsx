@@ -632,6 +632,34 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   }
 
   // ── TS-120（0.3.0）：知识仓库——勾选消息转移入库 ──
+  // TS-121（问题3）：流式消息用 local_ 临时 id 渲染，DB 落库后才是数字 id；
+  // 勾选框只认数字 id（后端 transfer 也只认数字 id）。流结束后用 DB 对齐本地 id，
+  // 勾选模式即刻可用（此前要等切窗重进触发重载才出现勾选框）。
+  async function alignLocalIdsWithDb(sid: string) {
+    try {
+      const res = await fetch(`${API}/sessions/${sid}/messages?project_id=${encodeURIComponent(projectId)}`);
+      if (!res.ok) return;
+      const dbMsgs = (await res.json()) as Message[];
+      const prev = localMessagesRef.current;
+      if (!prev.some(m => String(m.id ?? '').startsWith('local_'))) return;
+      const dbByKey = new Map<string, Message>();
+      for (const d of dbMsgs) if (d.content) dbByKey.set(`${d.role}::${d.content}`, d);
+      const usedDb = new Set<string>();
+      const next = prev.map(m => {
+        if (!String(m.id ?? '').startsWith('local_')) return m;
+        const key = m.content ? `${m.role}::${m.content}` : '';
+        const hit = key ? dbByKey.get(key) : undefined;
+        if (!hit || usedDb.has(key)) return m; // DB 尚无定稿（截断/失败）→ 保留临时态
+        usedDb.add(key);
+        // 以 DB 数字 id 为准；本地展示扩展字段（思考/完成用时等）迁移过去不丢
+        const { id: _lid, ...localExtras } = m as Message & Record<string, unknown>;
+        return { ...hit, ...localExtras, id: hit.id } as Message;
+      });
+      setLocalMessages(next);
+      syncSessionLocal(sid, next); // 缓存同步对齐，刷新/切回后仍是数字 id
+    } catch { /* 对齐失败静默：不影响会话本身 */ }
+  }
+
   async function handleTransferToWarehouse() {
     if (!currentSessionId || selectedMsgIds.size === 0) return;
     setTransferring(true);
@@ -654,16 +682,19 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       const d = await res.json();
       if (!res.ok) throw new Error(_errMsg(d, res.status));
       // 标记已选消息为归档（脱离上下文、占位显示）
-      setLocalMessages(prev => prev.map(m =>
-        typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m));
-      if (currentSessionId) syncSessionLocal(currentSessionId, localMessages.map(m =>
-        typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m));
+      // TS-121（问题2连带）：此前 syncSessionLocal 写的是未标记的旧 localMessages，
+      // 归档态没进缓存 → 刷新/切回后占位消失。改用同一份 next 写状态与缓存。
+      const nextArchived = localMessagesRef.current.map(m =>
+        typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m);
+      setLocalMessages(nextArchived);
+      if (currentSessionId) syncSessionLocal(currentSessionId, nextArchived);
       setToast(`已移入知识仓库 ✓（${d.title}）`);
       setTimeout(() => setToast(null), 4000);
-      // 关闭弹窗、清空勾选
+      // 关闭弹窗、清空勾选；自动展开右侧面板（问题2：转移后即时可见新条目）
       setShowTransferModal(false);
       setSelectedMsgIds(new Set());
       setSelectMode(false);
+      setShowKnowledgePanel(true);
       setTransferTitle(''); setTransferCategory(''); setTransferKeywords('');
     } catch (e) {
       setToast('转移失败: ' + (e as Error).message);
@@ -1148,6 +1179,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       setSending(false);
       activeStreamSidRef.current = null; // checkpoint-059：流结束，清除活流标记
       setReconnectNotice(null);
+      // TS-121（问题3）：user 消息落库后把 local_ 临时 id 换成 DB 数字 id，勾选模式即刻可用
+      if (streamSid) alignLocalIdsWithDb(streamSid);
     }
   }
 
@@ -1174,22 +1207,24 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden' }}>
       {/* Top bar (§8.6) */}
       <div style={{ height:48, padding:'0 16px', borderBottom:`1px solid ${colors.borderSubtle}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
-        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',minWidth:0}}>
-          <div style={{display:'flex',alignItems:'center',gap:6}}>
+        {/* TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容 */}
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'nowrap',minWidth:0,overflowX:'auto',overflowY:'hidden'}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:1,minWidth:0}}>
             <Icon name="bot" size={16} style={{color:colors.textPrimary}} />
-            <span style={{fontSize:14,fontWeight:600,color:colors.textPrimary,whiteSpace:'nowrap'}}>{agentInfo?.name || agentId.slice(0,8)}...</span>
+            <span style={{fontSize:14,fontWeight:600,color:colors.textPrimary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{agentInfo?.name || agentId.slice(0,8)}...</span>
           </div>
           <select
             value={currentSessionId || ''}
             onChange={e => handleSwitchSession(e.target.value)}
-            style={{...selectStyle, maxWidth:260}}
+            style={{...selectStyle, maxWidth:200, flexShrink:1, minWidth:90}}
           >
             {sessions.length === 0 && <option value="">无会话</option>}
             {sessions.map(s => (
               <option key={s.id} value={s.id}>{s.title} ({s.message_count}条)</option>
             ))}
           </select>
-          {/* 图标按钮组 */}
+          {/* 图标按钮组（TS-121：整体不可压缩，宽度不足时顶栏横向滚动而非换行） */}
+          <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
           {/* TS-115（3.26）：会话列表刷新按钮 */}
           <button className="ui-btn ui-btn-ghost" onClick={handleRefreshSessions} title="刷新会话列表" disabled={refreshing}
             style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
@@ -1236,6 +1271,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               </button>
             </>
           )}
+          </div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
           <span style={{fontFamily:fonts.mono,fontSize:12,color:colors.textTertiary}}>{modelList.find(m=>m.name===modelUsed)?.name || modelUsed}</span>
@@ -1337,7 +1373,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                       border: transferScope===s ? `1px solid ${colors.accentBorder}` : `1px solid ${colors.borderStrong}`,
                       background: transferScope===s ? colors.accentBg : colors.bgCard,
                       color: transferScope===s ? colors.accentText : colors.textSecondary }}>
-                    {s === 'project' ? '本项目（项目文件夹/知识库/）' : '全局（所有项目可用）'}
+                    {s === 'project' ? '本项目（项目文件夹/知识库）' : '全局（所有项目可用）'}
                   </button>
                 ))}
               </div>
@@ -1397,7 +1433,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             <div key={msg.id || i} style={{ marginBottom:12, display:'flex', flexDirection:'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
               {/* 角色标签行 */}
               <div style={{fontSize:11,color:colors.textTertiary,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
-                {/* TS-120：勾选模式下显示复选框（系统消息不可勾选） */}
+                {/* TS-120：勾选模式下显示复选框（系统消息不可勾选）。TS-121：流结束后
+                    alignLocalIdsWithDb 已把 local_ 临时 id 换成 DB 数字 id，勾选即刻可用 */}
                 {selectMode && !isSystem && typeof msg.id === 'number' && (
                   <input type="checkbox" checked={selectedMsgIds.has(msg.id)}
                     onChange={() => toggleMessageSelect(msg.id)}
