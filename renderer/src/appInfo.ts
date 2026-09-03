@@ -4,7 +4,7 @@
  */
 export const APP_INFO = {
   name: 'VetarAI',
-  version: '0.3.1',
+  version: '0.4.0',
   taglineCn: '一款零生态基础的Agent工具',
   taglineEn: 'An ecosystem-agnostic Agent tool.',
 };

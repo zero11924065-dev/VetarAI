@@ -40,10 +40,11 @@ Authorizer = Callable[..., Any]  # async (tool_name, target_path, action) -> boo
 
 
 # ---------- 工具 spec（Ollama OpenAI 风格 tools 参数） ----------
-def tools_spec(with_delegation: bool = True) -> list[dict[str, Any]]:
+def tools_spec(with_delegation: bool = True, with_knowledge: bool = False) -> list[dict[str, Any]]:
     """工具规格列表。with_delegation=False 时剔除 delegate_task（子会话防递归委派）。
     read_skill 两态均含；单个技能的启用/禁用为逐项状态（技能清单只列启用项，
-    read_skill 路由对禁用项返回"已禁用"提示，见 checkpoint-047）。"""
+    read_skill 路由对禁用项返回"已禁用"提示，见 checkpoint-047）。
+    TS-120 阶段二：with_knowledge=True 时附加 search_knowledge（知识仓库主动检索，拉模式）。"""
     spec = [
         {
             "type": "function",
@@ -211,6 +212,34 @@ def tools_spec(with_delegation: bool = True) -> list[dict[str, Any]]:
                         },
                     },
                     "required": ["target", "task", "expect"],
+                },
+            },
+        })
+    if with_knowledge:
+        spec.append({
+            # TS-120 阶段二：知识仓库主动检索（拉模式）。仅当用户明确要求检索
+            # 或任务必须引用历史知识时才调用；检索结果作为工具返回，本轮用完即弃，
+            # 不写入会话上下文（读完即忘），不自动注入。
+            "type": "function",
+            "function": {
+                "name": "search_knowledge",
+                "description": "检索本地知识仓库（拉模式）。仅当用户明确要求你检索知识库，"
+                               "或当前任务必须引用此前沉淀的知识/对话时才调用。"
+                               "支持关键词与语义（理解近义/换述）混合检索。"
+                               "检索结果仅本轮可见，不会持久写入对话上下文。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "检索词或自然语言描述（支持换述）"},
+                        "scope": {"type": "string",
+                                  "description": "检索范围：project=仅本项目 / global=仅全局 / 留空=两者",
+                                  "enum": ["project", "global", "all"]},
+                        "mode": {"type": "string",
+                                 "description": "检索模式：hybrid=关键词+语义融合(默认) / keyword=仅关键词 / semantic=仅语义",
+                                 "enum": ["hybrid", "keyword", "semantic"]},
+                        "limit": {"type": "integer", "description": "返回条数上限，默认 5", "default": 5},
+                    },
+                    "required": ["query"],
                 },
             },
         })
@@ -399,12 +428,15 @@ async def run_tool_loop(
     delegation_ctx: dict | None = None,
     first_round_images: list[str] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    knowledge_ctx: dict | None = None,
 ) -> AsyncIterator[dict]:
     """tool-calling 循环。yield 事件 dict（与 SSE event 一一对应）：
       token / tool_call / tool_result / state / done / error
     熔断双保险：轮次上限 + 连续 CONSECUTIVE_FAIL_LIMIT 轮工具全部失败。
     delegation_ctx（TS-107 M3-1）：主会话传 {"project_id","agent_id","session_id","connector"}，
     此时 delegate_task 路由到委派执行器；None 时不允许委派（子会话双保险）。
+    knowledge_ctx（TS-120 阶段二）：{"project_id": ...}，启用 search_knowledge 路由；
+    None 时该工具调用直接报错（规格层本就不附加）。
     cancel_check（TS-114 3.25）：回调为真时，本轮开始前（未发起模型调用）yield cancelled 事件并返回。
     """
     from sidecar.ollama.connector import get_ollama_connector
@@ -574,6 +606,43 @@ async def run_tool_loop(
                               "description": _sk.get("description", ""),
                               "content": _sk.get("content", "")}
 
+            # ---- TS-120 阶段二：search_knowledge 路由（拉模式知识检索；读完即忘）----
+            # 检索结果作为工具返回只活在本次请求的 msgs 里；落库仅最终回复文本，
+            # 因此检索内容不会进入下一轮上下文——"读完即忘"由架构天然保证。
+            if tc["name"] == "search_knowledge":
+                _q = str((tc["args"] or {}).get("query") or "").strip()
+                if not _q:
+                    result = {"ok": False, "error": "search_knowledge 需要 query 参数（检索词）"}
+                elif knowledge_ctx is None:
+                    result = {"ok": False, "error": "当前会话未启用知识仓库检索"}
+                else:
+                    _scope = str((tc["args"] or {}).get("scope") or "all").strip()
+                    _mode = str((tc["args"] or {}).get("mode") or "hybrid").strip()
+                    try:
+                        _limit = max(1, min(int((tc["args"] or {}).get("limit") or 5), 20))
+                    except (TypeError, ValueError):
+                        _limit = 5
+                    try:
+                        from sidecar.knowledge import warehouse as _wh
+                        _wh.prune_missing()  # 外部删除对账
+                        _pid_k = knowledge_ctx.get("project_id") or ""
+                        if _scope == "project":
+                            hits = _wh.hybrid_search(_q, "project", _pid_k, _limit, mode=_mode)
+                        elif _scope == "global":
+                            hits = _wh.hybrid_search(_q, "global", None, _limit, mode=_mode)
+                        else:  # all：两作用域合并取分高者
+                            _h1 = _wh.hybrid_search(_q, "project", _pid_k, _limit, mode=_mode)
+                            _h2 = _wh.hybrid_search(_q, "global", None, _limit, mode=_mode)
+                            hits = sorted(_h1 + _h2, key=lambda e: -float(e.get("score") or 0))[:_limit]
+                        _items = [{"title": h.get("title"), "scope": h.get("scope"),
+                                   "score": h.get("score"), "body": (h.get("body") or "")[:2000]}
+                                  for h in hits]
+                        result = {"ok": True, "_kind": "knowledge", "count": len(_items),
+                                  "items": _items,
+                                  "note": "检索结果仅本轮可见，不会写入对话上下文。"}
+                    except Exception as e:
+                        result = {"ok": False, "error": f"知识检索失败：{e}"}
+
             # ---- TS-107 M3-1：delegate_task 路由（主-子委派，决策 8）----
             # 不走 registry.execute：委派是"再起一个隔离的子会话 loop"。
             # delegation_ctx 为 None（子会话/旧端点）→ 双保险拒绝（工具规格本已剔除）。
@@ -662,7 +731,8 @@ async def run_tool_loop(
             # authorizer 仅透传给 registry 层，由 registry 自行判定：
             # 仅"敏感系统位置的删除/覆盖"才请求用户确认，其余操作默认放行。
             # TS-107/TS-110：delegate_task 与 read_skill 已在上方路由，跳过通用执行。
-            if tc["name"] not in ("delegate_task", "read_skill"):
+            # TS-120 阶段二：search_knowledge 同理（拉模式知识检索路由）。
+            if tc["name"] not in ("delegate_task", "read_skill", "search_knowledge"):
                 result = await _run_tool(tc["name"], tc["args"], sandbox_root, authorizer)
             ok = bool(result.get("ok"))
             if ok:

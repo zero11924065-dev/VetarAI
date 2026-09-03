@@ -26,6 +26,8 @@ export interface WarehouseEntry {
   id: string; title: string; scope: string; project_id?: string;
   category?: string; keywords?: string[]; file_path?: string; created_at?: string;
   body?: string;
+  /** 阶段二：混合/语义检索返回的相关度得分 */
+  score?: number;
 }
 
 export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
@@ -43,6 +45,8 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
   const [results, setResults] = useState<WarehouseEntry[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [searching, setSearching] = useState(false);
+  // TS-120 阶段二：检索模式——混合（默认，两路融合）/ 关键词（FTS5 精确）/ 语义（bge-m3 向量）
+  const [searchMode, setSearchMode] = useState<'hybrid' | 'keyword' | 'semantic'>('hybrid');
 
   const doSearch = useCallback(async () => {
     setSearching(true);
@@ -51,7 +55,7 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
       params.set('scope', scope);
       if (scope === 'project') params.set('project_id', projectId);
       const url = query.trim()
-        ? `${API}/knowledge/search?q=${encodeURIComponent(query.trim())}&${params}`
+        ? `${API}/knowledge/search?q=${encodeURIComponent(query.trim())}&mode=${searchMode}&${params}`
         : `${API}/knowledge/entries?${params}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -63,7 +67,7 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
     } finally {
       setSearching(false);
     }
-  }, [query, scope, projectId]);
+  }, [query, scope, projectId, searchMode]);
 
   // TS-121（问题2 + 查虫A）：挂载/切换作用域时自动载入该作用域全部条目——
   // 转移入库后自动展开即见新条目，外部增删（经后端对账）也即时反映。
@@ -139,15 +143,33 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
       </div>
 
       {/* 搜索框 */}
-      <div style={{ padding: '8px 12px', display: 'flex', gap: 6 }}>
+      <div style={{ padding: '8px 12px 4px', display: 'flex', gap: 6 }}>
         <input value={query} onChange={e => setQuery(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') doSearch(); }}
-          placeholder="搜索关键词（留空=列出全部）"
+          placeholder="搜索（关键词/换述，留空=列出全部）"
           style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
         <button onClick={doSearch} disabled={searching} title="搜索"
           style={{ width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: colors.accent, color: colors.onAccent, borderRadius: radius.s, cursor: searching ? 'wait' : 'pointer', flexShrink: 0 }}>
           {searching ? <Spinner size={14} /> : <Icon name="sparkle" size={14} />}
         </button>
+      </div>
+
+      {/* 检索模式切换（阶段二：混合/关键词/语义） */}
+      <div style={{ padding: '0 12px 6px', display: 'flex', gap: 6 }}>
+        {([['hybrid', '混合'], ['keyword', '关键词'], ['semantic', '语义']] as const).map(([m, label]) => (
+          <button key={m} onClick={() => setSearchMode(m)}
+            title={m === 'hybrid' ? '关键词+语义两路融合（默认，最全）'
+              : m === 'keyword' ? '精确匹配字词（FTS5 全文）'
+              : '理解语义找近义内容（bge-m3 本地模型）'}
+            style={{
+              flex: 1, padding: '3px 0', fontSize: 11, borderRadius: radius.s, cursor: 'pointer',
+              border: searchMode === m ? `1px solid ${colors.accentBorder}` : `1px solid ${colors.borderSubtle}`,
+              background: searchMode === m ? colors.accentBg : colors.bgCard,
+              color: searchMode === m ? colors.accentText : colors.textTertiary,
+            }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* 结果列表 */}
@@ -164,7 +186,15 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
               <input type="checkbox" checked={checked.has(e.id)} onChange={() => toggleCheck(e.id)}
                 style={{ accentColor: colors.accent, marginTop: 2, cursor: 'pointer' }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: colors.textPrimary, wordBreak: 'break-word' }}>{e.title}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: colors.textPrimary, wordBreak: 'break-word' }}>
+                  {e.title}
+                  {/* 阶段二：相关度得分（混合/语义模式返回） */}
+                  {typeof (e as any).score === 'number' && (
+                    <span style={{ fontSize: 10, color: colors.textTertiary, marginLeft: 6, fontWeight: 400 }}>
+                      相关 {(e as any).score >= 0.01 ? Math.round((e as any).score * 100) + '%' : (e as any).score.toFixed(3)}
+                    </span>
+                  )}
+                </div>
                 {e.category && <div style={{ fontSize: 10, color: colors.textTertiary, marginTop: 2 }}>分类：{e.category}</div>}
                 {e.created_at && <div style={{ fontSize: 10, color: colors.textTertiary, marginTop: 2 }}>{e.created_at}</div>}
               </div>

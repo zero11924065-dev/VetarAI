@@ -25,6 +25,8 @@ export function WarehouseManager() {
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // TS-120 阶段二：嵌入模型状态（可用性 + 向量覆盖率）
+  const [embedStatus, setEmbedStatus] = useState<{ available: boolean; entries_total: number; entries_embedded: number } | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true); setError(null);
@@ -38,6 +40,11 @@ export function WarehouseManager() {
     } finally {
       setLoading(false);
     }
+    // 嵌入状态独立拉取，失败不影响主面板
+    try {
+      const r2 = await fetch(`${API}/knowledge/embedding-status`);
+      if (r2.ok) setEmbedStatus(await r2.json());
+    } catch { /* 静默 */ }
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -90,6 +97,21 @@ export function WarehouseManager() {
         知识仓库（拉模式）：从会话转移进来的对话/知识，保存为 .md 文件永久存储；只有你在会话框右侧面板显式搜索/勾选时才读取，
         永不自动注入模型上下文。与「知识库」（自动注入）是不同的东西。项目知识存于项目文件夹的"知识库"目录，全局知识存于应用数据目录。在 Finder 删除 .md 文件后，索引会在下次读取时自动对账清除。
       </div>
+      {/* TS-120 阶段二：语义嵌入状态 */}
+      {embedStatus && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 12,
+          background: embedStatus.available ? colors.okBg : colors.bgCard,
+          border: `1px solid ${embedStatus.available ? colors.okBorder : colors.borderDefault}`,
+          borderRadius: radius.s, fontSize: 12, color: embedStatus.available ? colors.okText : colors.textSecondary,
+        }}>
+          <Icon name={embedStatus.available ? 'check' : 'alert-triangle'} size={14} style={{ flexShrink: 0 }} />
+          <span>
+            语义嵌入（bge-m3 本地）：{embedStatus.available ? '可用' : '不可用（缺少模型文件，检索自动降级为关键词）'}
+            {embedStatus.available && ` · 已向量化 ${embedStatus.entries_embedded}/${embedStatus.entries_total} 条`}
+          </span>
+        </div>
+      )}
       {error && (
         <div style={{ ...calloutStyle('error'), marginBottom: 12 }}>
           <Icon name="alert-triangle" size={16} style={{ flexShrink: 0 }} />

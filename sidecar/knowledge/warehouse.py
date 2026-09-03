@@ -94,6 +94,16 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
             entry_id UNINDEXED, title, keywords, body
         );
+        -- TS-120 阶段二：语义向量（bge-m3 ONNX INT8 三合一模型的 dense + sparse 两路）。
+        -- dense = float32 BLOB（1024 维，已归一化）；sparse = JSON {token: weight}。
+        -- 模型不可用时条目照常存在、向量留空（检索自动降级为纯关键词）。
+        CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+            entry_id TEXT PRIMARY KEY,
+            dense BLOB,
+            sparse TEXT,
+            model TEXT NOT NULL DEFAULT 'bge-m3-onnx-int8',
+            updated_at TEXT NOT NULL
+        );
     """)
 
 
@@ -221,6 +231,8 @@ def add_entry(scope: str, project_id: str | None, title: str, body: str,
         conn.commit()
     finally:
         conn.close()
+    # TS-120 阶段二：语义向量编码（模型不可用静默降级，不阻塞条目创建）
+    _embed_entry(entry_id, entry["title"], body, keywords or [])
     return {**entry, "file_path": str(fpath), "body": body}
 
 
@@ -282,12 +294,13 @@ def list_entries(scope: str | None = None, project_id: str | None = None) -> lis
 
 
 def delete_entry(entry_id: str) -> bool:
-    """删除条目：删 .md 文件 + 索引 + FTS。"""
+    """删除条目：删 .md 文件 + 索引 + FTS + 向量（阶段二）。"""
     entry = get_entry(entry_id)
     conn = _iconn()
     try:
         conn.execute("DELETE FROM knowledge_entries WHERE id = ?", (entry_id,))
         conn.execute("DELETE FROM knowledge_fts WHERE entry_id = ?", (entry_id,))
+        conn.execute("DELETE FROM knowledge_embeddings WHERE entry_id = ?", (entry_id,))
         conn.commit()
     finally:
         conn.close()
@@ -338,6 +351,111 @@ def search_entries(query: str, scope: str | None = None,
     return results
 
 
+# ---------- TS-120 阶段二：语义/混合检索 ----------
+def _scope_entry_ids(scope: str | None, project_id: str | None) -> set[str] | None:
+    """作用域过滤的条目 id 集合；无过滤返回 None（不过滤）。"""
+    if not scope:
+        return None
+    conn = _iconn()
+    try:
+        if project_id:
+            rows = conn.execute(
+                "SELECT id FROM knowledge_entries WHERE scope=? AND project_id=?",
+                (scope, project_id)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id FROM knowledge_entries WHERE scope=?", (scope,)).fetchall()
+    finally:
+        conn.close()
+    return {r[0] for r in rows}
+
+
+def semantic_search(query: str, scope: str | None = None,
+                    project_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+    """语义检索（bge-m3 稠密余弦 + 稀疏点积加权融合）。
+
+    模型/向量不可用 → 抛 EmbedUnavailableError 之外的情况返回空列表，
+    由上层决定降级。评分 = 0.7*余弦 + 0.3*稀疏点积（稀疏权重和通常远小于 1，
+    自然被余弦主导，稀疏只做同义近义的补强）。
+    """
+    if not query or not query.strip():
+        return []
+    from sidecar.knowledge import embedder
+    if not embedder.model_available():
+        return []
+    try:
+        q = embedder.encode_one(query.strip(), with_query_instruction=True)
+    except Exception:
+        return []
+    allowed = _scope_entry_ids(scope, project_id)
+    conn = _iconn()
+    try:
+        rows = conn.execute("SELECT entry_id, dense, sparse FROM knowledge_embeddings").fetchall()
+    finally:
+        conn.close()
+    scored: list[tuple[float, str]] = []
+    for eid, dense_blob, sparse_json in rows:
+        if allowed is not None and eid not in allowed:
+            continue
+        if not dense_blob:
+            continue
+        d_dense = embedder.blob_to_dense(dense_blob)
+        cos = embedder.cosine(q["dense"], d_dense)
+        try:
+            d_sparse = json.loads(sparse_json) if sparse_json else {}
+        except json.JSONDecodeError:
+            d_sparse = {}
+        sp = embedder.sparse_dot(q["sparse"], d_sparse)
+        score = 0.7 * cos + 0.3 * min(sp, 1.0)
+        scored.append((score, eid))
+    scored.sort(key=lambda x: -x[0])
+    results = []
+    for score, eid in scored[:limit]:
+        e = get_entry(eid)
+        if e:
+            e = {**e, "score": round(float(score), 4)}
+            results.append(e)
+    return results
+
+
+def hybrid_search(query: str, scope: str | None = None,
+                  project_id: str | None = None, limit: int = 20,
+                  mode: str = "hybrid") -> list[dict[str, Any]]:
+    """统一检索入口（阶段二）：
+      mode="keyword"  → 纯关键词（FTS5，兼容旧行为）
+      mode="semantic" → 纯语义（稠密+稀疏）；向量不可用自动降级为关键词
+      mode="hybrid"   → 两路结果 RRF 融合（k=60）；任一路缺失即用另一路
+
+    拉模式语义不变：检索只读取，结果由用户/Agent 显式决定是否使用。
+    """
+    if mode == "keyword":
+        return search_entries(query, scope, project_id, limit)
+    sem = semantic_search(query, scope, project_id, limit=limit * 2)
+    if mode == "semantic":
+        if sem:
+            return sem
+        return search_entries(query, scope, project_id, limit)  # 降级
+    # hybrid：关键词 + 语义 RRF 融合
+    kw = search_entries(query, scope, project_id, limit=limit * 2)
+    if not sem:
+        return kw[:limit]
+    if not kw:
+        return sem[:limit]
+    rrf: dict[str, float] = {}
+    for rank, e in enumerate(kw, start=1):
+        rrf[e["id"]] = rrf.get(e["id"], 0.0) + 1.0 / (60 + rank)
+    for rank, e in enumerate(sem, start=1):
+        rrf[e["id"]] = rrf.get(e["id"], 0.0) + 1.0 / (60 + rank)
+    order = sorted(rrf.items(), key=lambda x: -x[1])[:limit]
+    results = []
+    for eid, score in order:
+        e = get_entry(eid)
+        if e:
+            e = {**e, "score": round(float(score), 6)}
+            results.append(e)
+    return results
+
+
 def prune_missing() -> int:
     """索引与磁盘对账：索引中 .md 文件已不存在（用户在 Finder 外部删除）→
     从索引表与 FTS 中清除。文件是本体（source of truth），索引单向跟随。
@@ -349,19 +467,68 @@ def prune_missing() -> int:
         for rid in missing:
             conn.execute("DELETE FROM knowledge_entries WHERE id = ?", (rid,))
             conn.execute("DELETE FROM knowledge_fts WHERE entry_id = ?", (rid,))
+            conn.execute("DELETE FROM knowledge_embeddings WHERE entry_id = ?", (rid,))  # 阶段二
         conn.commit()
     finally:
         conn.close()
     return len(missing)
 
 
+# ---------- TS-120 阶段二：语义向量挂钩 ----------
+def _embed_entry(entry_id: str, title: str, body: str, keywords: list[str]) -> bool:
+    """给条目编码并写入向量表。模型不可用 → 静默跳过（检索降级为纯关键词）。
+    编码文本 = 标题 + 关键词 + 正文（正文是知识主体，标题补语义锚点）。"""
+    try:
+        from sidecar.knowledge import embedder
+    except ImportError:
+        return False
+    if not embedder.model_available():
+        return False
+    text_parts = [title.strip()] if title and title.strip() else []
+    if keywords:
+        text_parts.append(" ".join(k.strip() for k in keywords if k.strip()))
+    if body and body.strip():
+        text_parts.append(body.strip())
+    text = "\n".join(text_parts)
+    if not text.strip():
+        return False
+    try:
+        vec = embedder.encode_one(text)
+    except Exception:
+        return False  # 编码失败不阻塞条目写入（降级）
+    conn = _iconn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO knowledge_embeddings (entry_id, dense, sparse, model, updated_at) "
+            "VALUES (?,?,?,?,?)",
+            (entry_id, embedder.dense_to_blob(vec["dense"]),
+             json.dumps(vec["sparse"], ensure_ascii=False), "bge-m3-onnx-int8",
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
+def _remove_embedding(entry_id: str) -> None:
+    """删除条目的向量记录（条目删除时同步清理）。"""
+    conn = _iconn()
+    try:
+        conn.execute("DELETE FROM knowledge_embeddings WHERE entry_id = ?", (entry_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def rebuild_index() -> int:
-    """重建索引：扫描作用域目录内全部 .md，清空索引后重新写入。返回条目数。"""
+    """重建索引：扫描作用域目录内全部 .md，清空索引后重新写入。返回条目数。
+    阶段二：同时清空并重建向量表（模型不可用时向量留空，检索降级）。"""
     from sidecar.storage.store import list_projects
     conn = _iconn()
     try:
         conn.execute("DELETE FROM knowledge_entries")
         conn.execute("DELETE FROM knowledge_fts")
+        conn.execute("DELETE FROM knowledge_embeddings")
         conn.commit()
     finally:
         conn.close()
@@ -414,4 +581,6 @@ def _reindex_file(fpath: Path, scope: str, project_id: str) -> bool:
         conn.commit()
     finally:
         conn.close()
+    # 阶段二：重建向量（模型不可用时 _embed_entry 内部静默降级）
+    _embed_entry(entry_id, str(meta.get("title") or ""), body, kw)
     return True

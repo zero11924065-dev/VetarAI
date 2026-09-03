@@ -956,11 +956,15 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         except Exception:
             _ctx_limit = 0
         aiter = run_tool_loop(req.model, msgs,
-                              tools_spec(with_delegation=True) if _tools_enabled else [],
+                              tools_spec(with_delegation=True,
+                                         with_knowledge=bool(req.project_id)) if _tools_enabled else [],
                               sandbox_root,
                               authorizer=_sse_authorizer, max_rounds=_max_rounds,
                               context_limit=_ctx_limit,
                               delegation_ctx=delegation_ctx if _tools_enabled else None,
+                              # TS-120 阶段二：知识仓库主动检索上下文（拉模式）
+                              knowledge_ctx=({"project_id": req.project_id}
+                                             if (_tools_enabled and req.project_id) else None),
                               first_round_images=req.images).__aiter__()
         # M2 打回修复（2026-08-29）：compact_auto 服务端闭环。
         # loop 发 compact_auto 只是"通知该压缩了"，真正压缩在此处执行。
@@ -1815,10 +1819,30 @@ async def api_knowledge_delete(entry_id: str):
 
 @app.get("/api/knowledge/search")
 async def api_knowledge_search(q: str, scope: str | None = None,
-                               project_id: str | None = None, limit: int = 20):
-    """关键词检索（FTS5 + jieba 分词）。读取前对账：外部删除的 .md 不再命中。"""
+                               project_id: str | None = None, limit: int = 20,
+                               mode: str = "hybrid"):
+    """统一检索（阶段二）：mode=keyword 纯关键词 / semantic 纯语义 /
+    hybrid 两路融合（默认）。读取前对账：外部删除的 .md 不再命中。"""
     _wh.prune_missing()
-    return _wh.search_entries(q, scope, project_id, min(max(limit, 1), 100))
+    if mode not in ("keyword", "semantic", "hybrid"):
+        mode = "hybrid"
+    return _wh.hybrid_search(q, scope, project_id, min(max(limit, 1), 100), mode=mode)
+
+
+@app.get("/api/knowledge/embedding-status")
+async def api_knowledge_embedding_status():
+    """阶段二：嵌入模型状态（是否可用、目录位置、条目向量覆盖率）。"""
+    from sidecar.knowledge import embedder as _emb
+    avail = _emb.model_available()
+    conn = _wh._iconn()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM knowledge_entries").fetchone()[0]
+        embedded = conn.execute("SELECT COUNT(*) FROM knowledge_embeddings").fetchone()[0]
+    finally:
+        conn.close()
+    return {"available": avail, "model": "bge-m3-onnx-int8",
+            "model_dir": str(_emb.default_model_dir()),
+            "entries_total": total, "entries_embedded": embedded}
 
 
 class KnowledgeInjectReq(BaseModel):
