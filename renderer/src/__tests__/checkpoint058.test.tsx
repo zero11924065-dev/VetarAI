@@ -149,8 +149,8 @@ describe('checkpoint-058 独立 Agent 面板', () => {
     expect(created[0].system_prompt).toBe('你是严谨的文档审校员');
 
     // 列表项：点铅笔 → 行内编辑角色设定 → 保存 → PUT
-    await waitFor(() => { expect(screen.getByTitle('编辑角色设定')).toBeTruthy(); }, { timeout: 3000 });
-    await act(async () => { screen.getByTitle('编辑角色设定').click(); });
+    await waitFor(() => { expect((document.querySelector('[data-tip="编辑角色设定"]') as HTMLElement)).toBeTruthy(); }, { timeout: 3000 });
+    await act(async () => { (document.querySelector('[data-tip="编辑角色设定"]') as HTMLElement).click(); });
     await act(async () => { setVal(screen.getByPlaceholderText(/留空保存则清除/), '新角色', window.HTMLTextAreaElement.prototype); });
     await act(async () => { screen.getByText('保存').click(); });
     await waitFor(() => { expect(updated.length).toBe(1); }, { timeout: 3000 });

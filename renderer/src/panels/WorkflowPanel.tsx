@@ -264,7 +264,7 @@ export function WorkflowPanel() {
                 </button>
               )}
               {!selected.built_in && (
-                <button style={{ ...btnDangerSoft, height: 26, fontSize: 12 }} onClick={deleteWorkflow} title="删除工作流">
+                <button style={{ ...btnDangerSoft, height: 26, fontSize: 12 }} onClick={deleteWorkflow} data-tip="删除工作流">
                   <Icon name="trash" size={13} />
                 </button>
               )}

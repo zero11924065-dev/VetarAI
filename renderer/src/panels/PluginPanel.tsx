@@ -11,6 +11,8 @@ interface Plugin {
   hooks?: string[];
   path?: string;
   enabled?: boolean;  // checkpoint-047：逐项启用开关
+  note?: string;        // 问题5（0.4.1）：用户备注
+  description?: string; // manifest 自带描述
 }
 
 const API = getApiBase();
@@ -26,6 +28,28 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
   // checkpoint-049：手动触发钩子的运行态与输出（用户 2026-08-30 拍板：手动触发方案）
   const [runningHook, setRunningHook] = useState<string | null>(null); // key = `${plugin}|${hook}`
   const [hookOutputs, setHookOutputs] = useState<Record<string, { ok: boolean; text: string }>>({});
+  // 问题5（0.4.1）：插件备注编辑态（正在编辑的插件名 → 草稿文本）
+  const [editingNote, setEditingNote] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
+
+  // 问题5：保存备注（空串=清除）
+  async function saveNote(name: string) {
+    setError(null);
+    try {
+      const res = await fetch(`${API}/plugins/${encodeURIComponent(name)}/note`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: noteDraft }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+      setPlugins(prev => prev.map(p => p.name === name ? { ...p, note: d.note } : p));
+      setEditingNote(null);
+      setNotice(noteDraft.trim() ? `插件 "${name}" 备注已保存` : `插件 "${name}" 备注已清除`);
+    } catch (e: any) {
+      setError('备注保存失败: ' + e.message);
+    }
+  }
 
   const fetchPlugins = useCallback(async () => {
     setLoading(true);
@@ -158,7 +182,7 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
           <span style={{ ...typo.sectionTitle, color: colors.textPrimary }}>插件管理</span>
         </div>
         {onClose && (
-          <button className="ui-btn ui-btn-ghost" style={btnGhost} onClick={onClose} title="关闭">
+          <button className="ui-btn ui-btn-ghost" style={btnGhost} onClick={onClose} data-tip="关闭">
             <Icon name="x" size={14} />
           </button>
         )}
@@ -252,6 +276,44 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
                       <Icon name="trash" size={14} />
                       卸载
                     </button>
+                  </div>
+
+                  {/* 问题5（0.4.1）：备注区——优先显示用户备注，其次 manifest 描述，
+                      都没有时提供"添加备注"入口，让用户知道这个插件是干什么的 */}
+                  <div style={{ marginTop: 8 }}>
+                    {editingNote === p.name ? (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <input
+                          value={noteDraft}
+                          autoFocus
+                          onChange={e => setNoteDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) saveNote(p.name);
+                            if (e.key === 'Escape') setEditingNote(null);
+                          }}
+                          placeholder="如：给消息加时间戳前缀"
+                          className="ui-input"
+                          style={{ ...input, flex: 1, height: 28, fontSize: 12 }}
+                        />
+                        <button className="ui-btn ui-btn-primary" style={smallBtn(btnPrimary)} onClick={() => saveNote(p.name)}>保存</button>
+                        <button className="ui-btn ui-btn-secondary" style={smallBtn(btnSecondary)} onClick={() => setEditingNote(null)}>取消</button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 12, color: p.note ? colors.textSecondary : colors.textTertiary, flex: 1 }}>
+                          {p.note || p.description || '（无备注——点右侧"备注"补充这个插件是干什么的）'}
+                        </span>
+                        <button
+                          className="ui-btn ui-btn-ghost"
+                          style={{ ...smallBtn(btnGhost), flexShrink: 0 }}
+                          data-tip={p.note ? '修改备注' : '添加备注'}
+                          onClick={() => { setEditingNote(p.name); setNoteDraft(p.note || ''); }}
+                        >
+                          <Icon name="pencil" size={13} />
+                          备注
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {p.hooks && p.hooks.length > 0 ? (

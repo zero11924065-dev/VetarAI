@@ -53,7 +53,7 @@ describe('checkpoint-061 删除选中独立 Agent → onAgentDeleted 回调', ()
     await act(async () => { (screen.getByText('独立 Agent').closest('button') as HTMLElement).click(); });
     await waitFor(() => { expect(screen.getByText('独立助手')).toBeTruthy(); }, { timeout: 3000 });
 
-    await act(async () => { screen.getByTitle('删除独立 Agent').click(); });
+    await act(async () => { (document.querySelector('[data-tip="删除独立 Agent"]') as HTMLElement).click(); });
     await waitFor(() => { expect(deleted.v).toBe(true); }, { timeout: 3000 });
     await waitFor(() => { expect(onAgentDeleted).toHaveBeenCalledWith('ag1'); }, { timeout: 3000 });
 

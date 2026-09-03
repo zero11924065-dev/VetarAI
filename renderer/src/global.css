@@ -60,3 +60,20 @@ input[type="checkbox"], input[type="radio"] { accent-color: #0EA5E9; }
 
 /* 打字机光标（§5） */
 .ui-caret { display: inline-block; width: 2px; background: #38BDF8; animation: ui-blink 1s step-end infinite; }
+
+/* 问题2修复（0.3.2实测）：即时悬停提示。原生 title 有约 1 秒系统级延迟，
+   新用户悬停无反应会以为没有提示。data-tip 属性 0.12s 即现，纯 CSS 无 JS。
+   长说明文本（>15字）继续用原生 title，不转换。 */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute; left: 50%; top: calc(100% + 6px);
+  transform: translateX(-50%) scale(0.96);
+  padding: 3px 8px; border-radius: 4px;
+  background: rgba(26, 26, 30, 0.92); color: #fff;
+  font-size: 11px; line-height: 1.5; white-space: nowrap;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.12s ease 0.08s, transform 0.12s ease 0.08s;
+  z-index: 1000;
+}
+[data-tip]:hover::after { opacity: 1; transform: translateX(-50%) scale(1); }

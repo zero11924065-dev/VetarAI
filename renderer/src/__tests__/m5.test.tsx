@@ -41,7 +41,7 @@ describe('M5 项目改名入口（ProjectPanel）', () => {
     await waitFor(() => { expect(screen.getByText(/旧名字/)).toBeTruthy(); }, { timeout: 3000 });
 
     // 点 ✏️ → 行内编辑框出现（值为旧名字）
-    await act(async () => { fireEvent.click(screen.getByTitle('重命名')); });
+    await act(async () => { fireEvent.click((document.querySelector('[data-tip="重命名"]') as HTMLElement)); });
     const input = document.querySelector('input[autoFocus]') as HTMLInputElement
       || screen.getByDisplayValue('旧名字');
     expect(input).toBeTruthy();
@@ -69,8 +69,8 @@ describe('M5 项目改名入口（ProjectPanel）', () => {
     }) as any);
 
     const { unmount } = render(<ProjectPanel onSelect={() => {}} />);
-    await waitFor(() => { expect(screen.getByTitle('重命名')).toBeTruthy(); }, { timeout: 3000 });
-    await act(async () => { fireEvent.click(screen.getByTitle('重命名')); });
+    await waitFor(() => { expect((document.querySelector('[data-tip="重命名"]') as HTMLElement)).toBeTruthy(); }, { timeout: 3000 });
+    await act(async () => { fireEvent.click((document.querySelector('[data-tip="重命名"]') as HTMLElement)); });
     const input = screen.getByDisplayValue('名字');
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
@@ -128,7 +128,7 @@ describe('M5 模型降级卡片（ChatPanel 错误块）', () => {
       setter.call(inputEl, '你好');
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await act(async () => { (document.querySelector('button[title="发送"]') as HTMLElement).click(); });
+    await act(async () => { (document.querySelector('button[data-tip="发送"]') as HTMLElement).click(); });
 
     await waitFor(() => {
       // 降级卡片出现：模型切换下拉 + 重新拉取按钮
@@ -185,7 +185,7 @@ describe('M5 长加载提示（H19：思考事件不得清除计时器）', () =
     // 切假计时器：点发送 → 思考事件到达（不清计时器）→ 推进 9s → 提示出现
     vi.useFakeTimers();
     try {
-      await act(async () => { (document.querySelector('button[title="发送"]') as HTMLElement).click(); });
+      await act(async () => { (document.querySelector('button[data-tip="发送"]') as HTMLElement).click(); });
       // 冲刷微任务：fetch 解析 + 首个 thinking 事件处理
       for (let i = 0; i < 30; i++) {
         await act(async () => { await Promise.resolve(); });

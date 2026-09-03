@@ -224,7 +224,7 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
       {/* ── 顶栏 (§8.13)：议题 + 状态 + 主持人 + 参与者 ── */}
       <div style={{ height: 48, padding: '0 16px', borderBottom: `1px solid ${colors.borderSubtle}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-          <button className="ui-btn ui-btn-ghost" onClick={onExit} title="返回对话"
+          <button className="ui-btn ui-btn-ghost" onClick={onExit} data-tip="返回对话"
             style={{ ...btnGhost, height: 28, gap: 4 }}>
             <Icon name="arrow-left" size={14} /> 返回
           </button>

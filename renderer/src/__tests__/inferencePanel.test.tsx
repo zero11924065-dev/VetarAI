@@ -143,7 +143,7 @@ describe('TS-112 M6 推理面板', () => {
     await waitFor(() => { expect(screen.getByText(/测试项目/)).toBeTruthy(); }, { timeout: 3000 });
 
     // 点击删除按钮 → 自定义弹窗出现
-    await act(async () => { screen.getByTitle('删除').click(); });
+    await act(async () => { (document.querySelector('[data-tip="删除"]') as HTMLElement).click(); });
     await waitFor(() => {
       expect(document.body.textContent).toContain('工作目录中的文件不受影响');
     }, { timeout: 3000 });
@@ -153,7 +153,7 @@ describe('TS-112 M6 推理面板', () => {
     expect(deleteCalls.length).toBe(0);
 
     // 再次点击删除 → 点确认（"删除"按钮）→ 发 DELETE /projects/p1
-    await act(async () => { screen.getByTitle('删除').click(); });
+    await act(async () => { (document.querySelector('[data-tip="删除"]') as HTMLElement).click(); });
     await waitFor(() => {
       expect(document.querySelector('[role="dialog"]')).toBeTruthy();
     }, { timeout: 3000 });

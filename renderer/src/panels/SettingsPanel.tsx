@@ -206,7 +206,7 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
           <button
             className="ui-btn ui-btn-ghost"
             onClick={onClose}
-            title="关闭"
+            data-tip="关闭"
             style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: 4 }}
           >
             <Icon name="x" size={16} />
@@ -264,9 +264,8 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
           <div style={sectionCard}>
             <div style={sectionTitle}>基础</div>
 
-            <label style={formLabel}>Ollama 地址</label>
-            <input className="ui-input" style={inpStyle} value={cfg.ollama_base_url}
-              onChange={e => setCfg({ ...cfg, ollama_base_url: e.target.value })} />
+            {/* 问题6修复（0.3.2实测）：Ollama 地址已移至"推理后端"面板，
+                与后端选择放在一起，此处不再重复展示。 */}
 
             <label style={formLabel}>默认模型</label>
             {modelOptions.length > 0 ? (
@@ -342,14 +341,24 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
           <div style={sectionCard}>
             <div style={sectionTitle}>网络</div>
 
+            {/* 问题8（0.3.2实测）：代理引导——无代理/有代理两种情况分别说清楚 */}
+            <div style={{ fontSize: 12, color: colors.textTertiary, lineHeight: 1.7, marginBottom: 10,
+              background: colors.bgSidebar, padding: '8px 10px', borderRadius: radius.s }}>
+              <b style={{ color: colors.textSecondary }}>怎么填？</b><br />
+              · 电脑没装代理软件：什么都不用改——保持"自动探测"，应用会境内直连、境外失败自动暂停。<br />
+              · 有代理软件（Clash / 小飞机等）：境外访问模式选"走代理"，端口填代理软件的本地监听端口
+              （Clash 默认 HTTP 端口 7890；在代理软件的"端口/设置"里查看）。应用只在需要访问境外时走代理，
+              境内请求始终直连。
+            </div>
+
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={formLabel}>HTTP 代理端口</label>
+                <label style={formLabel}>HTTP 代理端口（仅"走代理"模式生效）</label>
                 <input className="ui-input" style={inpStyle} type="number" value={cfg.proxy_http_port}
                   onChange={e => setCfg({ ...cfg, proxy_http_port: Number(e.target.value) })} />
               </div>
               <div style={{ flex: 1 }}>
-                <label style={formLabel}>SOCKS 代理端口</label>
+                <label style={formLabel}>SOCKS 代理端口（可选）</label>
                 <input className="ui-input" style={inpStyle} type="number" value={cfg.proxy_socks_port}
                   onChange={e => setCfg({ ...cfg, proxy_socks_port: Number(e.target.value) })} />
               </div>
@@ -447,9 +456,12 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
               智能压缩时，被摘要的消息会以 MD 文件先存到这里
             </div>
 
+            {/* 问题3修复（0.3.2实测）：勾选即保存（单键）——此前只改内存状态，
+                需点"保存"按钮才落盘，勾选后切页就丢失。单键保存不会连带写入
+                其他字段的未保存草稿（与本区 model_parallel 等开关同一风格）。 */}
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 8 }}>
               <input type="checkbox" checked={cfg.allow_auto_compact || false}
-                onChange={e => setCfg({ ...cfg, allow_auto_compact: e.target.checked })} />
+                onChange={e => save({ allow_auto_compact: e.target.checked })} />
               <span style={{ fontSize: 12, color: colors.textPrimary }}>允许自动压缩</span>
             </label>
             <div style={hintStyle}>
@@ -485,7 +497,7 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
 
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
               <input type="checkbox" checked={cfg.auto_create_sub_agents !== false}
-                onChange={e => setCfg({ ...cfg, auto_create_sub_agents: e.target.checked })} />
+                onChange={e => save({ auto_create_sub_agents: e.target.checked })} />
               <span style={{ fontSize: 12, color: colors.textPrimary }}>允许主 Agent 自动新建子 Agent</span>
             </label>
             <div style={hintStyle}>
@@ -517,9 +529,10 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
               圆桌导出 / 交卷报告 / 会话导出统一保存到该目录。留空则存到各项目自己的工作目录。知识库与记忆始终跟项目走，不受此配置影响。
             </div>
 
+            {/* 问题4修复（0.3.2实测）：同问题3，勾选即保存（单键） */}
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 10 }}>
               <input type="checkbox" checked={cfg.vision_parse_attachments === true}
-                onChange={e => setCfg({ ...cfg, vision_parse_attachments: e.target.checked })} />
+                onChange={e => save({ vision_parse_attachments: e.target.checked })} />
               <span style={{ fontSize: 12, color: colors.textPrimary }}>圆桌图片附件交给视觉模型识别</span>
             </label>
             <div style={hintStyle}>

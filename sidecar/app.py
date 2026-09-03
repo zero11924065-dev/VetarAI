@@ -700,6 +700,20 @@ async def api_plugin_toggle(name: str):
         raise HTTPException(status_code=400, detail="切换失败（插件不存在）")
     return {"ok": True, "enabled": new_state}
 
+class PluginNoteReq(BaseModel):
+    note: str = ""
+
+@app.get("/api/plugins/{name}/note")
+async def api_plugin_note_get(name: str):
+    """问题5（0.4.1）：读取插件备注。"""
+    return {"name": name, "note": loader.get_note(name)}
+
+@app.put("/api/plugins/{name}/note")
+async def api_plugin_note_set(name: str, req: PluginNoteReq):
+    """问题5（0.4.1）：设置插件备注（空串=清除）。"""
+    note = loader.set_note(name, req.note)
+    return {"ok": True, "name": name, "note": note}
+
 @app.post("/api/plugins/{name}/hooks/{hook_name}")
 async def api_plugin_hook(name: str, hook_name: str, req: PluginHookReq | None = None):
     # checkpoint-047：逐项开关——被禁用的插件拒绝执行

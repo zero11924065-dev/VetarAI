@@ -67,6 +67,43 @@ class PluginLoader:
         self._write_state(state)
         return state[plugin_name]
 
+    # ---- 插件备注（问题5，0.4.1）----
+    # 独立文件存储（不动 plugins_state.json 结构），{插件名: 备注文本}。
+    # 卸载时同步清理；备注仅用户可见说明，不参与任何执行逻辑。
+
+    @property
+    def _notes_path(self) -> Path:
+        return PLUGINS_ROOT / "plugins_notes.json"
+
+    def _read_notes(self) -> dict[str, str]:
+        try:
+            if self._notes_path.exists():
+                data = json.loads(self._notes_path.read_text(encoding="utf-8"))
+                return {k: str(v) for k, v in data.items()}
+        except Exception:
+            pass
+        return {}
+
+    def _write_notes(self, notes: dict[str, str]) -> None:
+        import os as _os2
+        tmp = self._notes_path.with_name(self._notes_path.name + ".tmp")
+        tmp.write_text(json.dumps(notes, ensure_ascii=False, indent=2), encoding="utf-8")
+        _os2.replace(str(tmp), str(self._notes_path))
+
+    def get_note(self, plugin_name: str) -> str:
+        return self._read_notes().get(plugin_name, "")
+
+    def set_note(self, plugin_name: str, note: str) -> str:
+        """设置插件备注（空串=清除），返回最终备注。"""
+        notes = self._read_notes()
+        note = (note or "").strip()
+        if note:
+            notes[plugin_name] = note
+        else:
+            notes.pop(plugin_name, None)
+        self._write_notes(notes)
+        return notes.get(plugin_name, "")
+
     # ---- Manifest ----
 
     def _egress(self, repo_url: str) -> list[str]:
@@ -193,6 +230,10 @@ class PluginLoader:
         # checkpoint-047：附逐项启用状态（默认启用）
         for item in results:
             item["enabled"] = state.get(str(item.get("name", "")), True)
+        # 问题5（0.4.1）：附用户备注（无备注为空串）
+        notes = self._read_notes()
+        for item in results:
+            item["note"] = notes.get(str(item.get("name", "")), "")
         return results
 
     def uninstall(self, plugin_name: str) -> bool:
@@ -207,6 +248,14 @@ class PluginLoader:
             state.pop(plugin_name, None)
             try:
                 self._write_state(state)
+            except Exception:
+                pass
+        # 问题5（0.4.1）：卸载时同步清理备注
+        notes = self._read_notes()
+        if plugin_name in notes:
+            notes.pop(plugin_name, None)
+            try:
+                self._write_notes(notes)
             except Exception:
                 pass
         return True

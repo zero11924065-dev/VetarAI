@@ -85,7 +85,7 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await act(async () => {
-      (document.querySelector('button[title="发送"]') as HTMLElement).click();
+      (document.querySelector('button[data-tip="发送"]') as HTMLElement).click();
     });
 
     // 折叠条：tool_call 后出现"正在调用 list_dir"
@@ -111,7 +111,7 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
     // 停止按钮：生成中应出现；生成结束后消失（这里验证按钮逻辑存在且可点——用发送中状态）
     // 由于 mock 流瞬间结束，直接验证 handleStop 不抛：找停止按钮或在 sending 时存在
     // 这里断言发送按钮（非发送中态）存在，说明 UI 渲染正常
-    expect(document.querySelector('button[title="发送"]')).toBeTruthy();
+    expect(document.querySelector('button[data-tip="发送"]')).toBeTruthy();
     // 验收修复：上传按钮必须存在（checkpoint-003 重写时丢失，防回归）
     expect(document.querySelector('button[title*="上传"]')).toBeTruthy();
 
@@ -170,7 +170,7 @@ describe('B02/B05/B07（TS-101）串话防护 + 缓存同步', () => {
       setter.call(inputEl, '触发流');
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await act(async () => { (document.querySelector('button[title="发送"]') as HTMLElement).click(); });
+    await act(async () => { (document.querySelector('button[data-tip="发送"]') as HTMLElement).click(); });
 
     // 第一个 token 应已进入 s1 的流式气泡
     await waitFor(() => expect(screen.getByText(/旧流文字/)).toBeTruthy(), { timeout: 3000 });

@@ -199,7 +199,7 @@ export function AgentPanel({ projectId, selectedAgentId, onSelectAgent }: {
                   {a.type_ === 'main' ? '主' : '子'}
                 </span>
                 <span style={{ ...typo.body, fontWeight: isSelected ? 500 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
-                {a.system_prompt && <Icon name="file-text" size={11} style={{ color: colors.accentText, flexShrink: 0 }} title="已设角色设定" />}
+                {a.system_prompt && <Icon name="file-text" size={11} style={{ color: colors.accentText, flexShrink: 0 }} data-tip="已设角色设定" />}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                 {a.model_name && (
@@ -220,7 +220,7 @@ export function AgentPanel({ projectId, selectedAgentId, onSelectAgent }: {
                         emit('agent:updated', { agent_id: a.id, model_name: v, project_id: projectId });
                       } catch (err) { console.error('change model failed', err); }
                     }}
-                    title="切换该 Agent 的模型"
+                    data-tip="切换该 Agent 的模型"
                     style={{ ...selectStyle, fontSize: 11, padding: '2px 4px', height: 22, maxWidth: 140 }}>
                     {modelList.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
                   </select>
@@ -228,12 +228,12 @@ export function AgentPanel({ projectId, selectedAgentId, onSelectAgent }: {
                 {/* M1-3 补漏（U3）：编辑角色设定 */}
                 <button className="ui-btn ui-btn-ghost"
                   onClick={e => { e.stopPropagation(); setEditingId(a.id); setEditText(a.system_prompt || ''); }}
-                  style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} title="编辑角色设定">
+                  style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} data-tip="编辑角色设定">
                   <Icon name="pencil" size={14} />
                 </button>
                 <button className="ui-btn ui-btn-ghost ui-ico-danger"
                   onClick={e => { e.stopPropagation(); handleDelete(a.id); }}
-                  style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} title="删除 Agent">
+                  style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} data-tip="删除 Agent">
                   <Icon name="trash" size={14} />
                 </button>
               </div>

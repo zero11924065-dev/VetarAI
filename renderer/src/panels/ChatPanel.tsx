@@ -1265,33 +1265,36 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       {/* Top bar (§8.6) */}
       <div style={{ height:48, padding:'0 16px', borderBottom:`1px solid ${colors.borderSubtle}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
         {/* TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容。
-            问题2修复：去掉 overflowX:'auto'（滚动上下文会让名字与选择器压缩时视觉重叠），
-            改为纯弹性压缩：名字与选择器按剩余空间收缩并显示省略号，按钮组不可压缩 */}
+            0.4.0 实测重叠根治：原生 select 被压缩时文字不裁剪会向左溢出覆盖相邻元素（实测盖住 Agent 名），
+            必须用"容器收缩 + overflow 裁剪"包裹；名字保留最小宽度 + 省略号。 */}
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'nowrap',minWidth:0}}>
-          <div style={{display:'flex',alignItems:'center',gap:6,flex:'0 1 auto',minWidth:40}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:1,minWidth:48}}>
             <Icon name="bot" size={16} style={{color:colors.textPrimary,flexShrink:0}} />
             <span style={{fontSize:14,fontWeight:600,color:colors.textPrimary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{agentInfo?.name || agentId.slice(0,8)}...</span>
           </div>
-          <select
-            value={currentSessionId || ''}
-            onChange={e => handleSwitchSession(e.target.value)}
-            style={{...selectStyle, flex:'0 1 auto', maxWidth:200, minWidth:90}}
-          >
-            {sessions.length === 0 && <option value="">无会话</option>}
-            {sessions.map(s => (
-              <option key={s.id} value={s.id}>{s.title} ({s.message_count}条)</option>
-            ))}
-          </select>
+          {/* select 收缩容器：flex 容器负责压缩，overflow:hidden 裁剪，杜绝文字溢出覆盖 */}
+          <div style={{flex:'0 1 auto',minWidth:0,maxWidth:200,overflow:'hidden'}}>
+            <select
+              value={currentSessionId || ''}
+              onChange={e => handleSwitchSession(e.target.value)}
+              style={{...selectStyle, width:'100%', minWidth:80}}
+            >
+              {sessions.length === 0 && <option value="">无会话</option>}
+              {sessions.map(s => (
+                <option key={s.id} value={s.id}>{s.title} ({s.message_count}条)</option>
+              ))}
+            </select>
+          </div>
           {/* 图标按钮组（TS-121：整体不可压缩，宽度不足时顶栏横向滚动而非换行） */}
           <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
           {/* TS-115（3.26）：会话列表刷新按钮 */}
-          <button className="ui-btn ui-btn-ghost" onClick={handleRefreshSessions} title="刷新会话列表" disabled={refreshing}
+          <button className="ui-btn ui-btn-ghost" onClick={handleRefreshSessions} data-tip="刷新会话列表" disabled={refreshing}
             style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
             {refreshing
               ? <Spinner size={14} />
               : <Icon name="rotate-cw" size={15} style={{color:colors.textSecondary}} />}
           </button>
-          <button className="ui-btn ui-btn-ghost" onClick={handleNewSession} title="新建会话"
+          <button className="ui-btn ui-btn-ghost" onClick={handleNewSession} data-tip="新建会话"
             style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
             <Icon name="plus" size={16} style={{color:colors.textSecondary}} />
           </button>
@@ -1302,29 +1305,29 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:summarizing?'wait':'pointer'}}>
                 {summarizing ? <Spinner size={14} /> : <Icon name="file-text" size={16} style={{color:colors.textSecondary}} />}
               </button>
-              <button className="ui-btn ui-btn-ghost" onClick={handleExportSession} title="导出会话为 Markdown"
+              <button className="ui-btn ui-btn-ghost" onClick={handleExportSession} data-tip="导出会话为 Markdown"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
                 <Icon name="download" size={16} style={{color:colors.textSecondary}} />
               </button>
               {/* TS-120：勾选消息移入知识仓库 */}
               <button className="ui-btn ui-btn-ghost"
                 onClick={() => { setSelectMode(v => !v); setSelectedMsgIds(new Set()); }}
-                title="勾选消息 → 移入知识仓库"
+                data-tip="勾选消息 → 移入知识仓库"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:selectMode?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
                 <Icon name="check" size={16} style={{color:selectMode?colors.accentText:colors.textSecondary}} />
               </button>
               {/* TS-120：知识仓库面板开关（可收起） */}
               <button className="ui-btn ui-btn-ghost"
                 onClick={() => setShowKnowledgePanel(v => !v)}
-                title="知识仓库（检索/注入）"
+                data-tip="知识仓库（检索/注入）"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:showKnowledgePanel?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
                 <Icon name="database" size={16} style={{color:showKnowledgePanel?colors.accentText:colors.textSecondary}} />
               </button>
-              <button className="ui-btn ui-btn-ghost" onClick={() => handleRenameSession(currentSessionId)} title="重命名"
+              <button className="ui-btn ui-btn-ghost" onClick={() => handleRenameSession(currentSessionId)} data-tip="重命名"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
                 <Icon name="pencil" size={16} style={{color:colors.textSecondary}} />
               </button>
-              <button className="ui-btn ui-btn-ghost ui-ico-danger" onClick={() => handleDeleteSession(currentSessionId)} title="删除"
+              <button className="ui-btn ui-btn-ghost ui-ico-danger" onClick={() => handleDeleteSession(currentSessionId)} data-tip="删除"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
                 <Icon name="trash" size={16} style={{color:colors.textSecondary}} />
               </button>
@@ -1618,7 +1621,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         <div ref={messagesEndRef} />
         {/* TS-102 B15：手动上滚后出现的"回到底部"按钮 */}
         {showBackToBottom && (
-          <button onClick={scrollToBottom} title="回到底部"
+          <button onClick={scrollToBottom} data-tip="回到底部"
             style={{position:'sticky', bottom:8, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', justifyContent:'center',
                     width:36, height:36, margin:'8px auto 0', background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:'50%',
                     cursor:'pointer', boxShadow:shadow.s}}>
@@ -1634,7 +1637,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           {pendingItems.filter(p=>p.isImage).map((item, idx) => (
             <div key={idx} style={{ position:'relative' }}>
               <img src={item.dataUri} alt={item.name} style={{maxWidth:80,maxHeight:80,borderRadius:radius.s,border:`1px solid ${colors.borderDefault}`}} />
-              <button onClick={() => removePending(pendingItems.indexOf(item))} title="移除该附件" style={{position:'absolute',top:-6,right:-6,background:colors.bgToast,color:'#fff',border:'none',borderRadius:'50%',width:16,height:16,fontSize:10,cursor:'pointer',lineHeight:'16px',padding:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <button onClick={() => removePending(pendingItems.indexOf(item))} data-tip="移除该附件" style={{position:'absolute',top:-6,right:-6,background:colors.bgToast,color:'#fff',border:'none',borderRadius:'50%',width:16,height:16,fontSize:10,cursor:'pointer',lineHeight:'16px',padding:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
                 <Icon name="x" size={10} style={{color:'#fff'}} />
               </button>
             </div>
@@ -1646,7 +1649,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               {item.parsing && <span style={{color:colors.warn,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Spinner size={12} /> 解析中…</span>}
               {!item.parsing && item.parsedText && <span style={{color:colors.ok,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Icon name="check" size={14} style={{color:colors.ok}} /> 已提取</span>}
               {!item.parsing && item.parseFailed && <span style={{color:colors.textTertiary,fontSize:11}}>（仅文件名）</span>}
-              <button className="ui-ico-danger" title="移除该附件" onClick={() => removePending(pendingItems.indexOf(item))} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
+              <button className="ui-ico-danger" data-tip="移除该附件" onClick={() => removePending(pendingItems.indexOf(item))} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
                 <Icon name="x" size={14} style={{color:colors.textTertiary}} />
               </button>
             </span>
@@ -1675,12 +1678,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           placeholder={pendingItems.length ? '输入文字描述，或直接发送...' : '输入消息（可先上传附件，再输入文字，一起发送）...'}
           style={{padding:'8px 10px',borderRadius:radius.s,border:`1px solid ${colors.borderStrong}`,background:colors.bgCard,color:colors.textPrimary,fontSize:14,flex:1,minHeight:38,maxHeight:120,resize:'none',fontFamily:fonts.base,lineHeight:1.6,boxSizing:'border-box'}} />
         {sending ? (
-          <button onClick={handleStop} title="停止"
+          <button onClick={handleStop} data-tip="停止"
             style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',background:'#1A1A1E',cursor:'pointer',flexShrink:0}}>
             <Icon name="stop" size={12} style={{color:'#FFFFFF'}} />
           </button>
         ) : (
-          <button className="ui-btn ui-btn-primary" onClick={handleSend} title="发送" disabled={inputDisabled || (!input.trim() && pendingItems.length===0)}
+          <button className="ui-btn ui-btn-primary" onClick={handleSend} data-tip="发送" disabled={inputDisabled || (!input.trim() && pendingItems.length===0)}
             style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:(!input.trim() && pendingItems.length===0) ? 0.5 : 1}}>
             <Icon name="send" size={16} style={{color:colors.onAccent}} />
           </button>

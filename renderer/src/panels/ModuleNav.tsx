@@ -59,7 +59,7 @@ export function ModuleNav({ active, onSelect, onOpenSettings, settingsActive }: 
           onClick={onOpenSettings}
           onMouseEnter={() => setHover('settings')}
           onMouseLeave={() => setHover(null)}
-          title="设置"
+          data-tip="设置"
           style={{
             marginTop: 'auto', marginBottom: 10,
             width: 52, height: 52, border: 'none', borderRadius: 8, cursor: 'pointer',

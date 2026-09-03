@@ -221,13 +221,13 @@ export function IndependentAgentsPanel({ selectedAgentId, onSelect, onAgentDelet
                   <span style={{ ...typo.body, fontSize: 13, fontWeight: isSelected ? 500 : 400, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {a.name}
                   </span>
-                  {a.system_prompt && <Icon name="file-text" size={11} style={{ color: colors.accentText, flexShrink: 0 }} title="已设角色设定" />}
+                  {a.system_prompt && <Icon name="file-text" size={11} style={{ color: colors.accentText, flexShrink: 0 }} data-tip="已设角色设定" />}
                   {/* 模型切换（无 model_name 也可选，兜底"默认"项） */}
                   {modelList.length > 0 && (
                     <select value={a.model_name || ''}
                       onClick={e => e.stopPropagation()}
                       onChange={e => { const v = e.target.value; if (v) { e.stopPropagation(); handleSwitchModel(a, v); } }}
-                      title="切换该独立 Agent 的模型"
+                      data-tip="切换该独立 Agent 的模型"
                       style={{ ...selectStyle, fontSize: 11, padding: '2px 4px', height: 22, maxWidth: 120 }}>
                       {!a.model_name && <option value="">默认</option>}
                       {modelList.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
@@ -235,12 +235,12 @@ export function IndependentAgentsPanel({ selectedAgentId, onSelect, onAgentDelet
                   )}
                   <button className="ui-btn ui-btn-ghost"
                     onClick={e => { e.stopPropagation(); setEditingId(a.id); setEditText(a.system_prompt || ''); }}
-                    style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} title="编辑角色设定">
+                    style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} data-tip="编辑角色设定">
                     <Icon name="pencil" size={14} />
                   </button>
                   <button className="ui-btn ui-btn-ghost ui-ico-danger"
                     onClick={e => { e.stopPropagation(); handleDelete(a); }}
-                    style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} title="删除独立 Agent">
+                    style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }} data-tip="删除独立 Agent">
                     <Icon name="trash" size={14} />
                   </button>
                 </div>

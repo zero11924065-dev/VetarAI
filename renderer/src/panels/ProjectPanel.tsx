@@ -335,13 +335,13 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
                       style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }}>
                       {exportingId === p.id ? <Spinner size={14} /> : <Icon name="download" size={14} />}
                     </button>
-                    <button title="重命名"
+                    <button data-tip="重命名"
                       className="ui-btn ui-btn-ghost"
                       onClick={e => { e.stopPropagation(); setRenamingId(p.id); setRenameValue(p.name); }}
                       style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }}>
                       <Icon name="pencil" size={14} />
                     </button>
-                    <button title="删除"
+                    <button data-tip="删除"
                       className="ui-btn ui-btn-ghost ui-ico-danger"
                       onClick={e => { e.stopPropagation(); handleDelete(p.id, p.name); }}
                       style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }}>

@@ -178,8 +178,35 @@ export function InferencePanel() {
           </label>
         </div>
 
+        {/* 问题6修复（0.3.2实测）：Ollama 地址从"基础设置"挪到推理后端面板 */}
+        {isOllama && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 4, marginBottom: 12 }}>
+            <label style={{ fontSize: 12, color: colors.textSecondary }}>Ollama 地址</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input className="ui-input" style={{ ...input, flex: 1 }}
+                value={cfg.ollama_base_url || ''} placeholder="http://localhost:11434"
+                onChange={e => setCfg({ ...cfg, ollama_base_url: e.target.value })} />
+              <button className="ui-btn ui-btn-primary" style={smallPrimary}
+                onClick={() => saveBackend({ ollama_base_url: cfg.ollama_base_url || '' })}
+                disabled={busy}>
+                {busy ? <Spinner size={12} /> : null}
+                保存
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: colors.textTertiary, lineHeight: 1.6 }}>
+              本机默认 http://localhost:11434；Ollama 运行在其他机器或自定义端口时，改为对应地址。
+            </div>
+          </div>
+        )}
+
         {!isOllama && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 4 }}>
+            {/* 问题7（0.3.2实测）：第三方启动器接入引导——LM Studio 等走 OpenAI 兼容 */}
+            <div style={{ fontSize: 12, color: colors.textTertiary, lineHeight: 1.6 }}>
+              适配 LM Studio、llama.cpp server、vLLM 等提供 OpenAI 兼容接口的启动器。
+              LM Studio：先在应用内开启本地服务器（默认端口 1234），地址填
+              <span style={{ fontFamily: fonts.mono }}> http://localhost:1234/v1</span>，然后点"保存并切换"。
+            </div>
             <input className="ui-input" style={{ ...input, width: '100%' }}
               value={cfg.inference_base_url || ''} placeholder="http://localhost:1234/v1"
               onChange={e => setCfg({ ...cfg, inference_base_url: e.target.value })} />

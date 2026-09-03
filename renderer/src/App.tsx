@@ -209,27 +209,8 @@ export default function App() {
           </div>
         )}
 
-        {/* checkpoint-045：左下角齿轮"设置"入口 → 整页设置视图（规范 §8.5） */}
-        <div style={{ marginTop: 'auto' }}>
-          <button
-            onClick={() => setShowSettingsPage(true)}
-            onMouseEnter={() => setHoverPanel('settings')}
-            onMouseLeave={() => setHoverPanel(null)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8, width: '100%', height: 40,
-              padding: '10px 12px', boxSizing: 'border-box',
-              background: hoverPanel === 'settings' ? colors.bgHover : 'transparent',
-              borderTop: `1px solid ${colors.borderSubtle}`,
-              borderLeft: 'none', borderRight: 'none', borderBottom: 'none',
-              color: hoverPanel === 'settings' ? colors.textPrimary : colors.textSecondary,
-              fontSize: 13, textAlign: 'left', cursor: 'pointer', fontFamily: fonts.base,
-              transition: 'background-color .15s ease, color .15s ease',
-            }}
-          >
-            <Icon name="settings" size={16} />
-            <span>设置</span>
-          </button>
-        </div>
+        {/* 问题1修复（0.3.2实测）：原左栏底部"设置"齿轮与一级导航的设置重复，已删除。
+            设置入口统一为最左导航栏底部的设置按钮，职能/流程两个中心共用。 */}
       </div>
 
       {/* Right: chat / 圆桌大屏（minWidth:0 切断子内容 min-content 向上传导，防超宽内容顶开整页；

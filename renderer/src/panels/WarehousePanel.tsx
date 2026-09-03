@@ -121,7 +121,7 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
           <Icon name="database" size={15} style={{ color: colors.accentText }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: colors.textPrimary }}>知识仓库</span>
         </div>
-        <button onClick={onClose} title="收起面板"
+        <button onClick={onClose} data-tip="收起面板"
           style={{ width: 24, height: 24, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: radius.s }}>
           <Icon name="chevron-right" size={15} style={{ color: colors.textSecondary }} />
         </button>
@@ -148,7 +148,7 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
           onKeyDown={e => { if (e.key === 'Enter') doSearch(); }}
           placeholder="搜索（关键词/换述，留空=列出全部）"
           style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
-        <button onClick={doSearch} disabled={searching} title="搜索"
+        <button onClick={doSearch} disabled={searching} data-tip="搜索"
           style={{ width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: colors.accent, color: colors.onAccent, borderRadius: radius.s, cursor: searching ? 'wait' : 'pointer', flexShrink: 0 }}>
           {searching ? <Spinner size={14} /> : <Icon name="sparkle" size={14} />}
         </button>

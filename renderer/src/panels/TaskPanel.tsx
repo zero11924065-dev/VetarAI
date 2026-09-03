@@ -205,7 +205,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
                       className="ui-btn ui-btn-secondary"
                       onClick={() => handleStop(t.id)}
                       disabled={stoppingId !== null}
-                      title="停止该委派任务"
+                      data-tip="停止该委派任务"
                       style={{
                         ...btnSecondary,
                         height: 22,
