@@ -39,6 +39,8 @@ export interface Message {
   completedDuration?: number;
   // TS-116（3.29）：气泡出现时间戳（ms，Date.now()）
   startedAt?: number;
+  // TS-120（0.3.0）：已移入知识仓库 → 脱离模型上下文（占位显示）
+  archived?: boolean;
 }
 
 const STORAGE_KEY = 'subagent_messages_v4';

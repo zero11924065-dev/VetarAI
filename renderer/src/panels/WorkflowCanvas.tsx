@@ -18,6 +18,7 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   loop: { label: '循环', color: '#8B5CF6' },
   approval: { label: '审批', color: colors.danger },
   file_input: { label: '文件输入', color: '#0EA5E9' },
+  file_read: { label: '文件读取', color: '#0EA5E9' },
   file_output: { label: '文件输出', color: '#0EA5E9' },
   end: { label: '结束', color: colors.textSecondary },
 };

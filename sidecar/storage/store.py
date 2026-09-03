@@ -187,6 +187,9 @@ def _ensure_schema(conn: sqlite3.Connection):
     # H17 问题3：持久化本轮 prompt_eval_count（上下文已用 token），历史/子会话加载时可恢复指示器
     if "prompt_eval_count" not in cols:
         conn.execute("ALTER TABLE session_messages ADD COLUMN prompt_eval_count INTEGER")
+    # TS-120（0.3.0）：消息归档标记（已移入知识仓库的消息脱离模型上下文）
+    if "archived" not in cols:
+        conn.execute("ALTER TABLE session_messages ADD COLUMN archived INTEGER DEFAULT 0")
     # TS-109 增强（H18-3）：圆桌议题附件列（幂等迁移；旧库无此列时补齐）
     rt_cols = {r[1] for r in conn.execute("PRAGMA table_info(roundtables)").fetchall()}
     if rt_cols and "attachments" not in rt_cols:
@@ -674,7 +677,7 @@ def delete_messages_before(project_id: str, session_id: str, keep_recent: int) -
 def load_messages(project_id: str, session_id: str) -> list[dict[str, Any]]:
     with _read_conn(project_id) as conn:
         rows = conn.execute(
-            "SELECT id, role, content, images, model_used, created_at, tool_steps, truncated, prompt_eval_count FROM session_messages WHERE session_id = ? ORDER BY id",
+            "SELECT id, role, content, images, model_used, created_at, tool_steps, truncated, prompt_eval_count, COALESCE(archived, 0) FROM session_messages WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
     result = []
@@ -694,8 +697,24 @@ def load_messages(project_id: str, session_id: str) -> list[dict[str, Any]]:
             msg["truncated"] = True
         if r[8] is not None:
             msg["prompt_eval_count"] = r[8]
+        if r[9]:
+            msg["archived"] = True  # TS-120：已移入知识仓库，脱离模型上下文
         result.append(msg)
     return result
+
+
+def archive_messages(project_id: str, message_ids: list[int]) -> int:
+    """TS-120（0.3.0）：把指定消息标记为已归档（移入知识仓库后脱离模型上下文）。
+    消息内容仍保留在库中（前端占位显示），仅上下文构建时跳过。返回标记条数。"""
+    if not message_ids:
+        return 0
+    placeholders = ",".join("?" for _ in message_ids)
+    with _write_conn(project_id) as conn:
+        cur = conn.execute(
+            f"UPDATE session_messages SET archived = 1 WHERE id IN ({placeholders})",
+            message_ids,
+        )
+        return cur.rowcount
 
 
 # ── Summary ────────────────────────────────────────────

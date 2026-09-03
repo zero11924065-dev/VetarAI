@@ -441,10 +441,17 @@ async def api_compact(session_id: str, project_id: str, body: dict | None = None
 
 
 @app.post("/api/sessions/{session_id}/export")
-async def api_export(session_id: str, project_id: str, body: dict | None = None):
+async def api_export(session_id: str, project_id: str | None = None, body: dict | None = None):
     """M2 导出会话 MD；M7（TS-113）：不传 dir 时走统一默认导出目录
-    （含工具步骤摘要）；传 dir 保持旧行为（L2 目录白名单校验）。"""
+    （含工具步骤摘要）；传 dir 保持旧行为（L2 目录白名单校验）。
+
+    0.2.4（Z1 修复）：project_id 兼容查询参数与 JSON body 两种来源——
+    此前仅认查询参数，前端放在 body 里 → 422 → 前端提示渲染成 [object Object]。
+    """
     body = body or {}
+    project_id = project_id or str(body.get("project_id") or "")
+    if not project_id:
+        raise HTTPException(status_code=400, detail="缺少 project_id")
     export_dir = body.get("dir")
     if export_dir:
         try:
@@ -467,8 +474,12 @@ async def api_export(session_id: str, project_id: str, body: dict | None = None)
 _SUMMARY_MAX_SOURCE_CHARS = 8000  # 参与总结的会话原文上限
 
 @app.post("/api/sessions/{session_id}/summarize")
-async def api_summarize_session(session_id: str, project_id: str, body: dict | None = None):
+async def api_summarize_session(session_id: str, project_id: str | None = None, body: dict | None = None):
     body = body or {}
+    # 0.2.4（Z1 修复）：project_id 兼容查询参数与 JSON body 两种来源
+    project_id = project_id or str(body.get("project_id") or "")
+    if not project_id:
+        raise HTTPException(status_code=400, detail="缺少 project_id")
     agent_id = str(body.get("agent_id") or "")
     model = str(body.get("model") or get_config().get("default_model", "qwen3.8"))
 
@@ -483,6 +494,8 @@ async def api_summarize_session(session_id: str, project_id: str, body: dict | N
         role = m.get("role", "?")
         if role not in ("user", "assistant"):
             continue
+        if m.get("archived"):
+            continue  # TS-120：已移入知识仓库的消息不参与总结
         content = str(m.get("content") or "")
         if not content.strip():
             continue
@@ -1711,3 +1724,156 @@ async def api_workflow_stop(run_id: str):
     # 若卡在审批等待，驳回以解锁引擎（引擎会以取消标志中止）
     resolve_workflow_approval(run_id, False, "用户已停止")
     return {"ok": True}
+
+
+# ── TS-120（0.3.0）：知识仓库（拉模式）────────────────────────────
+# 与 M4 知识（推模式）严格区分：本模块内容永不自动注入，仅按需检索/勾选注入。
+from sidecar.knowledge import warehouse as _wh
+from sidecar.storage.store import archive_messages as _archive_msgs
+
+
+class KnowledgeTransferReq(BaseModel):
+    project_id: str
+    session_id: str
+    message_ids: list[int]
+    scope: str = "project"          # project | global
+    title: str | None = None        # 留空自动取首条前 20 字
+    category: str = ""
+    keywords: list[str] | None = None
+
+
+@app.post("/api/knowledge/transfer")
+async def api_knowledge_transfer(req: KnowledgeTransferReq):
+    """把勾选的会话消息转移入知识仓库：生成 .md 条目 + 标记消息归档。"""
+    if req.scope not in ("project", "global"):
+        raise HTTPException(status_code=400, detail="scope 必须是 project 或 global")
+    msgs = load_messages(req.project_id, req.session_id)
+    id_set = set(req.message_ids)
+    picked = [m for m in msgs if m.get("id") in id_set]
+    if not picked:
+        raise HTTPException(status_code=404, detail="未找到指定消息")
+    # 组装正文（角色: 内容）
+    body_lines = []
+    for m in picked:
+        role = m.get("role", "?")
+        content = str(m.get("content") or "").strip()
+        if content:
+            body_lines.append(f"**{role}**：{content}")
+    body = "\n\n".join(body_lines)
+    if not body.strip():
+        raise HTTPException(status_code=422, detail="勾选的消息无文本内容")
+    # 标题：用户指定 > 首条前 20 字
+    title = (req.title or "").strip()
+    if not title:
+        first = next((str(m.get("content") or "") for m in picked if str(m.get("content") or "").strip()), "")
+        title = first[:20] or "未命名"
+    entry = _wh.add_entry(req.scope, req.project_id if req.scope == "project" else None,
+                          title, body, category=req.category,
+                          keywords=req.keywords or [], source="chat")
+    if entry is None:
+        raise HTTPException(status_code=500, detail="知识条目写入失败（目录不可用）")
+    # 归档消息（脱离模型上下文）
+    archived = _archive_msgs(req.project_id, req.message_ids)
+    return {"ok": True, "entry_id": entry["id"], "title": title,
+            "file_path": entry["file_path"], "archived": archived}
+
+
+@app.get("/api/knowledge/entries")
+async def api_knowledge_list(scope: str | None = None, project_id: str | None = None):
+    """列出知识条目（可按作用域/项目过滤）。"""
+    return _wh.list_entries(scope, project_id)
+
+
+@app.get("/api/knowledge/entries/{entry_id}")
+async def api_knowledge_get(entry_id: str):
+    entry = _wh.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="知识条目不存在")
+    return entry
+
+
+@app.delete("/api/knowledge/entries/{entry_id}")
+async def api_knowledge_delete(entry_id: str):
+    ok = _wh.delete_entry(entry_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="知识条目不存在")
+    return {"ok": True}
+
+
+@app.get("/api/knowledge/search")
+async def api_knowledge_search(q: str, scope: str | None = None,
+                               project_id: str | None = None, limit: int = 20):
+    """关键词检索（FTS5 + jieba 分词）。"""
+    return _wh.search_entries(q, scope, project_id, min(max(limit, 1), 100))
+
+
+class KnowledgeInjectReq(BaseModel):
+    entry_ids: list[str]
+
+
+@app.post("/api/knowledge/inject")
+async def api_knowledge_inject(req: KnowledgeInjectReq):
+    """把勾选条目的正文拼为可发送文本（前端作为用户消息注入会话）。"""
+    parts = []
+    for eid in req.entry_ids:
+        e = _wh.get_entry(eid)
+        if e:
+            parts.append(f"【知识：{e['title']}】\n{e.get('body', '')}")
+    if not parts:
+        raise HTTPException(status_code=404, detail="未找到任何有效条目")
+    return {"ok": True, "text": "\n\n---\n\n".join(parts)}
+
+
+@app.post("/api/knowledge/rebuild-index")
+async def api_knowledge_rebuild():
+    """重建索引（扫描全部 .md 重建，容灾）。"""
+    n = _wh.rebuild_index()
+    return {"ok": True, "entries": n}
+
+
+@app.get("/api/knowledge/groups")
+async def api_knowledge_groups():
+    """设置页资产管理器：全局知识组 + 各项目知识组（含条数与目录路径）。"""
+    from sidecar.storage.store import list_projects
+    groups = []
+    # 全局
+    g_entries = _wh.list_entries("global")
+    groups.append({"scope": "global", "project_id": None, "project_name": "全局",
+                   "count": len(g_entries), "dir": str(_wh.global_knowledge_dir())})
+    # 各项目
+    try:
+        projects = list_projects()
+    except Exception:
+        projects = []
+    for p in projects:
+        pid = p.get("id")
+        name = p.get("name") or pid
+        p_entries = _wh.list_entries("project", pid)
+        kdir = _wh.project_knowledge_dir(pid)
+        groups.append({"scope": "project", "project_id": pid, "project_name": name,
+                       "count": len(p_entries), "dir": str(kdir) if kdir else ""})
+    return groups
+
+
+class OpenKnowledgeDirReq(BaseModel):
+    scope: str = "global"
+    project_id: str | None = None
+
+
+@app.post("/api/knowledge/open-dir")
+async def api_knowledge_open_dir(req: OpenKnowledgeDirReq):
+    """在 Finder 打开知识目录（仅全局/项目知识库目录，白名单校验防任意路径打开）。"""
+    import platform
+    import subprocess
+    kdir = _wh.scope_dir(req.scope, req.project_id)
+    if kdir is None:
+        raise HTTPException(status_code=400, detail="无效的作用域或项目")
+    kdir.mkdir(parents=True, exist_ok=True)
+    if platform.system() != "Darwin":
+        return {"ok": False, "dir": str(kdir), "detail": "非 macOS，请手动打开：" + str(kdir)}
+    try:
+        await asyncio.to_thread(subprocess.run, ["open", str(kdir)],
+                                capture_output=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "dir": str(kdir), "detail": "打开超时"}
+    return {"ok": True, "dir": str(kdir)}

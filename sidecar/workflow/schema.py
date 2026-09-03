@@ -27,7 +27,7 @@ import re
 from typing import Any
 
 NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
-              "approval", "file_input", "file_output", "end")
+              "approval", "file_input", "file_output", "file_read", "end")
 
 # 推理节点：纯模型调用
 CONDITION_OPERATORS = ("contains", "not_contains", "equals", "starts_with", "regex", "empty", "not_empty")
@@ -68,6 +68,9 @@ def _node_errors(node: dict, idx: int) -> list[str]:
     if ntype == "file_input":
         if not str(node.get("path") or "").strip():
             errs.append(f"节点[{idx}]（文件输入）缺少 path")
+    if ntype == "file_read":
+        if not str(node.get("path") or "").strip():
+            errs.append(f"节点[{idx}]（文件读取）缺少 path")
     if ntype == "file_output":
         if not str(node.get("dir") or "").strip():
             errs.append(f"节点[{idx}]（文件输出）缺少 dir")
@@ -147,8 +150,14 @@ def validate_definition(definition: dict[str, Any], *, strict: bool = True) -> l
                             adj[nid].append(str(b))
                 if node.get("type") == "loop":
                     b = node.get("branch")
-                    if isinstance(b, str) and b in node_map:
-                        adj[nid].append(b)
+                    if isinstance(b, str):
+                        # 0.2.4（W4 修复）：支持逗号分隔顺序链字符串（引擎 0.2.3 起支持，
+                        # 如 "ocr,save"）。此前只认整串==单个节点 ID → 循环体节点被误判
+                        # "未连通"，用户被迫显式连线。
+                        parts = [p.strip() for p in b.split(",") if p.strip()]
+                        for p in (parts if parts else ([b] if b else [])):
+                            if p in node_map:
+                                adj[nid].append(p)
                     elif isinstance(b, list):
                         # 顺序链：链内全部节点可达
                         for bb in b:

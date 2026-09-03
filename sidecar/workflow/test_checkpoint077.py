@@ -198,6 +198,37 @@ async def main():
     check("L5a 循环逐项执行", len(conn5.chat_calls) == 3, str(len(conn5.chat_calls)))
     check("L5b item 渲染", prompts == ["处理 a", "处理 b", "处理 c"], str(prompts))
 
+    # ===== L5c~L5d 循环分批（0.2.3）=====
+    conn5c = FakeConn({"m": "batch-result"})
+    defn5c = _defn(
+        [_n("s", "start"),
+         _n("loop", "loop", items="{{params.list}}", branch="body", batch_size=2),
+         _n("body", "inference", model="m", prompt="处理 {{item}}"),
+         _n("e", "end", output="{{loop.output}}")],
+        [{"from": "s", "to": "loop"}, {"from": "loop", "to": "e"}])
+    # 5 个元素、每批 2 个 → 3 批（2/2/1）
+    evs = await _run_engine(defn5c, conn5c, params={"list": ["a", "b", "c", "d", "e"]})
+    check("L5c 分批轮数", len(conn5c.chat_calls) == 3, str(len(conn5c.chat_calls)))
+    # 前两批 {{item}} 为列表（渲染为 JSON），最后一批单元素
+    prompts5c = [c[1][0]["content"] for c in conn5c.chat_calls]
+    check("L5d 分批item为列表", '["a", "b"]' in prompts5c[0] and '["c", "d"]' in prompts5c[1]
+          and prompts5c[2] == "处理 e", str(prompts5c))
+
+    # ===== L5e 循环体逗号分隔顺序链（0.2.3）=====
+    conn5e = FakeConn({"m": "step"})
+    defn5e = _defn(
+        [_n("s", "start"),
+         _n("loop", "loop", items="{{params.list}}", branch="n1, n2"),
+         _n("n1", "inference", model="m", prompt="第一步 {{item}}"),
+         _n("n2", "inference", model="m", prompt="第二步 {{n1.output}}"),
+         _n("e", "end", output="{{loop.output}}")],
+        [{"from": "s", "to": "loop"}, {"from": "loop", "to": "e"}])
+    evs = await _run_engine(defn5e, conn5e, params={"list": ["x"]})
+    # 1 项 × 2 步 = 2 次调用
+    check("L5e 逗号顺序链", len(conn5e.chat_calls) == 2, str(len(conn5e.chat_calls)))
+    prompts5e = [c[1][0]["content"] for c in conn5e.chat_calls]
+    check("L5e2 链内引用上游输出", "第一步 x" in prompts5e[0] and "第二步 step" in prompts5e[1], str(prompts5e))
+
     # ===== L6/L7 审批节点 =====
     from sidecar.workflow.engine import WorkflowEngine, resolve_workflow_approval
 
@@ -499,6 +530,140 @@ async def main():
     check("F7c md内容为模型输出", md_files and "OCR结果" in md_files[0].read_text(encoding="utf-8"),
           md_files[0].read_text(encoding="utf-8") if md_files else "")
 
+    # ===== F8 图片自动继承（0.2.3 核心修复）=====
+    # 用户场景：文件输入 → 推理节点（未配 images）→ 模型应自动收到上游的图片。
+    # 修复前推理节点 images 为空 → 模型收不到图 → HTTP 500 / 空转。
+    conn_f8 = FakeConn({"m": "继承图片的识别结果"})
+    defn_f8 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(ftmp / "sub"), extensions="jpg"),
+         _n("infer", "inference", model="m", prompt="识别文字"),  # 故意不配 images
+         _n("e", "end", output="{{infer.output}}")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "infer"}, {"from": "infer", "to": "e"}])
+    eng_f8 = _WE2("run-f8", defn_f8, conn_f8, str(ftmp))
+    evs_f8 = []
+    async for ev in eng_f8.run():
+        evs_f8.append(ev)
+    check("F8a 自动继承完成", any(e["event"] == "workflow_done" for e in evs_f8),
+          str([e["event"] for e in evs_f8][-3:]))
+    # 推理节点那次调用的 images 应非空（继承自文件输入）
+    infer_call = [c for c in conn_f8.chat_calls if c[0] == "m"]
+    check("F8b 推理节点收到图片", infer_call and infer_call[0][2],
+          str([c[2] for c in infer_call]))
+    check("F8c 继承的是真实图片路径", infer_call and infer_call[0][2]
+          and str(infer_call[0][2][0]).endswith("d.jpg"), str(infer_call[0][2]) if infer_call else "")
+
+    # ===== F9 分批 + 图片继承组合（0.2.3 用户真实场景）=====
+    # 文件输入(2图) → 循环(分批2) → 推理节点：每批应收到当批图片
+    conn_f9 = FakeConn({"m": "批识别"})
+    defn_f9 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(ftmp), extensions="jpg"),  # a.jpg + sub? 仅顶层 a.jpg
+         _n("loop", "loop", items="{{fin.output}}", branch="infer", batch_size=1),
+         _n("infer", "inference", model="m", prompt="识别 {{item}}"),
+         _n("e", "end", output="{{loop.output}}")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "loop"}, {"from": "loop", "to": "e"}])
+    eng_f9 = _WE2("run-f9", defn_f9, conn_f9, str(ftmp))
+    evs_f9 = []
+    async for ev in eng_f9.run():
+        evs_f9.append(ev)
+    check("F9a 分批继承完成", any(e["event"] == "workflow_done" for e in evs_f9),
+          str([e["event"] for e in evs_f9][-3:]))
+    infer_calls9 = [c for c in conn_f9.chat_calls if c[0] == "m"]
+    check("F9b 循环内推理也继承图片", infer_calls9 and infer_calls9[0][2],
+          str([c[2] for c in infer_calls9]))
+
+    # ===== F10 弱模型分批喂图（0.2.3 用户实测约束）=====
+    # 用户实测：glm-ocr 一次只能消化 2-3 张图。验证 batch_size=3 时，
+    # 每次推理调用恰好只收到当批的 3 张图（不多不少），避免整文件夹一次性灌入。
+    imgdir10 = ftmp / "imgs10"
+    imgdir10.mkdir(exist_ok=True)
+    for i in range(1, 8):  # 7 张图 → 每批 3 张 = 3 批（3/3/1）
+        (imgdir10 / f"{i}.jpg").write_text(f"img{i}", encoding="utf-8")
+    conn_f10 = FakeConn({"m": "批转写"})
+    defn_f10 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(imgdir10), extensions="jpg"),
+         _n("loop", "loop", items="{{fin.output}}", branch="infer", batch_size=3),
+         _n("infer", "inference", model="m", prompt="识别 {{item}}"),
+         _n("e", "end", output="{{loop.output}}")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "loop"}, {"from": "loop", "to": "e"}])
+    eng_f10 = _WE2("run-f10", defn_f10, conn_f10, str(ftmp))
+    evs_f10 = []
+    async for ev in eng_f10.run():
+        evs_f10.append(ev)
+    check("F10a 分批3完成", any(e["event"] == "workflow_done" for e in evs_f10),
+          str([e["event"] for e in evs_f10][-3:]))
+    infer_calls10 = [c for c in conn_f10.chat_calls if c[0] == "m"]
+    imgs_per_call = [len(c[2]) if c[2] else 0 for c in infer_calls10]
+    check("F10b 每批恰3张图", len(infer_calls10) == 3 and imgs_per_call == [3, 3, 1],
+          f"调用次数={len(infer_calls10)} 每批图数={imgs_per_call}")
+
+    # ===== F11 文件读取节点（0.2.3）=====
+    mddir11 = ftmp / "mds11"
+    mddir11.mkdir(exist_ok=True)
+    (mddir11 / "1.md").write_text("第一段内容", encoding="utf-8")
+    (mddir11 / "2.md").write_text("第二段内容", encoding="utf-8")
+    (mddir11 / "ignore.txt").write_text("不该被读到", encoding="utf-8")
+    conn_f11 = FakeConn({})
+    defn_f11 = _defn(
+        [_n("s", "start"),
+         _n("fr", "file_read", path=str(mddir11), extensions="md"),
+         _n("e", "end", output="{{fr.output}}")],
+        [{"from": "s", "to": "fr"}, {"from": "fr", "to": "e"}])
+    eng_f11 = _WE2("run-f11", defn_f11, conn_f11, str(ftmp))
+    evs_f11 = []
+    async for ev in eng_f11.run():
+        evs_f11.append(ev)
+    check("F11a 文件读取完成", any(e["event"] == "workflow_done" for e in evs_f11),
+          str([e["event"] for e in evs_f11][-3:]))
+    fr_out = str(eng_f11.variables["fr"]["output"])
+    check("F11b 内容拼接含文件名标题", "=== 1.md ===" in fr_out and "第一段内容" in fr_out
+          and "第二段内容" in fr_out, fr_out[:200])
+    check("F11c 扩展名过滤生效", "不该被读到" not in fr_out and "ignore.txt" not in fr_out, fr_out[:200])
+
+    # ===== F12 用户完整场景（0.2.3）：识别→按图名存md→批量读取→分析→存终稿 =====
+    # 模拟：聊天记录(2图) → qwen3-vl逐张识别存 {{item_stem}}.md
+    #       → file_read 批量读md → qwen3.6 整理 → 存 整理结果.md
+    imgdir12 = ftmp / "chats12"
+    imgdir12.mkdir(exist_ok=True)
+    (imgdir12 / "1.jpg").write_text("图1", encoding="utf-8")
+    (imgdir12 / "2.jpg").write_text("图2", encoding="utf-8")
+    outdir12 = ftmp / "out12"
+    conn_f12 = FakeConn({"vl": "识别文字", "big": "整理后的时间线文本"})
+    defn_f12 = _defn(
+        [_n("s", "start"),
+         _n("fin", "file_input", path=str(imgdir12), extensions="jpg"),
+         _n("loop", "loop", items="{{fin.output}}", branch="ocr, save"),
+         _n("ocr", "inference", model="vl", prompt="识别 {{item}}"),
+         _n("save", "file_output", dir=str(outdir12), filename="{{item_stem}}.md",
+            content="{{ocr.output}}"),
+         _n("fr", "file_read", path=str(outdir12), extensions="md"),
+         _n("merge", "inference", model="big", prompt="去重排序：{{fr.output}}"),
+         _n("fout", "file_output", dir=str(outdir12), filename="整理结果.md",
+            content="{{merge.output}}"),
+         _n("e", "end", output="{{fout.output}}")],
+        [{"from": "s", "to": "fin"}, {"from": "fin", "to": "loop"},
+         {"from": "loop", "to": "fr"}, {"from": "fr", "to": "merge"},
+         {"from": "merge", "to": "fout"}, {"from": "fout", "to": "e"}])
+    eng_f12 = _WE2("run-f12", defn_f12, conn_f12, str(ftmp))
+    evs_f12 = []
+    async for ev in eng_f12.run():
+        evs_f12.append(ev)
+    check("F12a 完整场景跑通", any(e["event"] == "workflow_done" for e in evs_f12),
+          str([e["event"] for e in evs_f12][-3:]))
+    md1, md2 = outdir12 / "1.md", outdir12 / "2.md"
+    check("F12b 按原图名存md", md1.exists() and md2.exists(),
+          f"{[p.name for p in outdir12.glob('*')] if outdir12.exists() else '目录未生成'}")
+    check("F12c md内容为识别结果", md1.exists() and md1.read_text(encoding="utf-8") == "识别文字",
+          md1.read_text(encoding="utf-8") if md1.exists() else "")
+    final_md = outdir12 / "整理结果.md"
+    check("F12d 终稿为整理文本", final_md.exists()
+          and final_md.read_text(encoding="utf-8") == "整理后的时间线文本",
+          final_md.read_text(encoding="utf-8") if final_md.exists() else "")
+    # 模型切换：vl 循环结束后切 big 时应卸载 vl
+    check("F12e 模型切换卸载", "vl" in conn_f12.unloads, str(conn_f12.unloads))
+
     # 清理文件测试目录
     import shutil as _sh
     _sh.rmtree(ftmp, ignore_errors=True)
@@ -511,6 +676,136 @@ async def main():
     check("L11c 列表渲染为JSON", render_template("{{lst}}", v) == json.dumps([1, 2, 3], ensure_ascii=False))
     check("L11d 未定义原样保留", render_template("{{nope.x}}", v) == "{{nope.x}}")
     check("L11e resolve_value 保持类型", resolve_value("{{lst}}", v) == [1, 2, 3])
+
+    # ===== G 组：0.2.4 两大模块修复回归 =====
+    # G1（W1）：所有事件带 run_id——前端据此捕获以发送停止请求
+    conn_g1 = FakeConn({"m": "x"})
+    defn_g1 = _defn([_n("s", "start"), _n("n1", "inference", model="m", prompt="hi"),
+                     _n("e", "end", output="{{n1.output}}")],
+                    [{"from": "s", "to": "n1"}, {"from": "n1", "to": "e"}])
+    eng_g1 = _WE2("run-g1", defn_g1, conn_g1, str(ftmp))
+    evs_g1 = []
+    async for ev in eng_g1.run():
+        evs_g1.append(ev)
+    check("G1a 所有事件带 run_id", all(e["data"].get("run_id") == "run-g1" for e in evs_g1),
+          str([(e["event"], e["data"].get("run_id")) for e in evs_g1[:4]]))
+    check("G1b node_start/node_done 也带", any(e["event"] == "node_start" for e in evs_g1)
+          and all(e["data"].get("run_id") for e in evs_g1 if e["event"] in ("node_start", "node_done")))
+
+    # G2（W2）：循环失败策略——skip 跳过失败批继续，输出占位
+    class FlakyConn:
+        """第 2 次调用抛错。"""
+        def __init__(self):
+            self.calls = 0
+            self.unloads = []
+        async def chat(self, model, messages, images=None, **kw):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("模拟失败")
+            return f"ok{self.calls}"
+        async def unload_model(self, model):
+            self.unloads.append(model)
+            return True
+    gtmp = Path(tempfile.mkdtemp(prefix="g2_"))
+    conn_g2 = FlakyConn()
+    defn_g2 = _defn([_n("s", "start"),
+                     _n("loop", "loop", items="{{params.list}}", branch="body", fail_policy="skip"),
+                     _n("body", "inference", model="m", prompt="处理 {{item}}"),
+                     _n("e", "end", output="{{loop.output}}")],
+                    [{"from": "s", "to": "loop"}, {"from": "loop", "to": "e"}])
+    eng_g2 = _WE2("run-g2", defn_g2, conn_g2, str(gtmp), params={"list": ["a", "b", "c"]})
+    evs_g2 = []
+    async for ev in eng_g2.run():
+        evs_g2.append(ev)
+    done_g2 = [e for e in evs_g2 if e["event"] == "workflow_done"]
+    check("G2a skip策略整体成功", len(done_g2) == 1, str([e["event"] for e in evs_g2][-3:]))
+    check("G2b 失败批发跳过事件", any(e["event"] == "loop_batch_skipped" for e in evs_g2),
+          str([e["event"] for e in evs_g2]))
+    loop_out = eng_g2.variables["loop"]["output"]
+    check("G2c 失败批占位None", len(loop_out) == 3 and loop_out[1] is None, str(loop_out))
+
+    # G3（W2）：abort 策略——遇失败立即中止
+    conn_g3 = FlakyConn()
+    defn_g3 = _defn([_n("s", "start"),
+                     _n("loop", "loop", items="{{params.list}}", branch="body", fail_policy="abort"),
+                     _n("body", "inference", model="m", prompt="处理 {{item}}"),
+                     _n("e", "end")],
+                    [{"from": "s", "to": "loop"}, {"from": "loop", "to": "e"}])
+    eng_g3 = _WE2("run-g3", defn_g3, conn_g3, str(gtmp), params={"list": ["a", "b", "c"]})
+    evs_g3 = []
+    async for ev in eng_g3.run():
+        evs_g3.append(ev)
+    check("G3 abort策略失败即中止", any(e["event"] == "workflow_failed" for e in evs_g3),
+          str([e["event"] for e in evs_g3][-3:]))
+
+    # G4（W5）：条件节点放进循环体作为求值器，不再报错
+    conn_g4 = FakeConn({"m": "内容含 钱 字"})
+    defn_g4 = _defn([_n("s", "start"),
+                     _n("loop", "loop", items="{{params.list}}", branch="cond"),
+                     _n("cond", "condition", match={"variable": "{{item}}", "operator": "contains", "value": "钱"}),
+                     _n("e", "end", output="{{loop.output}}")],
+                    [{"from": "s", "to": "loop"}, {"from": "loop", "to": "e"}])
+    eng_g4 = _WE2("run-g4", defn_g4, conn_g4, str(gtmp), params={"list": ["今天天气好", "有钱"]})
+    evs_g4 = []
+    async for ev in eng_g4.run():
+        evs_g4.append(ev)
+    done_g4 = [e for e in evs_g4 if e["event"] == "workflow_done"]
+    check("G4 条件节点入循环体可执行", len(done_g4) == 1, str([e["event"] for e in evs_g4][-3:]))
+    cond_out = eng_g4.variables["loop"]["output"]
+    check("G4b 循环内条件输出判定", cond_out == [False, True], str(cond_out))
+
+    # G5（W8）：仅图片保护——音频文件被剔除不传给视觉模型
+    audio = gtmp / "a.mp3"
+    audio.write_bytes(b"fake-audio")
+    img = gtmp / "b.jpg"
+    img.write_bytes(b"fake-img")
+    conn_g5 = FakeConn({"vl": "识别"})
+    defn_g5 = _defn([_n("s", "start"),
+                     _n("fin", "file_input", path=str(gtmp)),  # 读到 a.mp3 + b.jpg
+                     _n("infer", "inference", model="vl", prompt="识别 {{item}}"),
+                     _n("e", "end", output="{{infer.output}}")],
+                    [{"from": "s", "to": "fin"}, {"from": "fin", "to": "infer"}, {"from": "infer", "to": "e"}])
+    eng_g5 = _WE2("run-g5", defn_g5, conn_g5, str(gtmp))
+    evs_g5 = []
+    async for ev in eng_g5.run():
+        evs_g5.append(ev)
+    vl_calls = [c for c in conn_g5.chat_calls if c[0] == "vl"]
+    imgs_g5 = vl_calls[0][2] if vl_calls else None
+    check("G5a 音频被剔除", imgs_g5 is None or all(str(i).endswith(".jpg") for i in imgs_g5),
+          str(imgs_g5))
+    check("G5b 发剔除提示事件", any(e["event"] == "images_dropped" for e in evs_g5)
+          or (imgs_g5 and all(str(i).endswith(".jpg") for i in imgs_g5)),
+          str([e["event"] for e in evs_g5]))
+
+    # G6（W4）：schema 孤岛检测支持循环体逗号分隔顺序链（不误判未连通）
+    defn_g6 = _defn([_n("s", "start"),
+                     _n("fin", "file_input", path="/tmp/x"),
+                     _n("loop", "loop", items="{{fin.output}}", branch="ocr, save"),
+                     _n("ocr", "inference", model="vl", prompt="识别 {{item}}"),
+                     _n("save", "file_output", dir="/tmp/out", filename="{{item_stem}}.md",
+                        content="{{ocr.output}}"),
+                     _n("e", "end")],
+                    [{"from": "s", "to": "fin"}, {"from": "fin", "to": "loop"},
+                     {"from": "loop", "to": "e"}])
+    errs_g6 = validate_definition(defn_g6, strict=True)
+    check("G6 循环体逗号链不误判孤岛", errs_g6 == [], str(errs_g6))
+
+    # G7（W3）：带环定义引擎正常运行不崩溃（布局破环在前端测试覆盖）
+    defn_g7 = _defn([_n("s", "start"),
+                     _n("loop", "loop", items="{{params.list}}", branch="body"),
+                     _n("body", "inference", model="m", prompt="x"),
+                     _n("e", "end")],
+                    [{"from": "s", "to": "loop"}, {"from": "loop", "to": "e"},
+                     {"from": "body", "to": "loop"}])  # body→loop 构成环
+    eng_g7 = _WE2("run-g7", defn_g7, FakeConn({"m": "x"}), str(gtmp), params={"list": ["a"]})
+    evs_g7 = []
+    async for ev in eng_g7.run():
+        evs_g7.append(ev)
+    check("G7 带环定义引擎不崩溃", any(e["event"] in ("workflow_done", "workflow_failed") for e in evs_g7),
+          str([e["event"] for e in evs_g7][-3:]))
+
+    import shutil as _shg
+    _shg.rmtree(gtmp, ignore_errors=True)
 
     print(f"\n===== 结果：{PASS} PASS / {FAIL} FAIL =====")
     if FAILURES:

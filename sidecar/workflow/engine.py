@@ -37,7 +37,7 @@ from typing import Any, AsyncIterator, Callable
 from sidecar.storage.store import update_workflow_run, append_workflow_node_event
 
 NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
-              "approval", "file_input", "file_output", "end")
+              "approval", "file_input", "file_output", "file_read", "end")
 
 # 人工审批等待注册表：run_id → {"event": asyncio.Event, "approved": bool, "comment": str}
 _APPROVALS: dict[str, dict[str, Any]] = {}
@@ -206,7 +206,12 @@ class WorkflowEngine:
 
     # ---- 事件 ----
     def _emit(self, event: str, data: dict) -> None:
-        """事件入队（供 SSE 消费）；同时回调可选监听器。"""
+        """事件入队（供 SSE 消费）；同时回调可选监听器。
+
+        0.2.4（W1）：所有事件统一注入 run_id——此前仅审批/终态事件带，
+        导致前端运行中捕获不到 run_id，停止按钮空转（请求从未发出）。
+        """
+        data = {**data, "run_id": self.run_id}
         self._q.put_nowait({"event": event, "data": data})
         if self.on_event:
             try:
@@ -252,6 +257,119 @@ class WorkflowEngine:
             self._cancelled = True
             raise WorkflowCancel()
 
+    # ---- 0.2.3：图片路径扩展名（自动继承用） ----
+    _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".heic")
+
+    def _inherit_upstream_images(self, node: dict) -> list[str]:
+        """0.2.3：推理节点未配置 images 时，自动继承上游图片。两级兜底：
+
+        1. 直接上游是文件输入节点 → 继承其产出的图片路径（线性链路）；
+        2. 处于循环节点内（变量空间有 batch / item）→ 用当批/当前项的图片路径
+           （循环链路：{{item}} 为单个路径或 {{batch}} 为一批路径）。
+
+        背景：用户把文件夹/图片塞进文件输入节点后，推理节点若没手动连
+        {{上游.output}} 到图片字段，模型就收不到图（只收到一句默认提示词），
+        OCR 模型直接报错或空转。此继承让"文件输入 → 推理"这条最常见链路
+        零配置可用。仅继承真实存在且扩展名为图片的文件路径，避免误伤。
+        """
+        # 1. 直接上游文件输入节点（线性链路）
+        incoming = [e for e in self.edges if str(e.get("to")) == str(node.get("id"))]
+        for e in incoming:
+            src = self.nodes.get(str(e.get("from")))
+            if not src or src.get("type") != "file_input":
+                continue
+            val = (self.variables.get(str(src.get("id"))) or {}).get("output")
+            if not val:
+                continue
+            imgs = self._filter_image_paths(val if isinstance(val, list) else [val])
+            if imgs:
+                return imgs
+        # 2. 循环上下文（循环节点已写入 batch / item 变量）
+        batch = self.variables.get("batch")
+        if batch is not None:
+            imgs = self._filter_image_paths(batch if isinstance(batch, list) else [batch])
+            if imgs:
+                return imgs
+        item = self.variables.get("item")
+        if item is not None:
+            imgs = self._filter_image_paths(item if isinstance(item, list) else [item])
+            if imgs:
+                return imgs
+        return []
+
+    @staticmethod
+    def _filter_image_paths(paths: list) -> list[str]:
+        """过滤出真实存在且扩展名为图片的文件路径。"""
+        imgs: list[str] = []
+        for p in paths:
+            try:
+                pp = Path(str(p))
+                if pp.is_file() and pp.suffix.lower() in WorkflowEngine._IMAGE_EXTS:
+                    imgs.append(str(pp))
+            except (OSError, ValueError):
+                continue
+        return imgs
+
+    @staticmethod
+    def _keep_image_files(images: list[str]) -> tuple[list[str], list[str]]:
+        """0.2.4（W8）：仅图片保护。把待传图片列表分为（保留, 剔除）两组。
+
+        分类规则（与连接器 _parse_image 对齐）：
+        - data: URI → 保留（已编码图片）
+        - 存在的文件：扩展名为图片 → 保留；非图片（音频/文档等）→ 剔除
+        - 不存在的长字符串（视为已编码 base64）→ 保留
+        - 其余（无效短路径）→ 剔除
+        """
+        kept: list[str] = []
+        dropped: list[str] = []
+        for img in images:
+            if not isinstance(img, str) or not img:
+                dropped.append(str(img))
+                continue
+            if img.startswith("data:"):
+                kept.append(img)
+                continue
+            try:
+                pp = Path(img)
+                if pp.is_file():
+                    if pp.suffix.lower() in WorkflowEngine._IMAGE_EXTS:
+                        kept.append(img)
+                    else:
+                        dropped.append(img)
+                    continue
+            except (OSError, ValueError):
+                pass
+            if len(img) > 50:
+                kept.append(img)  # 视为已编码 base64
+            else:
+                dropped.append(img)
+        return kept, dropped
+
+    async def _interruptible_chat(self, model: str, user_content: str,
+                                  images: list[str]) -> str:
+        """0.2.3：可中断的模型调用。
+
+        旧实现直接 await 一次 HTTP 调用——模型加载/推理动辄数分钟，期间
+        取消标志无人检查，用户点"停止"毫无反应（只能手动杀模型）。现改为
+        后台任务 + 每 2 秒轮询取消标志，命中即取消底层请求并抛 WorkflowCancel。
+        """
+        task = asyncio.create_task(
+            self.connector.chat(model, [{"role": "user", "content": user_content}],
+                                images=images if images else None))
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=2.0)
+                if task in done:
+                    return task.result()
+                self._check_cancel()  # 命中取消 → 抛 WorkflowCancel（见下方清理）
+        except WorkflowCancel:
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+            raise
+
     async def _run_inference(self, node: dict) -> NodeResult:
         """纯推理节点：无工具、无系统提示词，直接一问一答。"""
         model = str(node.get("model") or "").strip()
@@ -260,11 +378,23 @@ class WorkflowEngine:
         await self._ensure_model(model)
         prompt = render_template(str(node.get("prompt") or ""), self.variables)
         images = resolve_images(node, self.variables)
+        # 0.2.3：自动图片继承——未配置 images 且上游是文件输入节点时，
+        # 自动把上游产出的图片路径作为图片传入（用户无需手动连 {{上游.output}}）
+        if not images:
+            images = self._inherit_upstream_images(node)
+        # 0.2.4（W8）：仅图片保护——剔除非图片扩展名的本地文件（如音频），
+        # 防止被当图片传给视觉模型导致调用失败（用户实测：文件夹混入音频
+        # → 第 16 批模型调用失败）。剔除的文件发事件提示，不静默。
+        images, dropped = self._keep_image_files(images)
+        if dropped:
+            self._emit("images_dropped", {"node_id": node["id"],
+                                          "dropped": dropped[:10],
+                                          "reason": "非图片文件（如音频）不能作为图片输入，已剔除"})
         user_content = prompt or "请处理输入。"
         try:
-            text = await self.connector.chat(
-                model, [{"role": "user", "content": user_content}],
-                images=images if images else None)
+            text = await self._interruptible_chat(model, user_content, images)
+        except WorkflowCancel:
+            raise
         except Exception as e:
             return NodeResult(node["id"], ok=False, error=f"模型调用失败：{e}", model_used=model)
         return NodeResult(node["id"], ok=True, output=text, model_used=model)
@@ -296,7 +426,9 @@ class WorkflowEngine:
             await self._ensure_model(model)
             prompt = render_template(str(node.get("prompt") or "请判断并只输出分支名。"), self.variables)
             try:
-                text = await self.connector.chat(model, [{"role": "user", "content": prompt}])
+                text = await self._interruptible_chat(model, prompt, [])
+            except WorkflowCancel:
+                raise
             except Exception as e:
                 return (NodeResult(node["id"], ok=False, error=f"裁判模型调用失败：{e}",
                                    model_used=model), "false")
@@ -329,6 +461,15 @@ class WorkflowEngine:
         - 顺序链：branch = ["id1", "id2", ...] —— 按序执行（如"推理→保存"），
           每步输出可被后续步骤用 {{id.output}} 读取；链的输出 = 最后节点输出。
           （有依赖关系的步骤禁止用 parallel 分支——并发执行会竞态读空。）
+
+        0.2.4（W2/W9）执行模式与等待策略：
+        - fail_policy：失败策略 "abort"（默认，某批失败即中止整个循环）/
+          "skip"（跳过失败批，输出里该批为 null，继续后续批）/
+          "continue"（记录失败但继续，同 skip，别名）
+        - max_failures：允许的失败批数上限（0=不允许，达到上限后按
+          fail_policy 为 skip/continue 时也中止并报错汇总）
+        - wait_ms：批间等待毫秒（0=不等待），大批量推理时给模型/系统喘息，
+          也方便用户中途观察；等待期间响应取消标志。
         """
         items = resolve_value(node.get("items", ""), self.variables)
         if not isinstance(items, list):
@@ -336,7 +477,9 @@ class WorkflowEngine:
                               error=f"loop.items 不是列表：{type(items).__name__}")
         raw_branch = node.get("branch")
         if isinstance(raw_branch, str):
-            chain_ids = [raw_branch]
+            # 0.2.3：支持逗号分隔的顺序链字符串（前端表单输入形态，如 "ocr,save"）
+            parts = [p.strip() for p in raw_branch.split(",") if p.strip()]
+            chain_ids = parts if parts else ([raw_branch] if raw_branch else [])
         elif isinstance(raw_branch, list):
             chain_ids = [str(b) for b in raw_branch]
         else:
@@ -344,23 +487,98 @@ class WorkflowEngine:
         chain_nodes = [self.nodes.get(cid) for cid in chain_ids]
         if not chain_nodes or any(n is None for n in chain_nodes):
             return NodeResult(node["id"], ok=False, error="loop.branch 节点不存在")
+
+        # 0.2.4（W2）：失败策略与容忍上限
+        fail_policy = str(node.get("fail_policy") or "abort").strip().lower()
+        if fail_policy == "continue":
+            fail_policy = "skip"  # 别名归一
+        if fail_policy not in ("abort", "skip"):
+            fail_policy = "abort"
+        try:
+            max_failures = int(node.get("max_failures") or 0)
+        except (TypeError, ValueError):
+            max_failures = 0
+        # 0.2.4（W9）：批间等待（毫秒）
+        try:
+            wait_ms = max(0, int(node.get("wait_ms") or 0))
+        except (TypeError, ValueError):
+            wait_ms = 0
+
+        # 0.2.3：分批（batch_size）——把 items 切成每批 N 个，每轮 {{item}} 是
+        # 一个列表（如多张图片），{{item_index}} 是批序号。用于"一次 2-3 张
+        # 发给 OCR"场景；不设或 <=1 时保持逐项（{{item}} 为单个元素）。
+        try:
+            batch_size = int(node.get("batch_size") or 0)
+        except (TypeError, ValueError):
+            batch_size = 0
+        if batch_size > 1:
+            batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+        else:
+            batches = [[it] for it in items]
+
         outputs: list[Any] = []
-        for idx, item in enumerate(items):
+        failed_batches: list[str] = []  # 0.2.4：记录失败批描述
+        for idx, batch in enumerate(batches):
             self._check_cancel()
-            self.variables["item"] = item
+            # 单元素批保持旧行为（{{item}} 为单个元素），多元素批 {{item}} 为列表
+            first = batch[0] if len(batch) == 1 else batch
+            self.variables["item"] = first
             self.variables["item_index"] = idx
+            self.variables["batch"] = batch  # 始终可用的完整批次列表
+            # 0.2.3：{{item_name}}（文件名）/ {{item_stem}}（无扩展名），
+            # 供文件输出节点按原图名命名（如 {{item_stem}}.md）
+            if isinstance(first, str):
+                self.variables["item_name"] = Path(first).name
+                self.variables["item_stem"] = Path(first).stem
+            else:
+                self.variables.pop("item_name", None)
+                self.variables.pop("item_stem", None)
             last_output: Any = None
+            batch_ok = True
+            batch_error: str | None = None
             for cnode in chain_nodes:
                 r = await self._execute_node(cnode)
                 if not r.ok:
-                    return NodeResult(node["id"], ok=False, output=outputs,
-                                      error=f"第 {idx + 1} 项失败：{r.error}")
+                    batch_ok = False
+                    batch_error = r.error
+                    break
                 # 链内中间节点输出写入变量空间，供后续步骤模板引用
                 self.variables[str(cnode["id"])] = {"output": r.output}
                 last_output = r.output
-            outputs.append(last_output)
+
+            if batch_ok:
+                outputs.append(last_output)
+            else:
+                # 0.2.4（W2）：按失败策略处理
+                desc = f"第 {idx + 1} 批：{batch_error}"
+                if fail_policy == "abort":
+                    return NodeResult(node["id"], ok=False, output=outputs,
+                                      error=desc)
+                # skip：记录失败、输出占位、继续
+                failed_batches.append(desc)
+                outputs.append(None)
+                self._emit("loop_batch_skipped",
+                           {"loop_id": node["id"], "batch_index": idx, "error": str(batch_error)})
+                if max_failures > 0 and len(failed_batches) >= max_failures:
+                    return NodeResult(
+                        node["id"], ok=False, output=outputs,
+                        error=f"失败批数达到上限（{len(failed_batches)}/{max_failures}）："
+                              + "；".join(failed_batches[:3]))
+
+            # 0.2.4（W9）：批间等待（最后一批后不等；等待期间可被取消）
+            if wait_ms > 0 and idx < len(batches) - 1:
+                waited = 0.0
+                step = 0.5
+                while waited < wait_ms / 1000.0:
+                    self._check_cancel()
+                    await asyncio.sleep(min(step, wait_ms / 1000.0 - waited))
+                    waited += step
+
         self.variables.pop("item", None)
         self.variables.pop("item_index", None)
+        self.variables.pop("batch", None)
+        self.variables.pop("item_name", None)
+        self.variables.pop("item_stem", None)
         return NodeResult(node["id"], ok=True, output=outputs)
 
     async def _run_approval(self, node: dict) -> NodeResult:
@@ -458,6 +676,56 @@ class WorkflowEngine:
             return NodeResult(node["id"], ok=False, error=f"写入失败：{e}")
         return NodeResult(node["id"], ok=True, output=str(target))
 
+    async def _run_file_read(self, node: dict) -> NodeResult:
+        """文件读取节点：批量读取本机文件内容，拼接成一段文本输出（纯本地，不联网）。
+
+        配置项：
+          path（必填）：单个文件，或文件夹（读取其内文件）；支持 {{变量}}
+          extensions（可选）：扩展名过滤，如 "md, txt"
+          separator（可选）：文件间分隔模板，默认带文件名标题；支持 {{filename}}
+          max_bytes（可选）：单文件读取上限，默认 200000（防超大文件撑爆上下文）
+
+        输出：拼接后的文本（供推理/分析节点消费）。
+        """
+        raw_path = render_template(str(node.get("path") or ""), self.variables)
+        if not raw_path.strip():
+            return NodeResult(node["id"], ok=False, error="文件读取节点未配置 path")
+        p = Path(raw_path).expanduser()
+        if not p.exists():
+            return NodeResult(node["id"], ok=False, error=f"路径不存在：{p}")
+
+        exts = {e.strip().lower().lstrip(".") for e in
+                str(node.get("extensions") or "").split(",") if e.strip()}
+        if p.is_file():
+            files = [p]
+        else:
+            files = [f for f in p.iterdir() if f.is_file()]
+            if exts:
+                files = [f for f in files if f.suffix.lower().lstrip(".") in exts]
+            files.sort(key=lambda f: str(f))
+        if not files:
+            return NodeResult(node["id"], ok=False,
+                              error=f"没有可读的文件：{p}（extensions={sorted(exts) or '全部'}）")
+
+        try:
+            max_bytes = int(node.get("max_bytes") or 200000)
+        except (TypeError, ValueError):
+            max_bytes = 200000
+        sep_tpl = node.get("separator")
+
+        chunks: list[str] = []
+        for f in files:
+            try:
+                text = f.read_bytes()[:max_bytes].decode("utf-8", errors="replace")
+            except OSError as e:
+                return NodeResult(node["id"], ok=False, error=f"读取失败 {f.name}：{e.strerror}")
+            if sep_tpl is not None:
+                header = render_template(str(sep_tpl), {**self.variables, "filename": f.name})
+                chunks.append(f"{header}\n{text}")
+            else:
+                chunks.append(f"=== {f.name} ===\n{text}")
+        return NodeResult(node["id"], ok=True, output="\n\n".join(chunks))
+
     async def _execute_node(self, node: dict) -> NodeResult:
         """执行单个节点（含重试）。"""
         retry_limit = int(node.get("retry") or 0)
@@ -480,11 +748,16 @@ class WorkflowEngine:
                 res = await self._run_file_input(node)
             elif ntype == "file_output":
                 res = await self._run_file_output(node)
+            elif ntype == "file_read":
+                res = await self._run_file_read(node)
             elif ntype in ("start", "end"):
                 res = NodeResult(node["id"], ok=True, output=None)
             elif ntype == "condition":
-                res = NodeResult(node["id"], ok=False,
-                                 error="条件节点只能作为主链节点，不能放在并行分支/循环内")
+                # 0.2.4（W5）：条件节点允许放在循环/并行体内，此时作为
+                # "条件求值器"执行——输出判定结果（"true"/"false" 或动态分支名），
+                # 写入变量空间供链内下游节点 {{node_id.output}} 引用。
+                # 路由（when 边）仅主链生效；循环体内不做分支跳转（循环链为顺序执行）。
+                res, _when = await self._run_condition(node)
             else:
                 res = NodeResult(node["id"], ok=False, error=f"未知节点类型：{ntype}")
             res.duration_ms = int((time.time() - t0) * 1000)

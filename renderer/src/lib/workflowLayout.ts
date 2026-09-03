@@ -50,7 +50,43 @@ export function layoutWorkflow(definition: WfDefinition): Record<string, { x: nu
     }
   });
 
-  // 分层：最长路径松弛（限制轮数防环）
+  // 0.2.4（W3）：破环——检测并移除回边（指向已分层祖先的边）。
+  // 背景：条件节点放进循环体、或用户连出回路时，"最长路径松弛"会被环
+  // 反复推深层，节点被压到极深层 → 画布出现跨越巨大空隙的超长连线。
+  // 做法：先按 start 可达性做拓扑着色，凡是"目标节点已在当前路径上"的回边
+  // 不参与分层（从邻接表中移除）。用 Kahn 入度法检测环更稳妥。
+  const indeg: Record<string, number> = {};
+  ids.forEach(id => { indeg[id] = 0; });
+  Object.values(adj).forEach(tos => tos.forEach(t => { indeg[t] = (indeg[t] || 0) + 1; }));
+  // Kahn：若全部出队失败（有环），逐轮剪回边——找仍有余入度的节点中，
+  // 其"仍在余图中入度>0 的入邻居"里层数最小者作为回边剪除。
+  // 简化实现：反复用 DFS 检测环并剪除环上最后一条边，直到无环。
+  const removeBackEdges = () => {
+    for (let guard = 0; guard < nodes.length * 2; guard++) {
+      const color: Record<string, number> = {}; // 0=白 1=灰 2=黑
+      let backFrom = '', backTo = '';
+      const dfs = (u: string, stack: string[]): boolean => {
+        color[u] = 1;
+        for (const v of (adj[u] || [])) {
+          if (color[v] === 1) { backFrom = u; backTo = v; return true; } // 命中回边
+          if (!color[v] && dfs(v, [...stack, u])) return true;
+        }
+        color[u] = 2;
+        return false;
+      };
+      const roots = nodes.map(n => n.id);
+      let found = false;
+      for (const r of roots) {
+        if (!color[r] && dfs(r, [])) { found = true; break; }
+      }
+      if (!found) return; // 无环
+      // 剪除回边 backFrom -> backTo
+      adj[backFrom] = (adj[backFrom] || []).filter(t => t !== backTo);
+    }
+  };
+  removeBackEdges();
+
+  // 分层：最长路径松弛（环已剪除，必然收敛）
   const layer: Record<string, number> = {};
   const start = nodes.find(n => n.type === 'start');
   if (start) layer[start.id] = 0;

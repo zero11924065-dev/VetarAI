@@ -15,7 +15,8 @@ const NODE_TYPE_OPTIONS = [
   { value: 'parallel', label: '并行' },
   { value: 'loop', label: '循环' },
   { value: 'approval', label: '人工审批' },
-  { value: 'file_input', label: '文件输入（读本机文件）' },
+  { value: 'file_input', label: '文件输入（选本机文件）' },
+  { value: 'file_read', label: '文件读取（批量读内容）' },
   { value: 'file_output', label: '文件输出（保存到本机）' },
   { value: 'end', label: '结束' },
 ];
@@ -66,7 +67,7 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
     const labelMap: Record<string, string> = {
       inference: '推理节点', tool: '工具节点', condition: '条件分支',
       parallel: '并行节点', loop: '循环节点', approval: '人工审批',
-      file_input: '文件输入', file_output: '文件输出', end: '结束',
+      file_input: '文件输入', file_read: '文件读取', file_output: '文件输出', end: '结束',
     };
     const nn: any = { id, type: newNodeType, label: labelMap[newNodeType] || id };
     if (newNodeType === 'inference') { nn.model = models[0] || ''; nn.prompt = ''; nn.retry = 0; }
@@ -76,6 +77,7 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
     if (newNodeType === 'loop') { nn.items = ''; nn.branch = ''; }
     if (newNodeType === 'approval') { nn.message = '请确认是否继续。'; }
     if (newNodeType === 'file_input') { nn.path = ''; nn.extensions = ''; nn.recursive = false; }
+    if (newNodeType === 'file_read') { nn.path = ''; nn.extensions = ''; nn.separator = ''; }
     if (newNodeType === 'file_output') { nn.dir = ''; nn.filename = ''; nn.content = ''; }
     onChange({ ...definition, nodes: [...nodes, nn] });
   };
@@ -211,13 +213,35 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
 
             {node.type === 'loop' && (
               <>
-                <label style={FIELD_LABEL}>列表变量（如 {'{{params.list}}'}）</label>
+                <label style={FIELD_LABEL}>列表变量（如 {'{{文件输入.output}}'}）</label>
                 <input style={{ ...input, width: '100%' }} value={node.items || ''}
                   onChange={e => patchNode(node.id, { items: e.target.value })} />
-                <label style={FIELD_LABEL}>循环体节点 id（内部可用 {'{{item}}'}）</label>
+                <label style={FIELD_LABEL}>循环体节点 id（顺序链用逗号分隔，内部可用 {'{{item}}'}）</label>
                 <input style={{ ...input, width: '100%' }} value={node.branch || ''}
                   onChange={e => patchNode(node.id, { branch: e.target.value.trim() })} />
                 <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 4 }}>可选：{nodeIds.join('、') || '（暂无节点）'}</div>
+                <label style={FIELD_LABEL}>分批大小（每轮处理几项，如一次 2-3 张图；留空或 1 = 逐项）</label>
+                <input style={{ ...input, width: 80 }} type="number" min={1} max={50}
+                  value={node.batch_size || ''} placeholder="1"
+                  onChange={e => patchNode(node.id, { batch_size: e.target.value ? Math.max(1, Number(e.target.value) || 1) : undefined })} />
+                <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 4 }}>
+                  分批时 {'{{item}}'} 为当批列表、{'{{batch}}'} 始终为当批列表、{'{{item_index}}'} 为批序号。
+                </div>
+                {/* 0.2.4（W2/W9）：执行模式与等待策略 */}
+                <label style={FIELD_LABEL}>失败策略</label>
+                <select style={{ ...select, width: '100%' }} value={node.fail_policy || 'abort'}
+                  onChange={e => patchNode(node.id, { fail_policy: e.target.value })}>
+                  <option value="abort">中止循环（遇到失败批立即停止，默认）</option>
+                  <option value="skip">跳过失败批继续（输出占位，继续处理后续批）</option>
+                </select>
+                <label style={FIELD_LABEL}>允许失败批数上限（0 = 不允许失败；仅"跳过"策略生效）</label>
+                <input style={{ ...input, width: 80 }} type="number" min={0} max={100}
+                  value={node.max_failures ?? 0} placeholder="0"
+                  onChange={e => patchNode(node.id, { max_failures: Math.max(0, Number(e.target.value) || 0) })} />
+                <label style={FIELD_LABEL}>批间等待（毫秒，0 = 不等待；大批量推理建议 500~2000 给模型喘息）</label>
+                <input style={{ ...input, width: 100 }} type="number" min={0} step={100}
+                  value={node.wait_ms ?? 0} placeholder="0"
+                  onChange={e => patchNode(node.id, { wait_ms: Math.max(0, Number(e.target.value) || 0) })} />
               </>
             )}
 
@@ -235,20 +259,23 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
                 <div style={{ display: 'flex', gap: 6 }}>
                   <input style={{ ...input, flex: 1 }} value={node.path || ''} placeholder="/Users/你/材料/聊天记录"
                     onChange={e => patchNode(node.id, { path: e.target.value })} />
+                  {/* 0.2.4（W6）：文件与文件夹分开选，避免"只能选文件"的困惑 */}
                   <button style={{ ...btnSecondary, height: 30, fontSize: 12, padding: '0 8px', flexShrink: 0 }}
                     onClick={async () => {
                       const bridge = (window as any).subagent;
-                      if (bridge?.chooseInputFile) {
-                        const f = await bridge.chooseInputFile().catch(() => null);
-                        if (f) patchNode(node.id, { path: f });
-                      } else if (bridge?.chooseWorkingDir) {
-                        const d = await bridge.chooseWorkingDir().catch(() => null);
-                        if (d) patchNode(node.id, { path: d });
-                      }
-                    }}>选择</button>
+                      const f = await (bridge?.chooseInputFile ? bridge.chooseInputFile() : Promise.resolve(null)).catch(() => null);
+                      if (f) patchNode(node.id, { path: f });
+                    }}>选文件</button>
+                  <button style={{ ...btnSecondary, height: 30, fontSize: 12, padding: '0 8px', flexShrink: 0 }}
+                    onClick={async () => {
+                      const bridge = (window as any).subagent;
+                      const d = await (bridge?.chooseInputDir ? bridge.chooseInputDir()
+                        : bridge?.chooseWorkingDir ? bridge.chooseWorkingDir() : Promise.resolve(null)).catch(() => null);
+                      if (d) patchNode(node.id, { path: d });
+                    }}>选文件夹</button>
                 </div>
-                <label style={FIELD_LABEL}>扩展名过滤（逗号分隔，留空 = 全部）</label>
-                <input style={{ ...input, width: '100%' }} value={node.extensions || ''} placeholder="jpg, png, pdf"
+                <label style={FIELD_LABEL}>读取扩展名（白名单：只读这些类型，逗号分隔；留空 = 读全部）</label>
+                <input style={{ ...input, width: '100%' }} value={node.extensions || ''} placeholder="jpg, png, jpeg"
                   onChange={e => patchNode(node.id, { extensions: e.target.value })} />
                 <label style={FIELD_LABEL}>
                   <input type="checkbox" checked={!!node.recursive}
@@ -257,7 +284,39 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
                   文件夹时递归搜索子目录
                 </label>
                 <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
-                  输出：文件路径列表，可用循环节点 + {'{{item}}'} 逐个处理。
+                  输出：文件路径列表，可用循环节点 + {'{{item}}'} 逐个处理。非图片文件（如音频）不会作为图片传给视觉模型。
+                </div>
+              </>
+            )}
+
+            {node.type === 'file_read' && (
+              <>
+                <label style={FIELD_LABEL}>本机路径（文件或文件夹，支持 {'{{变量}}'}）</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input style={{ ...input, flex: 1 }} value={node.path || ''} placeholder="/Users/你/材料/聊天文本"
+                    onChange={e => patchNode(node.id, { path: e.target.value })} />
+                  <button style={{ ...btnSecondary, height: 30, fontSize: 12, padding: '0 8px', flexShrink: 0 }}
+                    onClick={async () => {
+                      const bridge = (window as any).subagent;
+                      const f = await (bridge?.chooseInputFile ? bridge.chooseInputFile() : Promise.resolve(null)).catch(() => null);
+                      if (f) patchNode(node.id, { path: f });
+                    }}>选文件</button>
+                  <button style={{ ...btnSecondary, height: 30, fontSize: 12, padding: '0 8px', flexShrink: 0 }}
+                    onClick={async () => {
+                      const bridge = (window as any).subagent;
+                      const d = await (bridge?.chooseInputDir ? bridge.chooseInputDir()
+                        : bridge?.chooseWorkingDir ? bridge.chooseWorkingDir() : Promise.resolve(null)).catch(() => null);
+                      if (d) patchNode(node.id, { path: d });
+                    }}>选文件夹</button>
+                </div>
+                <label style={FIELD_LABEL}>读取扩展名（白名单：只读这些类型，如 md, txt；留空 = 读全部）</label>
+                <input style={{ ...input, width: '100%' }} value={node.extensions || ''} placeholder="md, txt"
+                  onChange={e => patchNode(node.id, { extensions: e.target.value })} />
+                <label style={FIELD_LABEL}>文件间分隔模板（留空 = 默认"=== 文件名 ==="；可用 {'{{filename}}'}）</label>
+                <input style={{ ...input, width: '100%' }} value={node.separator || ''} placeholder="=== {{filename}} ==="
+                  onChange={e => patchNode(node.id, { separator: e.target.value })} />
+                <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
+                  输出：拼接后的全部文件内容文本，供推理/分析节点消费（纯本地读取，不联网）。
                 </div>
               </>
             )}

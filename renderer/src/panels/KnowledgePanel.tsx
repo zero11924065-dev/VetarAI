@@ -3,22 +3,25 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, btnGhost, input, textarea, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog } from '../Dialog';
+import { WarehouseManager } from './WarehouseManager';
 
 // TS-110 M4：知识/记忆/技能管理面板（三标签页）。
 // 知识库：<项目工作目录>/knowledge/*.md（_ 前缀=禁用）；记忆：全局/项目两份；技能：启用开关+增删改+仓库安装。
+// TS-120（0.3.0）：新增「知识仓库」标签——拉模式仓库资产管理器（全局/项目分组+打开文件夹）。
 
 const API = getApiBase();
 
 interface KnowledgeItem { name: string; size: number; enabled: boolean; }
 interface SkillItem { name: string; dir_name: string; description: string; enabled: boolean; }
 
-type Tab = 'knowledge' | 'memory' | 'skills';
+type Tab = 'knowledge' | 'warehouse' | 'memory' | 'skills';
 
 export function KnowledgePanel({ projectId }: { projectId: string | null }) {
   const [tab, setTab] = useState<Tab>('knowledge');
 
   const tabs: [Tab, string, React.ReactNode][] = [
     ['knowledge', '知识库', <Icon key="k" name="book" size={14} />],
+    ['warehouse', '知识仓库', <Icon key="w" name="database" size={14} />],
     ['memory', '记忆', <Icon key="m" name="database" size={14} />],
     ['skills', '技能', <Icon key="s" name="wrench" size={14} />],
   ];
@@ -39,7 +42,7 @@ export function KnowledgePanel({ projectId }: { projectId: string | null }) {
         </div>
       )}
 
-      {/* 标签头：三标签连排 */}
+      {/* 标签头：四标签连排 */}
       <div style={{ display: 'flex' }}>
         {tabs.map(([t, label, icon], idx) => {
           const selected = tab === t;
@@ -69,6 +72,7 @@ export function KnowledgePanel({ projectId }: { projectId: string | null }) {
       </div>
 
       {tab === 'knowledge' && <KnowledgeTab projectId={projectId} />}
+      {tab === 'warehouse' && <WarehouseManager />}
       {tab === 'memory' && <MemoryTab projectId={projectId} />}
       {tab === 'skills' && <SkillsTab />}
     </div>

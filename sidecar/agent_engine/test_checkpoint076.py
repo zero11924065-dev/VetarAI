@@ -195,14 +195,16 @@ async def main():
           str(res4)[:150])
     check("V2b 拦截时未发起模型调用", conn4.calls == 0, f"calls={conn4.calls}")
 
-    # V3 带图委派给多模态模型 → 名称层放行（不查元数据，用无网 conn 也不报错）
+    # V3 带图委派给多模态模型 → 名称层放行（不查元数据，不报"不支持图片"）。
+    # 用 ScriptConn 而非真实连接器：本测试验证的是"视觉守卫对多模态模型放行"
+    # 的逻辑，不应依赖本机是否真实安装了 qwen3-vl:8b（该模型可能已卸载）。
     store5, tmp5, pid5, main5 = _setup_store("ck076e")
     sub5 = store5.add_agent_config(pid5, "视觉专员", "sub", model_name="qwen3-vl:8b")
     conn5 = ScriptConn(["图片内容：测试通过"])
     res5 = await D.run_delegated_task(
         pid5, main5, "sess-main", store5.get_agent_config(pid5, sub5),
         "识别附图", "输出文字", sandbox_root=str(tmp5 / "work"),
-        authorizer=None, max_rounds=10, connector=None, images=imgs)
+        authorizer=None, max_rounds=10, connector=conn5, images=imgs)
     check("V3 多模态模型带图委派→放行", res5.get("ok") is True, str(res5)[:150])
 
     # ---------- T1 target 回错 + T2 suggested_role 兜底搜索（loop 路由层） ----------

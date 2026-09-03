@@ -8,6 +8,7 @@ import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, bt
 import { Icon, Spinner, IconName } from '../Icon';
 import { confirmDialog, promptDialog } from '../Dialog';
 import { on } from '../events';
+import { WarehousePanel } from './WarehousePanel';
 
 interface AgentConfig { id: string; name: string; role?: string; model_name?: string; type_: string; parent_agent_id?: string | null; system_prompt?: string | null; }
 interface Session { id: string; title: string; message_count: number; }
@@ -260,6 +261,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [pendingItems, setPendingItems] = useState<PendingItem[]>([]);
   const [sending, setSending] = useState(false);
+  // TS-120（0.3.0）：知识仓库——勾选模式与选中消息、转移弹窗、右侧面板开关
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferScope, setTransferScope] = useState<'project' | 'global'>('project');
+  const [transferTitle, setTransferTitle] = useState('');
+  const [transferCategory, setTransferCategory] = useState('');
+  const [transferKeywords, setTransferKeywords] = useState('');
+  const [transferring, setTransferring] = useState(false);
+  const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
   // checkpoint-059：活流标记——记录当前仍有进行中流的会话 id（H16 流继续场景）。
   // 切换/加载会话时，仅对该会话的缓存气泡跳过僵尸清理；其余会话的缓存视为"死态"清理。
   const activeStreamSidRef = useRef<string | null>(null);
@@ -565,17 +576,29 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   }
 
   // ── M7（TS-113）：导出会话为 Markdown（走统一默认导出目录）──
+  // 0.2.4（Z1 修复）：FastAPI 422 的 detail 是对象数组，直接拼接会渲染成
+  // "[object Object]"。_errMsg 统一提取可读文案。
+  const _errMsg = (d: any, status: number): string => {
+    const detail = d?.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      const msgs = detail.map((x: any) => x?.msg || '').filter(Boolean).join('；');
+      return msgs || `请求参数错误（HTTP ${status}）`;
+    }
+    if (detail && typeof detail === 'object') return JSON.stringify(detail);
+    return `HTTP ${status}`;
+  };
   async function handleExportSession() {
     if (!currentSessionId) return;
     try {
       setToast('正在导出…');
-      const res = await fetch(`${API}/sessions/${currentSessionId}/export`, {
+      const res = await fetch(`${API}/sessions/${currentSessionId}/export?project_id=${encodeURIComponent(projectId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project_id: projectId, agent_id: agentId }),
       });
       const d = await res.json();
-      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(_errMsg(d, res.status));
       setToast(`已导出：${d.name}`);
       setTimeout(() => setToast(null), 4000);
     } catch (e) {
@@ -591,13 +614,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     setSummarizing(true);
     setToast('正在生成总结…');
     try {
-      const res = await fetch(`${API}/sessions/${currentSessionId}/summarize`, {
+      const res = await fetch(`${API}/sessions/${currentSessionId}/summarize?project_id=${encodeURIComponent(projectId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project_id: projectId, agent_id: agentId, model: getEffectiveModel() }),
       });
       const d = await res.json();
-      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(_errMsg(d, res.status));
       setToast(`总结已保存 ✓（${d.saved_file?.split('/').pop() || ''}）`);
       setTimeout(() => setToast(null), 5000);
     } catch (e) {
@@ -606,6 +629,57 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     } finally {
       setSummarizing(false);
     }
+  }
+
+  // ── TS-120（0.3.0）：知识仓库——勾选消息转移入库 ──
+  async function handleTransferToWarehouse() {
+    if (!currentSessionId || selectedMsgIds.size === 0) return;
+    setTransferring(true);
+    try {
+      const res = await fetch(`${API}/knowledge/transfer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          session_id: currentSessionId,
+          message_ids: Array.from(selectedMsgIds),
+          scope: transferScope,
+          title: transferTitle.trim() || undefined,
+          category: transferCategory.trim(),
+          keywords: transferKeywords.trim()
+            ? transferKeywords.split(/[,，、\s]+/).filter(Boolean)
+            : [],
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(_errMsg(d, res.status));
+      // 标记已选消息为归档（脱离上下文、占位显示）
+      setLocalMessages(prev => prev.map(m =>
+        typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m));
+      if (currentSessionId) syncSessionLocal(currentSessionId, localMessages.map(m =>
+        typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m));
+      setToast(`已移入知识仓库 ✓（${d.title}）`);
+      setTimeout(() => setToast(null), 4000);
+      // 关闭弹窗、清空勾选
+      setShowTransferModal(false);
+      setSelectedMsgIds(new Set());
+      setSelectMode(false);
+      setTransferTitle(''); setTransferCategory(''); setTransferKeywords('');
+    } catch (e) {
+      setToast('转移失败: ' + (e as Error).message);
+      setTimeout(() => setToast(null), 4000);
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  function toggleMessageSelect(msgId: number | string | undefined) {
+    if (typeof msgId !== 'number') return;
+    setSelectedMsgIds(prev => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+      return next;
+    });
   }
 
   // ── 删除会话 ──
@@ -775,8 +849,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     setPendingItems([]);
 
     const modelUsed = getEffectiveModel();
+    // TS-120（0.3.0）：已移入知识仓库（archived）的消息不进入模型上下文
     const apiMessages = newLocal
-      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.archived)
       .map(m => ({ role: m.role, content: m.content }));
 
     // checkpoint-048：附件文本优先用后端解析结果（PDF/Word/Excel/CSV/文本族）；
@@ -1094,7 +1169,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const tokenBarColor = tokenRatio >= 0.99 ? colors.danger : tokenRatio >= 0.90 ? colors.warn : colors.ok;
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%', minWidth:0, overflow:'hidden', background:colors.bgApp }}>
+    <div style={{ display:'flex', height:'100%', minWidth:0, overflow:'hidden', background:colors.bgApp }}>
+    {/* 左侧：原会话面板（纵向）；右侧：知识仓库面板（可折叠） */}
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden' }}>
       {/* Top bar (§8.6) */}
       <div style={{ height:48, padding:'0 16px', borderBottom:`1px solid ${colors.borderSubtle}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',minWidth:0}}>
@@ -1134,6 +1211,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               <button className="ui-btn ui-btn-ghost" onClick={handleExportSession} title="导出会话为 Markdown"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
                 <Icon name="download" size={16} style={{color:colors.textSecondary}} />
+              </button>
+              {/* TS-120：勾选消息移入知识仓库 */}
+              <button className="ui-btn ui-btn-ghost"
+                onClick={() => { setSelectMode(v => !v); setSelectedMsgIds(new Set()); }}
+                title="勾选消息 → 移入知识仓库"
+                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:selectMode?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
+                <Icon name="check" size={16} style={{color:selectMode?colors.accentText:colors.textSecondary}} />
+              </button>
+              {/* TS-120：知识仓库面板开关（可收起） */}
+              <button className="ui-btn ui-btn-ghost"
+                onClick={() => setShowKnowledgePanel(v => !v)}
+                title="知识仓库（检索/注入）"
+                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:showKnowledgePanel?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
+                <Icon name="database" size={16} style={{color:showKnowledgePanel?colors.accentText:colors.textSecondary}} />
               </button>
               <button className="ui-btn ui-btn-ghost" onClick={() => handleRenameSession(currentSessionId)} title="重命名"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
@@ -1209,6 +1300,76 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       {/* Toast (§6.6) */}
       {toast && <div style={{ position:'absolute', top:60, right:16, background:colors.bgToast, color:'#FFFFFF', padding:'8px 14px', borderRadius:radius.s, fontSize:13, zIndex:999, boxShadow:shadow.m }}>{toast}</div>}
 
+      {/* TS-120：勾选模式浮动栏（选中 N 条 → 移入知识仓库） */}
+      {selectMode && (
+        <div style={{ position:'absolute', bottom:90, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:8, background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:radius.m, padding:'8px 14px', boxShadow:shadow.m, zIndex:998 }}>
+          <span style={{ fontSize:12, color:colors.textSecondary }}>已勾选 {selectedMsgIds.size} 条</span>
+          <button className="ui-btn ui-btn-primary" disabled={selectedMsgIds.size === 0 || transferring}
+            onClick={() => setShowTransferModal(true)}
+            style={{ ...btnPrimary, height:26, fontSize:12 }}>
+            {transferring ? <Spinner size={12} /> : null} 移入知识仓库
+          </button>
+          <button className="ui-btn ui-btn-ghost" onClick={() => { setSelectMode(false); setSelectedMsgIds(new Set()); }}
+            style={{ ...btnGhost, height:26, fontSize:12 }}>取消</button>
+        </div>
+      )}
+
+      {/* TS-120：转移弹窗（选作用域/标题/分类/关键词） */}
+      {showTransferModal && (
+        <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.35)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}
+          onClick={() => setShowTransferModal(false)}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ width:400, background:colors.bgCard, borderRadius:radius.l, boxShadow:shadow.l, padding:20 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+              <Icon name="database" size={16} style={{ color:colors.accentText }} />
+              <span style={{ fontSize:14, fontWeight:600, color:colors.textPrimary }}>移入知识仓库</span>
+              <span style={{ fontSize:12, color:colors.textTertiary }}>（{selectedMsgIds.size} 条）</span>
+            </div>
+            <div style={{ fontSize:12, color:colors.textTertiary, marginBottom:10, lineHeight:1.6 }}>
+              勾选的对话将保存为知识条目并脱离本会话上下文（不再发给模型）。内容以 .md 文件永久保存，你删除前一直在。
+            </div>
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:12, color:colors.textSecondary, marginBottom:4 }}>保存范围</div>
+              <div style={{ display:'flex', gap:6 }}>
+                {(['project', 'global'] as const).map(s => (
+                  <button key={s} onClick={() => setTransferScope(s)}
+                    style={{ flex:1, padding:'6px 0', fontSize:12, borderRadius:radius.s, cursor:'pointer',
+                      border: transferScope===s ? `1px solid ${colors.accentBorder}` : `1px solid ${colors.borderStrong}`,
+                      background: transferScope===s ? colors.accentBg : colors.bgCard,
+                      color: transferScope===s ? colors.accentText : colors.textSecondary }}>
+                    {s === 'project' ? '本项目（项目文件夹/知识库/）' : '全局（所有项目可用）'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:12, color:colors.textSecondary, marginBottom:4 }}>标题（留空自动取首条前 20 字）</div>
+              <input value={transferTitle} onChange={e => setTransferTitle(e.target.value)} placeholder="留空自动生成"
+                style={{ padding:'6px 10px', borderRadius:radius.s, border:`1px solid ${colors.borderStrong}`, background:colors.bgCard, color:colors.textPrimary, fontSize:13, width:'100%', boxSizing:'border-box' }} />
+            </div>
+            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:12, color:colors.textSecondary, marginBottom:4 }}>分类（可选）</div>
+                <input value={transferCategory} onChange={e => setTransferCategory(e.target.value)} placeholder="如：客户材料"
+                  style={{ padding:'6px 10px', borderRadius:radius.s, border:`1px solid ${colors.borderStrong}`, background:colors.bgCard, color:colors.textPrimary, fontSize:13, width:'100%', boxSizing:'border-box' }} />
+              </div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:12, color:colors.textSecondary, marginBottom:4 }}>关键词（可选，逗号分隔）</div>
+                <input value={transferKeywords} onChange={e => setTransferKeywords(e.target.value)} placeholder="如：聊天,证据"
+                  style={{ padding:'6px 10px', borderRadius:radius.s, border:`1px solid ${colors.borderStrong}`, background:colors.bgCard, color:colors.textPrimary, fontSize:13, width:'100%', boxSizing:'border-box' }} />
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button className="ui-btn ui-btn-ghost" onClick={() => setShowTransferModal(false)} style={{ ...btnGhost, height:28 }}>取消</button>
+              <button className="ui-btn ui-btn-primary" disabled={transferring} onClick={handleTransferToWarehouse}
+                style={{ ...btnPrimary, height:28 }}>
+                {transferring ? <Spinner size={12} /> : null} 确认转移
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* M5（TS-111）：断线重连提示条 (§8.8) */}
       {reconnectNotice && (
         <div style={{ ...calloutStyle('warn'), borderRadius:0, padding:'6px 16px', borderBottom:`1px solid ${colors.warnBorder}` }}>
@@ -1236,12 +1397,26 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             <div key={msg.id || i} style={{ marginBottom:12, display:'flex', flexDirection:'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
               {/* 角色标签行 */}
               <div style={{fontSize:11,color:colors.textTertiary,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
+                {/* TS-120：勾选模式下显示复选框（系统消息不可勾选） */}
+                {selectMode && !isSystem && typeof msg.id === 'number' && (
+                  <input type="checkbox" checked={selectedMsgIds.has(msg.id)}
+                    onChange={() => toggleMessageSelect(msg.id)}
+                    style={{ accentColor: colors.accent, cursor: 'pointer' }} />
+                )}
                 <Icon name={isUser ? 'user' : isSystem ? 'info' : 'bot'} size={12} />
                 {isUser ? '你' : isSystem ? '系统' : (msg.model_used || 'AI')}
                 {msg.created_at && <span style={{marginLeft:4,opacity:0.7}}>{formatTime(msg.created_at)}</span>}
               </div>
               {/* 气泡 */}
               <div style={{ maxWidth:'78%', padding:'10px 14px', borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
+                {msg.archived ? (
+                  /* TS-120：已移入知识仓库 → 占位提示（内容脱离模型上下文，文件永久保存在仓库） */
+                  <div style={{ fontSize:12, color: colors.textTertiary, display:'flex', alignItems:'center', gap:6, fontStyle:'italic' }}>
+                    <Icon name="database" size={13} />
+                    此内容已移入知识仓库，不再参与对话上下文
+                  </div>
+                ) : (
+                <>
                 {(() => {
                   // 0.1.71（TS-118）：pending_images=本地流式附着图；images=DB 落库的委派附着图（子会话回看）
                   const _imgs = msg.pending_images ?? msg.images;
@@ -1290,6 +1465,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                   <div style={{ marginTop:6, fontSize:11, color:colors.textTertiary }}>
                     步骤 {msg.step ?? 0}/{msg.maxStep ?? 5} · 已用 {msg.tokensUsed ?? 0} tokens
                   </div>
+                )}
+                </>
                 )}
               </div>
               {/* M1-4：error 事件红色块 + 已完成部分提示 + 重发按钮；M5：模型降级卡片 + 复制错误 */}
@@ -1412,6 +1589,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           </button>
         )}
       </div>
+    </div>
+    {/* TS-120：右侧知识仓库面板（可折叠，默认收起，不影响会话区布局） */}
+    {showKnowledgePanel && (
+      <WarehousePanel
+        projectId={projectId}
+        onClose={() => setShowKnowledgePanel(false)}
+        onInject={(text) => {
+          // 把勾选知识拼进输入框（作为用户消息注入会话，仅勾选的条目）
+          setInput(prev => prev ? prev + '\n\n' + text : text);
+          setToast('知识已注入输入框，确认后发送');
+          setTimeout(() => setToast(null), 3000);
+        }}
+      />
+    )}
     </div>
   );
 }

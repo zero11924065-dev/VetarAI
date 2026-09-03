@@ -44,8 +44,10 @@ describe('formatTime 时间戳格式化（TS-116 3.28）', () => {
     const pad = (n: number) => String(n).padStart(2, '0');
     const iso = `${anchor.getFullYear()}-${pad(anchor.getMonth()+1)}-${pad(anchor.getDate())} ${pad(anchor.getHours())}:${pad(anchor.getMinutes())}:00`;
     const result = formatTime(iso);
-    // 12:00 本地 → UTC 解析后可能是"今天"或"刚刚"（取决于时区），两种都合法
-    const valid = result === '刚刚' || /^\d{2}:\d{2}$/.test(result);
+    // 12:00 本地 → UTC 解析后可能是"今天"（HH:MM）、"刚刚"、或"X 分钟前"
+    // （取决于时区与运行时刻，三种都合法）。0.2.4 补上"分钟前"分支，
+    // 消除时间窗口导致的 flaky（运行于锚点+1~59 分钟区间时命中）。
+    const valid = result === '刚刚' || /^\d{2}:\d{2}$/.test(result) || /分钟前$/.test(result);
     expect(valid).toBe(true);
   });
 

@@ -86,6 +86,12 @@ def export_session_md(project_id: str, session_id: str,
         role = m.get("role", "unknown")
         content = m.get("content", "") or ""
         created = m.get("created_at", "")
+        if m.get("archived"):
+            # TS-120：已移入知识仓库的消息导出时以占位提示替代，不带出原文
+            lines.append(f"**{role}** ({created})")
+            lines.append("（此内容已移入知识仓库）")
+            lines.append("")
+            continue
         tool_steps = m.get("tool_steps")
         if role == "assistant" and tool_steps:
             try:

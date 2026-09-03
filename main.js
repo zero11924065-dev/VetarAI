@@ -9,7 +9,7 @@ let sidecarProcess = null;
 
 // checkpoint-053（用户需求：应用名全局改为 VetarAI + 关于信息放原生菜单栏）
 const APP_NAME = 'VetarAI';
-const APP_VERSION = '0.2.2';
+const APP_VERSION = '0.3.0';
 const APP_TAGLINE_CN = '一款零生态基础的Agent工具';
 const APP_TAGLINE_EN = 'An ecosystem-agnostic Agent tool.';
 
@@ -278,18 +278,35 @@ ipcMain.handle('choose-working-dir', async (_event, options = {}) => {
   }
 });
 
-// ── IPC: 0.2.2 工作流文件输入节点——选择本机单个文件（只读对话框，不读取内容）──
-ipcMain.handle('choose-input-file', async () => {
+// ── IPC: 0.2.2 工作流文件输入节点——选择本机文件（只读对话框，不读取内容）──
+// 0.2.4（W6）：支持多选文件 + 新增独立的"选文件夹"处理器。
+ipcMain.handle('choose-input-file', async (_event, options = {}) => {
   if (!mainWindow) return null;
   try {
     const res = await dialog.showOpenDialog(mainWindow, {
-      title: '选择文件',
-      properties: ['openFile'],
+      title: options.title || '选择文件',
+      properties: options.multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+    });
+    if (res.canceled || !res.filePaths || res.filePaths.length === 0) return null;
+    return options.multiple ? res.filePaths : res.filePaths[0];
+  } catch (e) {
+    console.log('[ipc choose-input-file]', e);
+    return null;
+  }
+});
+
+// ── IPC: 0.2.4（W6）工作流文件节点——选择本机文件夹（只读对话框）──
+ipcMain.handle('choose-input-dir', async (_event, options = {}) => {
+  if (!mainWindow) return null;
+  try {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: options.title || '选择文件夹',
+      properties: ['openDirectory', 'createDirectory'],
     });
     if (res.canceled || !res.filePaths || res.filePaths.length === 0) return null;
     return res.filePaths[0];
   } catch (e) {
-    console.log('[ipc choose-input-file]', e);
+    console.log('[ipc choose-input-dir]', e);
     return null;
   }
 });

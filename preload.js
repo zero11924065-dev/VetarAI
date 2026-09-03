@@ -29,9 +29,10 @@ try {
 contextBridge.exposeInMainWorld('__SUBAGENT__', injected);
 
 // 最小 IPC 桥：仅暴露目录选择器（B3）、打开日志文件夹（checkpoint-043）、
-// 文件选择器（0.2.2 工作流文件输入节点），不暴露任意 invoke
+// 文件/文件夹选择器（0.2.2/0.2.4 工作流文件节点），不暴露任意 invoke
 contextBridge.exposeInMainWorld('subagent', {
   chooseWorkingDir: () => ipcRenderer.invoke('choose-working-dir'),
   openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
-  chooseInputFile: () => ipcRenderer.invoke('choose-input-file'),
+  chooseInputFile: (options) => ipcRenderer.invoke('choose-input-file', options || {}),
+  chooseInputDir: (options) => ipcRenderer.invoke('choose-input-dir', options || {}),
 });
