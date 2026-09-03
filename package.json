@@ -1,7 +1,7 @@
 {
   "name": "vetarai",
   "productName": "VetarAI",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "VetarAI — 一款零生态基础的Agent工具 (An ecosystem-agnostic Agent tool)",
   "main": "main.js",
   "scripts": {

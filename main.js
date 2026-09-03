@@ -9,7 +9,7 @@ let sidecarProcess = null;
 
 // checkpoint-053（用户需求：应用名全局改为 VetarAI + 关于信息放原生菜单栏）
 const APP_NAME = 'VetarAI';
-const APP_VERSION = '0.4.1';
+const APP_VERSION = '0.4.2';
 const APP_TAGLINE_CN = '一款零生态基础的Agent工具';
 const APP_TAGLINE_EN = 'An ecosystem-agnostic Agent tool.';
 
