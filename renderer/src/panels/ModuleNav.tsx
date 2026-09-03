@@ -14,6 +14,9 @@ export type ModuleKey = 'intelligence' | 'workflow';
 interface Props {
   active: ModuleKey;
   onSelect: (key: ModuleKey) => void;
+  /** 问题6修复：设置入口上移到一级导航，流程中心也能打开设置 */
+  onOpenSettings?: () => void;
+  settingsActive?: boolean;
 }
 
 const MODULES: { key: ModuleKey; label: string; icon: IconName }[] = [
@@ -21,8 +24,8 @@ const MODULES: { key: ModuleKey; label: string; icon: IconName }[] = [
   { key: 'workflow', label: '流程中心', icon: 'layers' },
 ];
 
-export function ModuleNav({ active, onSelect }: Props) {
-  const [hover, setHover] = useState<ModuleKey | null>(null);
+export function ModuleNav({ active, onSelect, onOpenSettings, settingsActive }: Props) {
+  const [hover, setHover] = useState<ModuleKey | 'settings' | null>(null);
   return (
     <div style={{
       width: 64, flexShrink: 0, background: colors.bgSidebar,
@@ -31,7 +34,7 @@ export function ModuleNav({ active, onSelect }: Props) {
       paddingTop: 10, gap: 6,
     }}>
       {MODULES.map(m => {
-        const isActive = active === m.key;
+        const isActive = !settingsActive && active === m.key;
         const isHover = hover === m.key;
         return (
           <button key={m.key}
@@ -50,6 +53,25 @@ export function ModuleNav({ active, onSelect }: Props) {
           </button>
         );
       })}
+      {/* 问题6：设置固定在导航底部——职能中心/流程中心都能进入设置 */}
+      {onOpenSettings && (
+        <button
+          onClick={onOpenSettings}
+          onMouseEnter={() => setHover('settings')}
+          onMouseLeave={() => setHover(null)}
+          title="设置"
+          style={{
+            marginTop: 'auto', marginBottom: 10,
+            width: 52, height: 52, border: 'none', borderRadius: 8, cursor: 'pointer',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
+            background: settingsActive ? colors.bgSelected : hover === 'settings' ? colors.bgHover : 'transparent',
+            color: settingsActive ? colors.accentText : colors.textSecondary,
+            fontFamily: fonts.base, transition: 'background-color .15s ease',
+          }}>
+          <Icon name="settings" size={20} />
+          <span style={{ fontSize: 10, fontWeight: settingsActive ? 600 : 400 }}>设置</span>
+        </button>
+      )}
     </div>
   );
 }

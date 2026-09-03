@@ -688,15 +688,21 @@ class WorkflowEngine:
             return NodeResult(node["id"], ok=False, error="文本输出节点缺少 template")
         return NodeResult(node["id"], ok=True, output=render_template(tpl, self.variables))
 
+    # 变量赋值禁止的保留名：会覆盖参数/循环内置变量导致下游错乱（查虫W-2）
+    _RESERVED_VAR_NAMES = {"params", "item", "item_index", "batch"}
+
     async def _run_variable_set(self, node: dict) -> NodeResult:
         """变量赋值节点：把值写入变量空间（{{name}} 可供下游引用）。
 
-        配置项：name（必填，变量名，不含 .）、value（支持 {{...}} 引用；
-        整串 {{x}} 保持原值类型，混合模板渲染为字符串）。
+        配置项：name（必填，变量名，不含 . 且不能是保留名 params/item/item_index/batch）、
+        value（支持 {{...}} 引用；整串 {{x}} 保持原值类型，混合模板渲染为字符串）。
         变量空间与 node 输出空间并列：variables[name] = 值（不包 output 壳）。"""
         name = str(node.get("name") or "").strip()
         if not name or "." in name or "/" in name:
             return NodeResult(node["id"], ok=False, error=f"变量名非法：{name!r}（不能为空或含 . /）")
+        if name in self._RESERVED_VAR_NAMES:
+            return NodeResult(node["id"], ok=False,
+                              error=f"变量名 {name!r} 是保留名（{', '.join(sorted(self._RESERVED_VAR_NAMES))}），请换一个")
         value = resolve_value(node.get("value", ""), self.variables)
         self.variables[name] = value
         return NodeResult(node["id"], ok=True, output=value)
@@ -706,17 +712,31 @@ class WorkflowEngine:
 
         配置项：code（必填 Python 源码）。约定：代码内通过 variables 字典
         读上游（variables['节点id']['output'] / variables['变量名']），
-        把结果赋给 result 变量即为本节点输出。超时 30s。
+        把结果赋给 result 变量即为本节点输出。
+
+        超时：默认 30s，可用节点字段 timeout_s 调整（1~300）（查虫W-1 修复：
+        此前文档承诺超时但未实现，死循环会卡死工作流）。
+        注意：Python 线程不可强杀——超时后节点判失败、工作流继续，但失控线程
+        仍会占用一个 CPU 核直到自行结束，这是语言层限制，已在节点错误中说明。
         安全提示：代码在本机以本应用权限运行，与 tool 节点同级信任面。"""
         code_src = str(node.get("code") or "")
         if not code_src.strip():
             return NodeResult(node["id"], ok=False, error="代码执行节点缺少 code")
+        try:
+            timeout_s = min(max(int(node.get("timeout_s") or 30), 1), 300)
+        except (TypeError, ValueError):
+            timeout_s = 30
         # 给代码一个可读的只读引用 env（同时保留 variables 原引用供高级用法）
         env: dict[str, Any] = {"variables": self.variables, "result": None}
         try:
             compiled = compile(code_src, f"<workflow-node-{node['id']}>", "exec")
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, exec, compiled, env)  # 同步代码不阻塞事件循环
+            # 同步代码丢线程池不阻塞事件循环；超时防死循环卡死工作流
+            await asyncio.wait_for(
+                loop.run_in_executor(None, exec, compiled, env), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            return NodeResult(node["id"], ok=False,
+                              error=f"代码执行超时（{timeout_s}s）：可能存在死循环。工作流已继续，但失控线程会占用 CPU 直到其自行结束")
         except Exception as e:
             return NodeResult(node["id"], ok=False, error=f"代码执行异常：{type(e).__name__}: {e}")
         return NodeResult(node["id"], ok=True, output=env.get("result"))

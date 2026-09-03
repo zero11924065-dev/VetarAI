@@ -105,7 +105,7 @@ const hintStyle: React.CSSProperties = {
   marginTop: 3,
 };
 
-export function SettingsPanel({ onClose, embedded, onOpenLogs }: { onClose?: () => void; embedded?: boolean; onOpenLogs?: () => void }) {
+export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: { onClose?: () => void; embedded?: boolean; onOpenLogs?: () => void; onOpenDataDir?: () => void }) {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -199,22 +199,14 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs }: { onClose?: () 
 
   return (
     <div style={{ padding: 0 }}>
-      {/* 顶部操作栏：打开日志文件夹 + 关闭按钮 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        {onOpenLogs && (
-          <button
-            className="ui-btn ui-btn-secondary"
-            onClick={onOpenLogs}
-            style={{ ...btnSecondary, gap: 6 }}
-          >
-            <Icon name="folder" size={14} />
-            打开日志文件夹
-          </button>
-        )}
+      {/* 顶部操作栏：关闭按钮。问题5：原"打开日志文件夹"与基础区按钮重复（打开同一目录），
+          已统一收进下方"基础"区底部，与"打开数据缓存目录"分列两个按钮 */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 20 }}>
         {onClose && (
           <button
             className="ui-btn ui-btn-ghost"
             onClick={onClose}
+            title="关闭"
             style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textSecondary, padding: 4 }}
           >
             <Icon name="x" size={16} />
@@ -233,6 +225,33 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs }: { onClose?: () 
         <div style={{ ...calloutStyle('success'), marginBottom: 12 }}>
           <Icon name="check" size={16} style={{ flexShrink: 0, marginTop: 2 }} />
           <span>{msg}</span>
+        </div>
+      )}
+
+      {/* 问题5修复：日志与数据缓存是两个不同的目录，分两个按钮（顶层渲染，
+          不依赖配置加载状态，配置未加载完成也可点）：
+          · 日志文件夹 → logs/（app.log / sidecar.log）
+          · 数据缓存目录 → 数据根（数据库、导出、知识索引、全局知识等） */}
+      {(onOpenLogs || onOpenDataDir) && (
+        <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {onOpenLogs && (
+            <div>
+              <button className="ui-btn ui-btn-secondary" onClick={onOpenLogs}
+                style={{ ...btnSecondary, gap: 6 }}>
+                <Icon name="folder" size={14} /> 打开日志文件夹
+              </button>
+              <div style={hintStyle}>应用运行日志（app.log、sidecar.log），排查报错看这里。</div>
+            </div>
+          )}
+          {onOpenDataDir && (
+            <div>
+              <button className="ui-btn ui-btn-secondary" onClick={onOpenDataDir}
+                style={{ ...btnSecondary, gap: 6 }}>
+                <Icon name="database" size={14} /> 打开数据缓存目录
+              </button>
+              <div style={hintStyle}>应用数据根目录：数据库、会话导出、知识仓库索引与全局知识等。按需清理前请先确认用途。</div>
+            </div>
+          )}
         </div>
       )}
 
@@ -277,17 +296,6 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs }: { onClose?: () 
               默认 200，范围 1-1000。轮次越大，Agent 可执行越复杂的任务，但也消耗更多 token。
               无效空转有独立防护（连续失败自动停止、重复搜索自动拦截），无需靠轮次上限兜底
             </div>
-
-            {/* checkpoint-067b D-5：打开缓存/日志目录入口 */}
-            {onOpenLogs && (
-              <div style={{ marginTop: 12 }}>
-                <button className="ui-btn ui-btn-secondary" onClick={onOpenLogs}
-                  style={{ ...btnSecondary, gap: 6 }}>
-                  <Icon name="folder" size={14} /> 打开缓存与日志目录
-                </button>
-                <div style={hintStyle}>查看应用日志、压缩归档等缓存文件，按需清理。</div>
-              </div>
-            )}
           </div>
 
           {/* ===== 稳定性 ===== */}

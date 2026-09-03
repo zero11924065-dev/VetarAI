@@ -88,6 +88,8 @@ def _node_errors(node: dict, idx: int) -> list[str]:
             errs.append(f"节点[{idx}]（变量赋值）缺少变量名")
         elif "." in name or "/" in name:
             errs.append(f"节点[{idx}]（变量赋值）变量名不能含 . 或 /：{name!r}")
+        elif name in ("params", "item", "item_index", "batch"):
+            errs.append(f"节点[{idx}]（变量赋值）{name!r} 是保留名，请换一个变量名")
     if ntype == "code":
         if not str(node.get("code") or "").strip():
             errs.append(f"节点[{idx}]（代码执行）缺少 code")

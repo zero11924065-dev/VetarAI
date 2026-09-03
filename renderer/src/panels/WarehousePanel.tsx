@@ -28,13 +28,17 @@ export interface WarehouseEntry {
   body?: string;
 }
 
-export function WarehousePanel({ projectId, onInject, onClose }: {
+export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
   projectId: string;
   /** 把勾选条目注入会话（父组件负责拼成用户消息发送） */
   onInject: (text: string) => void;
   onClose: () => void;
+  /** TS-121 查虫C：刚转移到哪个作用域，面板就定位到哪个作用域 */
+  initialScope?: 'project' | 'global';
 }) {
-  const [scope, setScope] = useState<'project' | 'global'>('project');
+  const [scope, setScope] = useState<'project' | 'global'>(initialScope || 'project');
+  // TS-121 查虫C：面板已展开时，外部转移到另一作用域 → 定位跟随
+  useEffect(() => { if (initialScope) setScope(initialScope); }, [initialScope]);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<WarehouseEntry[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -61,9 +65,26 @@ export function WarehousePanel({ projectId, onInject, onClose }: {
     }
   }, [query, scope, projectId]);
 
-  // TS-121（问题2）：面板每次展开/挂载都拉取当前作用域最新条目——
-  // 转移入库后自动展开时立即可见新条目，外部增删文件（经后端对账）也即时反映。
-  useEffect(() => { doSearch(); }, [doSearch]);
+  // TS-121（问题2 + 查虫A）：挂载/切换作用域时自动载入该作用域全部条目——
+  // 转移入库后自动展开即见新条目，外部增删（经后端对账）也即时反映。
+  // 关键：依赖只有 scope/projectId，不含 query——否则输入框每敲一键就发一次请求。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set('scope', scope);
+        if (scope === 'project') params.set('project_id', projectId);
+        const res = await fetch(`${API}/knowledge/entries?${params}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setResults(Array.isArray(data) ? data : []);
+        setChecked(new Set());
+      } catch { /* 静默：列表加载失败不打断面板 */ }
+    })();
+    return () => { cancelled = true; };
+  }, [scope, projectId]);
 
   const toggleCheck = (id: string) => {
     setChecked(prev => {

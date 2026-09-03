@@ -1759,9 +1759,10 @@ async def api_knowledge_transfer(req: KnowledgeTransferReq):
         raise HTTPException(status_code=400, detail="scope 必须是 project 或 global")
     msgs = load_messages(req.project_id, req.session_id)
     id_set = set(req.message_ids)
-    picked = [m for m in msgs if m.get("id") in id_set]
+    # 查虫K-2：已归档（已转移入仓库）的消息不再参与转移，防重复生成条目
+    picked = [m for m in msgs if m.get("id") in id_set and not m.get("archived")]
     if not picked:
-        raise HTTPException(status_code=404, detail="未找到指定消息")
+        raise HTTPException(status_code=404, detail="未找到指定消息（或消息已在知识仓库中）")
     # 组装正文（角色: 内容）
     body_lines = []
     for m in picked:
@@ -1797,6 +1798,7 @@ async def api_knowledge_list(scope: str | None = None, project_id: str | None = 
 
 @app.get("/api/knowledge/entries/{entry_id}")
 async def api_knowledge_get(entry_id: str):
+    _wh.prune_missing()  # 查虫K-1：外部删除后单条读取也同步，不返回幽灵条目
     entry = _wh.get_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="知识条目不存在")
@@ -1826,6 +1828,7 @@ class KnowledgeInjectReq(BaseModel):
 @app.post("/api/knowledge/inject")
 async def api_knowledge_inject(req: KnowledgeInjectReq):
     """把勾选条目的正文拼为可发送文本（前端作为用户消息注入会话）。"""
+    _wh.prune_missing()  # 查虫K-1：外部删除的条目不参与注入
     parts = []
     for eid in req.entry_ids:
         e = _wh.get_entry(eid)

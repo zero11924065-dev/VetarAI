@@ -324,6 +324,19 @@ ipcMain.handle('open-logs-folder', async () => {
   }
 });
 
+// ── IPC: 打开数据缓存目录（问题5修复：与日志目录分开——数据库/导出/知识索引/全局知识都在这里）──
+ipcMain.handle('open-data-dir', async () => {
+  try {
+    const cfg = readConfig();
+    const dir = (cfg.dataRoot || '~/.subagent').replace(/^~/, os.homedir());
+    fs.mkdirSync(dir, { recursive: true });
+    const err = await shell.openPath(dir);
+    return { ok: !err, dir, error: err || '' };
+  } catch (e) {
+    return { ok: false, dir: '', error: String(e && e.message || e) };
+  }
+});
+
 // ── IPC: 同步下发配置（2026-08-28 修复）────────────────────────────
 // 沙盒化渲染进程的 preload 不能读文件系统（禁 require fs），
 // 改由主进程在 preload 加载时同步提供配置注入对象。

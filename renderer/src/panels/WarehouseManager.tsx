@@ -41,6 +41,18 @@ export function WarehouseManager() {
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
+  // 问题3修复：用户从 Finder 删除 .md 后回到应用，计数要自动刷新——
+  // 不能依赖切页重挂载。窗口重获焦点 + 页面重新可见两个时机都刷新（后端读取前对账）。
+  useEffect(() => {
+    const onRefresh = () => { refresh(); };
+    window.addEventListener('focus', onRefresh);
+    document.addEventListener('visibilitychange', onRefresh);
+    return () => {
+      window.removeEventListener('focus', onRefresh);
+      document.removeEventListener('visibilitychange', onRefresh);
+    };
+  }, [refresh]);
+
   const openDir = async (g: KnowledgeGroup) => {
     setOpening(g.dir);
     try {

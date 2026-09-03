@@ -878,6 +878,37 @@ async def main():
          {"from": "c", "to": "r"}, {"from": "r", "to": "e"}]))
     check("H5 四节点缺必填均报错", len(errs_h5) >= 4, str(errs_h5))
 
+    # H6（查虫W-1）：代码节点超时判失败且不卡死工作流
+    # 注意：不能用 while True（失控线程永不退出，事件循环关停会卡死测试进程，
+    # 这也实证了引擎注释中"语言层不可强杀"的限制）。用 sleep(5)+timeout 1s：
+    # 1s 后节点判超时失败，线程 5s 后自行退出，测试可正常收口。
+    defn_h6 = _defn([_n("s", "start"),
+                     _n("c", "code", code="import time; time.sleep(5)", timeout_s=1),
+                     _n("e", "end")],
+                    [{"from": "s", "to": "c"}, {"from": "c", "to": "e"}])
+    import time as _time_h6
+    _t0_h6 = _time_h6.monotonic()
+    evs_h6 = []
+    async for ev in _WE3("run-h6", defn_h6, FakeConn({}), str(htmp)).run():
+        evs_h6.append(ev)
+    _elapsed_h6 = _time_h6.monotonic() - _t0_h6
+    err_h6 = [e for e in evs_h6 if e["event"] == "node_error" and e["data"].get("node_id") == "c"]
+    check("H6a 代码超时判失败", err_h6 and "超时" in str(err_h6[0]["data"].get("error", "")), str(evs_h6[-2:]))
+    check("H6b 超时在约1-3s内返回（不卡死）", _elapsed_h6 < 8, f"{_elapsed_h6:.1f}s")
+
+    # H7（查虫W-2）：变量赋值保留名被拦截（schema 层 + 引擎层双保险）
+    errs_h7 = validate_definition(_defn(
+        [_n("s", "start"), _n("v", "variable_set", name="item", value="x"), _n("e", "end")],
+        [{"from": "s", "to": "v"}, {"from": "v", "to": "e"}]))
+    check("H7a schema 拦截保留名 item", any("保留名" in e for e in errs_h7), str(errs_h7))
+    defn_h7 = _defn([_n("s", "start"), _n("v", "variable_set", name="params", value="x"), _n("e", "end")],
+                    [{"from": "s", "to": "v"}, {"from": "v", "to": "e"}])
+    evs_h7 = []
+    async for ev in _WE3("run-h7", defn_h7, FakeConn({}), str(htmp), params={"k": 1}).run():
+        evs_h7.append(ev)
+    err_h7 = [e for e in evs_h7 if e["event"] == "node_error" and e["data"].get("node_id") == "v"]
+    check("H7b 引擎运行时拦截保留名", err_h7 and "保留名" in str(err_h7[0]["data"].get("error", "")), str(evs_h7[-2:]))
+
     import shutil as _shh
     _shh.rmtree(htmp, ignore_errors=True)
 

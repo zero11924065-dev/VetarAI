@@ -194,6 +194,7 @@ export function RoundtablePanel({ projectId, selectedId, onSelect }: {
                       <Icon name="file" size={14} style={{ color: colors.textTertiary }} />
                       {f.name.length > 18 ? f.name.slice(0, 18) + '…' : f.name}
                       <button className="ui-ico-danger" onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                        title="移除附件"
                         style={{ background: 'none', border: 'none', color: colors.textTertiary, cursor: 'pointer', padding: 0, display: 'inline-flex' }}>
                         <Icon name="x" size={14} />
                       </button>

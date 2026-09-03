@@ -48,6 +48,19 @@ export default function App() {
       alertDialog({ message: '无法获取日志目录（侧车未运行？）' });
     }
   };
+  // 问题5修复：打开数据缓存目录（数据库/导出/知识索引/全局知识）——与日志目录分开
+  const openDataDir = async () => {
+    const bridge = (window as any).subagent;
+    if (bridge && typeof bridge.openDataDir === 'function') {
+      const res = await bridge.openDataDir().catch((e: Error) => ({ ok: false, error: e.message }));
+      if (!res || !res.ok) {
+        alertDialog({ message: `打开数据缓存目录失败：${res && res.error ? res.error : '未知错误'}` });
+      }
+      return;
+    }
+    // 纯浏览器环境：降级提示数据目录位置
+    alertDialog({ message: '数据缓存目录：~/.subagent（可在 Finder 手动打开）' });
+  };
   // TS-109 改进：右侧大屏查看的圆桌 id（null = 正常对话视图）
   const [viewingRtId, setViewingRtId] = useState<string | null>(null);
   // M7（TS-113 建议包4）：任务队列跳转——目标子 Agent 与其委派会话
@@ -119,12 +132,19 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: colors.bgApp, fontFamily: fonts.base, color: colors.textPrimary }}>
-      {/* 0.2.1（TS-119）：一级模块导航栏（最左竖条） */}
-      <ModuleNav active={activeModule} onSelect={setActiveModule} />
+      {/* 0.2.1（TS-119）：一级模块导航栏（最左竖条）。
+          问题6修复：设置入口上移到此导航底部——职能/流程两个中心都能打开设置 */}
+      <ModuleNav
+        active={activeModule}
+        onSelect={(k) => { setShowSettingsPage(false); setActiveModule(k); }}
+        onOpenSettings={() => { setActiveModule('intelligence'); setShowSettingsPage(v => !v); }}
+        settingsActive={showSettingsPage}
+      />
 
       {/* 智能中心：现有页面整体原样包入（独立 Agent / 项目组 / 聊天），
-          切换模块仅隐藏不卸载——运行中的委派流与工作流不受影响 */}
-      <div style={{ display: activeModule === 'intelligence' ? 'flex' : 'none', flex: 1, minWidth: 0, minHeight: 0 }}>
+          切换模块仅隐藏不卸载——运行中的委派流与工作流不受影响。
+          问题6：设置页打开时同样隐藏（组件保活，仅显示切换） */}
+      <div style={{ display: activeModule === 'intelligence' && !showSettingsPage ? 'flex' : 'none', flex: 1, minWidth: 0, minHeight: 0 }}>
       {/* Left sidebar（flexShrink:0 防止被右侧超宽内容挤压出屏幕）
           checkpoint-046：打开整页设置时隐藏左栏（全屏展示，视觉体验优先）
           checkpoint-051：亮色主题（规范 §8.0） */}
@@ -212,17 +232,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* checkpoint-045：整页设置视图（与对话/圆桌互斥显示；对话组件保活不销毁） */}
-      {showSettingsPage && (
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <SettingsPage
-            projectId={selectedProjectId}
-            onExit={() => setShowSettingsPage(false)}
-            onOpenLogs={openLogsFolder}
-          />
-        </div>
-      )}
-
       {/* Right: chat / 圆桌大屏（minWidth:0 切断子内容 min-content 向上传导，防超宽内容顶开整页；
           M7 TS-113 滚动锁定：minHeight:0 切断高度传导，仅消息区滚动，顶栏/输入区固定） */}
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: showSettingsPage ? 'none' : 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', background: colors.bgApp }}>
@@ -263,10 +272,24 @@ export default function App() {
       </div>
 
       {/* 0.2.1（TS-119）：流程中心（工作流模块）。同样保持挂载，仅切换显示，
-          运行中的工作流在切回智能中心时继续执行 */}
-      <div style={{ display: activeModule === 'workflow' ? 'flex' : 'none', flex: 1, minWidth: 0, minHeight: 0 }}>
+          运行中的工作流在切回智能中心时继续执行。问题6：设置页打开时也隐藏 */}
+      <div style={{ display: activeModule === 'workflow' && !showSettingsPage ? 'flex' : 'none', flex: 1, minWidth: 0, minHeight: 0 }}>
         <WorkflowPanel />
       </div>
+
+      {/* checkpoint-045（问题6修复）：整页设置视图提到顶层——与模块容器平级，
+          职能中心/流程中心都能打开（此前藏在职能中心左栏内，流程中心看不到）。
+          对话/圆桌/工作流组件均保活不销毁，仅显示切换。 */}
+      {showSettingsPage && (
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <SettingsPage
+            projectId={selectedProjectId}
+            onExit={() => setShowSettingsPage(false)}
+            onOpenLogs={openLogsFolder}
+            onOpenDataDir={openDataDir}
+          />
+        </div>
+      )}
     </div>
   );
 }

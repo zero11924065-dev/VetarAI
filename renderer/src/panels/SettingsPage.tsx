@@ -22,10 +22,12 @@ const SECTIONS: { key: SectionKey; icon: IconName; label: string; needProject?: 
   { key: 'plugins', icon: 'plug', label: '插件管理' },
 ];
 
-export function SettingsPage({ projectId, onExit, onOpenLogs }: {
+export function SettingsPage({ projectId, onExit, onOpenLogs, onOpenDataDir }: {
   projectId: string | null;
   onExit: () => void;
   onOpenLogs: () => void;
+  /** 问题5：打开数据缓存目录（与日志目录分开） */
+  onOpenDataDir?: () => void;
 }) {
   const [section, setSection] = useState<SectionKey>('general');
   const [hoveredNav, setHoveredNav] = useState<SectionKey | null>(null);
@@ -90,7 +92,7 @@ export function SettingsPage({ projectId, onExit, onOpenLogs }: {
         background: colors.bgApp, padding: '18px 24px',
       }}>
         {section === 'general' && (
-          <SettingsPanel embedded onOpenLogs={onOpenLogs} />
+          <SettingsPanel embedded onOpenLogs={onOpenLogs} onOpenDataDir={onOpenDataDir} />
         )}
         {section === 'knowledge' && (
           <KnowledgePanel projectId={projectId} />

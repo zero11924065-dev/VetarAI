@@ -158,7 +158,7 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
           <span style={{ ...typo.sectionTitle, color: colors.textPrimary }}>插件管理</span>
         </div>
         {onClose && (
-          <button className="ui-btn ui-btn-ghost" style={btnGhost} onClick={onClose}>
+          <button className="ui-btn ui-btn-ghost" style={btnGhost} onClick={onClose} title="关闭">
             <Icon name="x" size={14} />
           </button>
         )}

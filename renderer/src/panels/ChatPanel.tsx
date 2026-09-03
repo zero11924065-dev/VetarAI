@@ -271,6 +271,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const [transferKeywords, setTransferKeywords] = useState('');
   const [transferring, setTransferring] = useState(false);
   const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
+  // 查虫K-3：转移序号——面板 key 的一部分，保证连续转移到同一作用域
+  // （期间手动切过作用域）也能重新定位到转移目标作用域
+  const [warehouseTransferSeq, setWarehouseTransferSeq] = useState(0);
   // checkpoint-059：活流标记——记录当前仍有进行中流的会话 id（H16 流继续场景）。
   // 切换/加载会话时，仅对该会话的缓存气泡跳过僵尸清理；其余会话的缓存视为"死态"清理。
   const activeStreamSidRef = useRef<string | null>(null);
@@ -353,10 +356,25 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     } catch (e) { console.error('load messages:', e); }
     finally { if (loadingSidRef.current === sid) loadingSidRef.current = null; }
   }
-  // M2 上下文指示器：prompt_eval_count（已用）+ context_limit（上限）
+  // M2 上下文指示器：tokenUsed（已用）+ contextLimit（上限）
+  // 问题4修复：tokenUsed 语义从"模型上轮实际评估增量"（KV缓存复用时数值偏小且转移后不刷新）
+  // 改为"未归档消息的实时估算"——与发送逻辑同源，转移入仓后立刻下降，反映真实上下文压力。
   const [tokenUsed, setTokenUsed] = useState<number>(0);
   const [contextLimit, setContextLimit] = useState<number>(0);
   const [contextSource, setContextSource] = useState<string>('');
+
+  // 问题4：上下文估算——对未归档消息文本做 token 估计（启发式，与发送过滤规则一致：
+  // 仅 user/assistant、排除 archived）。中文约 1 字 1 token，英文约 4 字符 1 token，
+  // 混合文本按 0.6 系数近似。目的不是精确计费，而是让用户直观看到"移入仓库后确实变少了"。
+  function estimateContextTokens(msgs: Message[]): number {
+    let total = 0;
+    for (const m of msgs) {
+      if (m.archived) continue;
+      if (m.role !== 'user' && m.role !== 'assistant') continue;
+      total += Math.round(((m.content || '').length) * 0.6);
+    }
+    return total;
+  }
   // M5（TS-111）：断线重连提示条 + 最大重试次数（读配置，默认 3）
   const [reconnectNotice, setReconnectNotice] = useState<string | null>(null);
   const reconnectMaxRef = useRef(3);
@@ -386,14 +404,23 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   useEffect(() => { fetchContextLimit(); }, [fetchContextLimit]);
 
   const msgHistory = useSessionMessages(currentSessionId || 'none');
-  // H17 问题3：从加载的消息中恢复上下文用量指示器（取最后一条带 prompt_eval_count 的消息）
+  // H17 问题3（问题4重构）：恢复上下文用量指示器——改为对（未归档）消息实时估算，
+  // 取最后一条带 prompt_eval_count 的历史值仅作为无消息可估时的兜底。
   function restoreTokenIndicator(msgs: Message[]) {
+    const est = estimateContextTokens(msgs);
+    if (est > 0) { setTokenUsed(est); return; }
     for (let i = msgs.length - 1; i >= 0; i--) {
       const v = (msgs[i] as Message).prompt_eval_count;
       if (typeof v === 'number' && v > 0) { setTokenUsed(v); return; }
     }
     setTokenUsed(0);
   }
+  // 问题4：消息列表任何变化（发送/归档/切换/流式落盘）都即时重估，指示器始终反映真实上下文
+  useEffect(() => {
+    const est = estimateContextTokens(localMessages);
+    if (est > 0) setTokenUsed(est);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localMessages]);
   // 同步：当 currentSessionId 变化时，从 localStorage 读取（H16：useMessages 的 _store
   // 与 syncSessionLocal 写的 localStorage 可能不同步，直接读 localStorage 为准；
   // 缓存为空时保留现有状态，避免清空进行中的流式内容）
@@ -639,24 +666,50 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     try {
       const res = await fetch(`${API}/sessions/${sid}/messages?project_id=${encodeURIComponent(projectId)}`);
       if (!res.ok) return;
+      // 查虫D：对齐期间用户可能已切走会话——过期结果不得覆盖新会话显示
+      if (currentSessionIdRef.current !== sid) return;
       const dbMsgs = (await res.json()) as Message[];
       const prev = localMessagesRef.current;
       if (!prev.some(m => String(m.id ?? '').startsWith('local_'))) return;
-      const dbByKey = new Map<string, Message>();
-      for (const d of dbMsgs) if (d.content) dbByKey.set(`${d.role}::${d.content}`, d);
-      const usedDb = new Set<string>();
+      // 查虫B：同内容消息可能出现多条（如"继续"），按内容排队取号，
+      // 避免 Map 覆盖导致第二条永远拿不到数字 id。
+      const dbByKey = new Map<string, Message[]>();
+      for (const d of dbMsgs) {
+        if (!d.content) continue;
+        const key = `${d.role}::${d.content}`;
+        const arr = dbByKey.get(key);
+        if (arr) arr.push(d); else dbByKey.set(key, [d]);
+      }
       const next = prev.map(m => {
         if (!String(m.id ?? '').startsWith('local_')) return m;
         const key = m.content ? `${m.role}::${m.content}` : '';
-        const hit = key ? dbByKey.get(key) : undefined;
-        if (!hit || usedDb.has(key)) return m; // DB 尚无定稿（截断/失败）→ 保留临时态
-        usedDb.add(key);
+        const arr = key ? dbByKey.get(key) : undefined;
+        const hit = arr && arr.length > 0 ? arr.shift() : undefined;
+        if (!hit) return m; // 内容未命中 → 留给位置兜底
         // 以 DB 数字 id 为准；本地展示扩展字段（思考/完成用时等）迁移过去不丢
         const { id: _lid, ...localExtras } = m as Message & Record<string, unknown>;
         return { ...hit, ...localExtras, id: hit.id } as Message;
       });
-      setLocalMessages(next);
-      syncSessionLocal(sid, next); // 缓存同步对齐，刷新/切回后仍是数字 id
+      // 查虫K-5：位置兜底——停止生成后后端落盘内容可能被截断（与本地气泡不一致），
+      // 按「同角色、时序顺序」把仍为 local_ 的消息对到 DB 剩余未消费的消息上。
+      const dbConsumed = new Set(next.filter(m => typeof m.id === 'number').map(m => m.id));
+      const dbLeft = dbMsgs.filter(d => !dbConsumed.has(d.id));
+      let cursor = 0;
+      const aligned = next.map(m => {
+        if (!String(m.id ?? '').startsWith('local_')) return m;
+        for (let i = cursor; i < dbLeft.length; i++) {
+          if (dbLeft[i].role === m.role) {
+            const hitDb = dbLeft[i];
+            // 中间跳过的不同角色消息视为无对应（保持时序不乱配）
+            cursor = i + 1;
+            const { id: _lid, ...localExtras } = m as Message & Record<string, unknown>;
+            return { ...hitDb, ...localExtras, id: hitDb.id } as Message;
+          }
+        }
+        return m; // DB 确实没有（尚未落盘）→ 保留临时态
+      });
+      setLocalMessages(aligned);
+      syncSessionLocal(sid, aligned); // 缓存同步对齐，刷新/切回后仍是数字 id
     } catch { /* 对齐失败静默：不影响会话本身 */ }
   }
 
@@ -690,11 +743,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (currentSessionId) syncSessionLocal(currentSessionId, nextArchived);
       setToast(`已移入知识仓库 ✓（${d.title}）`);
       setTimeout(() => setToast(null), 4000);
-      // 关闭弹窗、清空勾选；自动展开右侧面板（问题2：转移后即时可见新条目）
+      // 关闭弹窗、清空勾选；自动展开右侧面板（问题2：转移后即时可见新条目）。
+      // 查虫K-3：转移序号递增 + key 含作用域，连续转移同一作用域也能重新定位。
       setShowTransferModal(false);
       setSelectedMsgIds(new Set());
       setSelectMode(false);
       setShowKnowledgePanel(true);
+      setWarehouseTransferSeq(v => v + 1);
       setTransferTitle(''); setTransferCategory(''); setTransferKeywords('');
     } catch (e) {
       setToast('转移失败: ' + (e as Error).message);
@@ -991,9 +1046,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         patchStreamMsg(m => ({ ...m, toolSteps: (m.toolSteps||[]).map(st =>
           st.id === d.id ? { ...st, status: d.ok ? 'ok' as const : 'error' as const, summary: d.summary, error: d.error } : st) }));
       } else if (ev.event === 'state') {
+        // 问题4：不再用 prompt_eval_count 覆盖指示器——那是"本轮实际评估增量"（KV缓存复用时偏小）。
+        // 指示器统一由"未归档消息实时估算"驱动（见 localMessages 变化的 effect）。
+        // prompt_eval_count 仍记录到消息对象，供调试/历史参考。
         patchStreamMsg(m => ({ ...m, step: d.step, maxStep: d.max, tokensUsed: d.tokens_used,
           ...(typeof d.prompt_eval_count === 'number' ? { prompt_eval_count: d.prompt_eval_count } : {}) }));
-        if (typeof d.prompt_eval_count === 'number') setTokenUsed(d.prompt_eval_count);
       } else if (ev.event === 'error') {
         patchStreamMsg(m => {
           const completedDuration = m.startedAt
@@ -1207,16 +1264,18 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden' }}>
       {/* Top bar (§8.6) */}
       <div style={{ height:48, padding:'0 16px', borderBottom:`1px solid ${colors.borderSubtle}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
-        {/* TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容 */}
-        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'nowrap',minWidth:0,overflowX:'auto',overflowY:'hidden'}}>
-          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:1,minWidth:0}}>
-            <Icon name="bot" size={16} style={{color:colors.textPrimary}} />
+        {/* TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容。
+            问题2修复：去掉 overflowX:'auto'（滚动上下文会让名字与选择器压缩时视觉重叠），
+            改为纯弹性压缩：名字与选择器按剩余空间收缩并显示省略号，按钮组不可压缩 */}
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'nowrap',minWidth:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,flex:'0 1 auto',minWidth:40}}>
+            <Icon name="bot" size={16} style={{color:colors.textPrimary,flexShrink:0}} />
             <span style={{fontSize:14,fontWeight:600,color:colors.textPrimary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{agentInfo?.name || agentId.slice(0,8)}...</span>
           </div>
           <select
             value={currentSessionId || ''}
             onChange={e => handleSwitchSession(e.target.value)}
-            style={{...selectStyle, maxWidth:200, flexShrink:1, minWidth:90}}
+            style={{...selectStyle, flex:'0 1 auto', maxWidth:200, minWidth:90}}
           >
             {sessions.length === 0 && <option value="">无会话</option>}
             {sessions.map(s => (
@@ -1277,9 +1336,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           <span style={{fontFamily:fonts.mono,fontSize:12,color:colors.textTertiary}}>{modelList.find(m=>m.name===modelUsed)?.name || modelUsed}</span>
           {contextLimit > 0 && (
             <div
-              title={`本轮推理的上下文占用：已用 ${tokenUsed} / 上限 ${contextLimit}（随对话增长，非累计消耗）`}
+              title={`当前会话上下文估算：约 ${tokenUsed} / 上限 ${contextLimit}（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）`}
               style={{display:'flex',alignItems:'center',gap:6,fontSize:11, cursor:'help'}}>
-              <span style={{color:colors.textTertiary}}>本轮上下文 {tokenUsed} / {contextLimit}</span>
+              <span style={{color:colors.textTertiary}}>上下文 ≈{tokenUsed} / {contextLimit}</span>
               <div style={{width:80,height:6,background:colors.borderDefault,borderRadius:3,overflow:'hidden'}}>
                 <div style={{
                   width: Math.min(100, tokenRatio * 100) + '%',
@@ -1434,8 +1493,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               {/* 角色标签行 */}
               <div style={{fontSize:11,color:colors.textTertiary,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
                 {/* TS-120：勾选模式下显示复选框（系统消息不可勾选）。TS-121：流结束后
-                    alignLocalIdsWithDb 已把 local_ 临时 id 换成 DB 数字 id，勾选即刻可用 */}
-                {selectMode && !isSystem && typeof msg.id === 'number' && (
+                    alignLocalIdsWithDb 已把 local_ 临时 id 换成 DB 数字 id，勾选即刻可用。
+                    查虫K-2：已归档（已在仓库）的消息不显示勾选框，防止重复转移生成重复条目 */}
+                {selectMode && !isSystem && !msg.archived && typeof msg.id === 'number' && (
                   <input type="checkbox" checked={selectedMsgIds.has(msg.id)}
                     onChange={() => toggleMessageSelect(msg.id)}
                     style={{ accentColor: colors.accent, cursor: 'pointer' }} />
@@ -1558,7 +1618,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         <div ref={messagesEndRef} />
         {/* TS-102 B15：手动上滚后出现的"回到底部"按钮 */}
         {showBackToBottom && (
-          <button onClick={scrollToBottom}
+          <button onClick={scrollToBottom} title="回到底部"
             style={{position:'sticky', bottom:8, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', justifyContent:'center',
                     width:36, height:36, margin:'8px auto 0', background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:'50%',
                     cursor:'pointer', boxShadow:shadow.s}}>
@@ -1574,7 +1634,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           {pendingItems.filter(p=>p.isImage).map((item, idx) => (
             <div key={idx} style={{ position:'relative' }}>
               <img src={item.dataUri} alt={item.name} style={{maxWidth:80,maxHeight:80,borderRadius:radius.s,border:`1px solid ${colors.borderDefault}`}} />
-              <button onClick={() => removePending(pendingItems.indexOf(item))} style={{position:'absolute',top:-6,right:-6,background:colors.bgToast,color:'#fff',border:'none',borderRadius:'50%',width:16,height:16,fontSize:10,cursor:'pointer',lineHeight:'16px',padding:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <button onClick={() => removePending(pendingItems.indexOf(item))} title="移除该附件" style={{position:'absolute',top:-6,right:-6,background:colors.bgToast,color:'#fff',border:'none',borderRadius:'50%',width:16,height:16,fontSize:10,cursor:'pointer',lineHeight:'16px',padding:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
                 <Icon name="x" size={10} style={{color:'#fff'}} />
               </button>
             </div>
@@ -1586,7 +1646,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               {item.parsing && <span style={{color:colors.warn,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Spinner size={12} /> 解析中…</span>}
               {!item.parsing && item.parsedText && <span style={{color:colors.ok,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Icon name="check" size={14} style={{color:colors.ok}} /> 已提取</span>}
               {!item.parsing && item.parseFailed && <span style={{color:colors.textTertiary,fontSize:11}}>（仅文件名）</span>}
-              <button className="ui-ico-danger" onClick={() => removePending(pendingItems.indexOf(item))} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
+              <button className="ui-ico-danger" title="移除该附件" onClick={() => removePending(pendingItems.indexOf(item))} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
                 <Icon name="x" size={14} style={{color:colors.textTertiary}} />
               </button>
             </span>
@@ -1627,10 +1687,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         )}
       </div>
     </div>
-    {/* TS-120：右侧知识仓库面板（可折叠，默认收起，不影响会话区布局） */}
+    {/* TS-120：右侧知识仓库面板（可折叠，默认收起，不影响会话区布局）
+        TS-121 查虫C：initialScope=转移目标作用域，转全局时面板直接定位全局。
+        查虫K-3：key 含转移序号，连续转移同一作用域也触发重新定位 */}
     {showKnowledgePanel && (
       <WarehousePanel
+        key={`${transferScope}-${warehouseTransferSeq}`}
         projectId={projectId}
+        initialScope={transferScope}
         onClose={() => setShowKnowledgePanel(false)}
         onInject={(text) => {
           // 把勾选知识拼进输入框（作为用户消息注入会话，仅勾选的条目）

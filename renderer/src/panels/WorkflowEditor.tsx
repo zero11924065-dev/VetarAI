@@ -391,6 +391,10 @@ export function WorkflowEditor({ definition, onChange, selectedNodeId, models, o
                   value={node.code || ''}
                   placeholder={"# 读上游：variables['n1']['output'] 或自定义变量 variables['total']\nresult = '处理完成'"}
                   onChange={e => patchNode(node.id, { code: e.target.value })} />
+                {/* 查虫W-3：后端已支持超时，表单补配置入口 */}
+                <label style={FIELD_LABEL}>执行超时（秒，默认 30，上限 300；超时节点判失败、工作流继续）</label>
+                <input style={{ ...input, width: 90 }} type="number" min={1} max={300} value={node.timeout_s ?? 30}
+                  onChange={e => patchNode(node.id, { timeout_s: Math.max(1, Math.min(300, Number(e.target.value) || 30)) })} />
                 <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 6 }}>
                   约定：用 variables 字典读上游输出/变量；把结果赋给 result 即本节点输出。代码以本应用权限在本机运行。
                 </div>

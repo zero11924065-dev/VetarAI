@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('__SUBAGENT__', injected);
 contextBridge.exposeInMainWorld('subagent', {
   chooseWorkingDir: () => ipcRenderer.invoke('choose-working-dir'),
   openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+  openDataDir: () => ipcRenderer.invoke('open-data-dir'),
   chooseInputFile: (options) => ipcRenderer.invoke('choose-input-file', options || {}),
   chooseInputDir: (options) => ipcRenderer.invoke('choose-input-dir', options || {}),
 });

@@ -16,9 +16,14 @@ describe('SettingsPage 整页设置', () => {
     expect(screen.getByText('插件管理')).toBeTruthy();
   });
 
-  it('基础设置含"打开日志文件夹"按钮', () => {
-    render(<SettingsPage projectId={null} onExit={() => {}} onOpenLogs={() => {}} />);
+  it('基础设置含"打开日志文件夹"按钮（问题5：已收进基础区底部）', () => {
+    render(<SettingsPage projectId={null} onExit={() => {}} onOpenLogs={() => {}} onOpenDataDir={() => {}} />);
     expect(screen.getByText('打开日志文件夹')).toBeTruthy();
+  });
+
+  it('问题5：日志与数据缓存目录是两个独立按钮', () => {
+    render(<SettingsPage projectId={null} onExit={() => {}} onOpenLogs={() => {}} onOpenDataDir={() => {}} />);
+    expect(screen.getByText('打开数据缓存目录')).toBeTruthy();
   });
 
   it('点击返回触发 onExit', () => {
