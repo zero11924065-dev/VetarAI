@@ -135,6 +135,32 @@ def main():
         t, k = parse_attachment("幻灯片.pptx", pptx_bytes)
         check("D4c 生成的pptx可解析", k == "pptx" and t and "要点" in t, f"{k}|{t}")
 
+        # D5 page_break 分页块（案件证据文档每份证据独立起页的核心能力）
+        r = await execute("create_document", {
+            "path": f"{tmp}/证据.docx",
+            "content": {"title": "证据", "blocks": [
+                {"type": "heading", "level": 2, "text": "证据一 借据"},
+                {"type": "paragraph", "text": "借据内容"},
+                {"type": "page_break"},
+                {"type": "heading", "level": 2, "text": "证据二 转账记录"},
+                {"type": "paragraph", "text": "转账内容"},
+            ]}}, tmp)
+        check("D5a docx 分页块生成成功", r.get("ok") is True, str(r))
+        import docx as _docx
+        _d = _docx.Document(r["path"])
+        _breaks = sum(1 for p in _d.paragraphs for run in p.runs
+                      if "page" in run._element.xml and "w:br" in run._element.xml)
+        check("D5b docx 含分页符", _breaks >= 1, f"breaks={_breaks}")
+
+        r = await execute("create_document", {
+            "path": f"{tmp}/证据.md",
+            "content": {"blocks": [
+                {"type": "paragraph", "text": "证据一"},
+                {"type": "page_break"},
+                {"type": "paragraph", "text": "证据二"}]}}, tmp)
+        _md = Path(r["path"]).read_text(encoding="utf-8")
+        check("D5c md 分页标记存在", "---" in _md, _md[:60])
+
     asyncio.run(run())
 
     import shutil

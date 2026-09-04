@@ -59,7 +59,10 @@ def _write_md(target: Path, content: dict) -> int:
         lines.append(f"# {title}\n")
     for b in blocks:
         t = b.get("type", "paragraph")
-        if t == "heading":
+        if t == "page_break":
+            # 0.4.6+：分页块（Markdown 用水平线标记，转 docx 时对应分页符）
+            lines.append("\n---\n")
+        elif t == "heading":
             level = max(1, min(int(b.get("level") or 2), 6))
             lines.append(f"{'#' * level} {_clean_text(b.get('text'))}\n")
         elif t == "bullets":
@@ -82,15 +85,133 @@ def _write_md(target: Path, content: dict) -> int:
     return len(text.encode("utf-8"))
 
 
+def _set_cjk_font(d, font: str = "宋体", ascii_font: str = "Times New Roman") -> None:
+    """0.4.6+：把文档默认（Normal 样式）中文设为宋体、西文设为 Times New Roman。
+
+    python-docx 默认模板中文会回退为西文字体，在 WPS/Office 中显示不规范。
+    法律文书用宋体最正式。通过 Normal 样式 + 默认 rPr 的 eastAsia 属性设置，
+    使全文（含表格、标题）中文统一宋体。不依赖本机安装 Office，纯文件层操作。
+    """
+    from docx.oxml.ns import qn
+    style = d.styles["Normal"]
+    rpr = style.element.get_or_add_rPr()
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        from docx.oxml import OxmlElement
+        rfonts = OxmlElement("w:rFonts")
+        rpr.append(rfonts)
+    rfonts.set(qn("w:ascii"), ascii_font)
+    rfonts.set(qn("w:hAnsi"), ascii_font)
+    rfonts.set(qn("w:eastAsia"), font)
+    # 默认字号：小四（12pt），法律文书常用
+    sz = rpr.find(qn("w:sz"))
+    if sz is None:
+        from docx.oxml import OxmlElement
+        sz = OxmlElement("w:sz")
+        rpr.append(sz)
+    sz.set(qn("w:val"), "24")  # 12pt = 24 半磅
+
+
+def _setup_a4_page(d) -> None:
+    """0.4.6+：A4 竖版 + 法律文书页边距（上下 2.54cm，左右 3.18cm 标准）。
+
+    对文档中所有 section 统一设置。证据编排按 A4 竖版输出（用户规范）。
+    """
+    from docx.shared import Cm
+    for sec in d.sections:
+        sec.page_width = Cm(21.0)
+        sec.page_height = Cm(29.7)
+        sec.top_margin = Cm(2.54)
+        sec.bottom_margin = Cm(2.54)
+        sec.left_margin = Cm(3.18)
+        sec.right_margin = Cm(3.18)
+
+
+def _add_page_number_footer(d, fmt: str = "第{p}页 共{t}页") -> None:
+    """0.4.6+：页脚整体页码（全档案连续页码）。
+
+    用 Word 域代码 PAGE / NUMPAGES 自动生成「第 X 页 共 Y 页」，
+    WPS/Word 打开即实时计算总页数，无需手工维护。对全部 section 生效。
+    """
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    def _make_field_run(instr: str):
+        """构造一个含域字符的运行（begin/instrText/end 三个 run）。"""
+        r_begin = OxmlElement("w:r")
+        fld_begin = OxmlElement("w:fldChar")
+        fld_begin.set(qn("w:fldCharType"), "begin")
+        r_begin.append(fld_begin)
+
+        r_instr = OxmlElement("w:r")
+        instr_text = OxmlElement("w:instrText")
+        instr_text.set(qn("xml:space"), "preserve")
+        instr_text.text = instr
+        r_instr.append(instr_text)
+
+        r_end = OxmlElement("w:r")
+        fld_end = OxmlElement("w:fldChar")
+        fld_end.set(qn("w:fldCharType"), "end")
+        r_end.append(fld_end)
+        return r_begin, r_instr, r_end
+
+    def _make_text_run(text: str):
+        r = OxmlElement("w:r")
+        rpr = OxmlElement("w:rPr")
+        sz = OxmlElement("w:sz"); sz.set(qn("w:val"), "18")  # 9pt 页脚小字
+        rpr.append(sz)
+        r.append(rpr)
+        t = OxmlElement("w:t")
+        t.text = text
+        r.append(t)
+        return r
+
+    # 拆分模板：{p}=当前页 {t}=总页数，其余为字面文本
+    for sec in d.sections:
+        footer = sec.footer
+        p = footer.paragraphs[0]
+        p.alignment = 1  # WD_ALIGN_PARAGRAPH.CENTER
+        # 清空已有内容
+        for r in list(p.runs):
+            r._element.getparent().remove(r._element)
+        # 逐段构建：按 {p} / {t} 切分
+        import re as _re
+        pos = 0
+        for m in _re.finditer(r"\{(p|t)\}", fmt):
+            literal = fmt[pos:m.start()]
+            if literal:
+                p._element.append(_make_text_run(literal))
+            if m.group(1) == "p":
+                for run in _make_field_run("PAGE"):
+                    p._element.append(run)
+            else:
+                for run in _make_field_run("NUMPAGES"):
+                    p._element.append(run)
+            pos = m.end()
+        tail = fmt[pos:]
+        if tail:
+            p._element.append(_make_text_run(tail))
+
+
 def _write_docx(target: Path, content: dict) -> int:
     import docx
+    from docx.shared import Cm, Pt
     title, blocks = _extract_blocks(content)
     d = docx.Document()
+    _set_cjk_font(d)
+    _setup_a4_page(d)
+    # 0.4.6+：整体页码页脚（默认开启，证据/目录类文档需要全档案连续页码）
+    if content.get("page_number", True):
+        fmt = content.get("page_number_format", "第{p}页 共{t}页")
+        _add_page_number_footer(d, fmt)
     if title:
         d.add_heading(title, level=0)
     for b in blocks:
         t = b.get("type", "paragraph")
-        if t == "heading":
+        if t == "page_break":
+            # 0.4.6+：分页块（证据文档每份证据独立起页，目录页码可确定性统计）
+            d.add_page_break()
+        elif t == "heading":
             level = max(1, min(int(b.get("level") or 2), 4))
             d.add_heading(_clean_text(b.get("text")), level=level)
         elif t == "bullets":
@@ -105,6 +226,49 @@ def _write_docx(target: Path, content: dict) -> int:
                 for i, r in enumerate(rows):
                     for j in range(ncols):
                         tbl.rows[i].cells[j].text = _clean_text(r[j]) if j < len(r) else ""
+        elif t == "image":
+            # 0.4.6+：图片证据块。
+            # layout="single"（默认）：原文调入居中（营业执照/身份证/合同等正式文件）
+            # layout="grid"：一行 3 列网格（聊天截图等多张并排）
+            paths = b.get("paths") or ([b["path"]] if b.get("path") else [])
+            layout = b.get("layout", "single")
+            caption = b.get("caption") or ""
+            width_cm = float(b.get("width_cm", 13.0))
+            paths = [p for p in paths if isinstance(p, str) and Path(p).is_file()]
+            if paths:
+                if layout == "grid":
+                    # 一行 3 列：用 3 列表格承载，每格一张图等宽
+                    col_w_cm = 4.4  # (21-6.36)/3≈4.4cm，3列适配A4左右边距
+                    for i in range(0, len(paths), 3):
+                        chunk = paths[i:i + 3]
+                        tbl = d.add_table(rows=1, cols=len(chunk))
+                        for j, p in enumerate(chunk):
+                            cell = tbl.rows[0].cells[j]
+                            cell.text = ""
+                            para = cell.paragraphs[0]
+                            para.alignment = 1
+                            run = para.add_run()
+                            try:
+                                run.add_picture(p, width=Cm(col_w_cm))
+                            except Exception:
+                                run.text = f"[图片加载失败: {Path(p).name}]"
+                        # 表格无边框视觉：去掉表格样式
+                        tbl.style = "Table Grid"
+                    if caption:
+                        cp = d.add_paragraph(caption)
+                        cp.alignment = 1
+                else:
+                    for p in paths:
+                        para = d.add_paragraph()
+                        para.alignment = 1
+                        run = para.add_run()
+                        try:
+                            run.add_picture(p, width=Cm(width_cm))
+                        except Exception:
+                            run.text = f"[图片加载失败: {Path(p).name}]"
+                    if caption:
+                        cp = d.add_paragraph(caption)
+                        cp.alignment = 1
         else:
             d.add_paragraph(_clean_text(b.get("text")))
     d.save(str(target))
