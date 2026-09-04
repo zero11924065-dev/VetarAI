@@ -7,7 +7,7 @@
 > **Compute is free. Context is precious.**
 > VetarAI is a 100% local desktop app: multi-agent collaboration, visual workflows, a pull-mode knowledge warehouse with on-device semantic retrieval. All data stays on your disk — zero dependency on any cloud service.
 
-**当前版本 / Current version：0.4.5**（macOS · Apple Silicon）
+**当前版本 / Current version：0.4.6**（macOS · Apple Silicon）
 
 **Note: This project is developed by a Chinese team. English translations are provided immediately following each corresponding Chinese section. Full English language support will be included in a future update.**
 
@@ -32,10 +32,10 @@
 
 ## ⬇️ 下载 VetarAI / Download VetarAI
 
-**[⬇️ 下载 VetarAI 0.4.5 安装包 / Download VetarAI 0.4.5 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.5)**
+**[⬇️ 下载 VetarAI 0.4.6 安装包 / Download VetarAI 0.4.6 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.6)**
 
-（577MB · macOS Apple Silicon · dmg 格式 · **内置 bge-m3 语义嵌入模型，安装即用，无需额外下载**）
-(577MB · macOS Apple Silicon · dmg · **bge-m3 semantic embedding model is bundled — works out of the box, no extra download needed**)
+（589MB · macOS Apple Silicon · dmg 格式 · **内置 bge-m3 语义嵌入模型，安装即用，无需额外下载**）
+(589MB · macOS Apple Silicon · dmg · **bge-m3 semantic embedding model is bundled — works out of the box, no extra download needed**)
 
 ---
 
@@ -178,7 +178,7 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 使用安装包（推荐普通用户）
 
-1. 下载 `VetarAI-0.4.5-arm64.dmg`，双击挂载
+1. 下载 `VetarAI-0.4.6-arm64.dmg`，双击挂载
 2. 把 **VetarAI** 拖入 **Applications** 文件夹
 3. 从启动台打开
 
@@ -188,7 +188,7 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 Install (Recommended)
 
-1. Download `VetarAI-0.4.5-arm64.dmg` and double-click to mount
+1. Download `VetarAI-0.4.6-arm64.dmg` and double-click to mount
 2. Drag **VetarAI** into **Applications**
 3. Open from Launchpad
 
