@@ -1959,6 +1959,7 @@ async def api_open_project_working_dir(req: OpenProjectDirReq):
     仅允许打开 projects 表中登记的 working_dir，防任意路径打开。"""
     import platform
     import subprocess
+    from pathlib import Path
     for p in list_projects():
         if p.get("id") == req.project_id:
             wd = str(p.get("working_dir") or "")
