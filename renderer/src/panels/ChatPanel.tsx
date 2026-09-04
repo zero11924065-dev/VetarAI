@@ -28,6 +28,7 @@ import { Icon, Spinner, IconName } from '../Icon';
 import { confirmDialog, promptDialog } from '../Dialog';
 import { on } from '../events';
 import { WarehousePanel } from './WarehousePanel';
+import { reportBusy } from '../busyState';
 
 interface AgentConfig { id: string; name: string; role?: string; model_name?: string; type_: string; parent_agent_id?: string | null; system_prompt?: string | null; }
 interface Session { id: string; title: string; message_count: number; }
@@ -319,6 +320,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
   // 独立于 sessionId 的本地消息缓存（避免 hook 内部闭包问题）
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
+  // 0.4.4：会话生成中上报忙碌态（关闭应用时弹确认）
+  useEffect(() => { reportBusy('chat', sending); }, [sending]);
   // B07（TS-101）：ref 存最新 localMessages，done 时可读最终消息内容
   const localMessagesRef = useRef<Message[]>([]);
   useEffect(() => { localMessagesRef.current = localMessages; }, [localMessages]);
@@ -1300,8 +1303,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
   return (
     <div style={{ display:'flex', height:'100%', minWidth:0, overflow:'hidden', background:colors.bgApp }}>
-    {/* 左侧：原会话面板（纵向）；右侧：知识仓库面板（可折叠） */}
-    <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden' }}>
+    {/* 左侧：原会话面板（纵向）；右侧：知识仓库面板（可折叠）。
+        0.4.4：顶部/左右加留白——顶栏此前紧贴窗口外框，视觉上"贴边"。 */}
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden', padding:'10px 12px 0 12px' }}>
       {/* Top bar (§8.6) */}
       <div style={{ height:48, padding:'0 16px', borderBottom:`1px solid ${colors.borderSubtle}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
         {/* TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容。

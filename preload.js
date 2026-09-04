@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('subagent', {
   chooseWorkingDir: () => ipcRenderer.invoke('choose-working-dir'),
   openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
   openDataDir: () => ipcRenderer.invoke('open-data-dir'),
+  // 0.4.4：任务执行中关闭应用弹确认（渲染层上报忙碌态）
+  reportBusy: (busy) => ipcRenderer.send('report-busy', !!busy),
   chooseInputFile: (options) => ipcRenderer.invoke('choose-input-file', options || {}),
   chooseInputDir: (options) => ipcRenderer.invoke('choose-input-dir', options || {}),
 });

@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { reportBusy } from '../busyState';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, badge, calloutStyle, select as selectStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
@@ -74,6 +75,8 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
   projectId: string; roundtableId: string; onExit: () => void;
 }) {
   const [detail, setDetail] = useState<Roundtable | null>(null);
+  // 0.4.4：圆桌讨论运行中上报忙碌态（关闭应用时弹确认）
+  useEffect(() => { reportBusy('roundtable', detail?.status === 'running'); }, [detail?.status]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

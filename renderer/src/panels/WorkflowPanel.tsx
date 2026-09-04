@@ -29,6 +29,7 @@ import { getApiBase } from '../apiBase';
 import { colors, fonts, radius, btnPrimary, btnSecondary, btnDangerSoft, input, textarea, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { alertDialog, confirmDialog } from '../Dialog';
+import { reportBusy } from '../busyState';
 import { WorkflowCanvas, NodeStatus } from './WorkflowCanvas';
 import { WorkflowEditor } from './WorkflowEditor';
 import { SSEStreamParser } from '../lib/sseParser';
@@ -63,6 +64,8 @@ export function WorkflowPanel() {
 
   // 运行态
   const [running, setRunning] = useState(false);
+  // 0.4.4：工作流运行中上报忙碌态（关闭应用时弹确认）
+  useEffect(() => { reportBusy('workflow', running); }, [running]);
   const [runId, setRunId] = useState<string | null>(null);
   const [nodeStatus, setNodeStatus] = useState<Record<string, NodeStatus>>({});
   const [events, setEvents] = useState<RunEvent[]>([]);
