@@ -1,3 +1,20 @@
+# VetarAI - Local-first multi-agent orchestration application
+# Copyright (C) 2026 zero11924065-dev
+#
+# This file is part of VetarAI.
+#
+# VetarAI is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# VetarAI is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """H15 审核实测：qwen3.6:35b（用户同款弱模型）+ 原话场景 → 是否真实委派。
 
 场景：主 Agent 用 qwen3.6:35b；用户消息为验收原话"让人事专员帮我查一下今年重庆的最低社保缴纳基数"；

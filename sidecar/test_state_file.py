@@ -1,3 +1,20 @@
+# VetarAI - Local-first multi-agent orchestration application
+# Copyright (C) 2026 zero11924065-dev
+#
+# This file is part of VetarAI.
+#
+# VetarAI is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# VetarAI is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """M1-2 补漏：work/state.json 每步状态落盘专项测试。
 覆盖：①正常完成→status=done ②客户端断开→status=interrupted ③错误→status=error ④每步推进写盘 ⑤查询端点。
 venv 内直接跑：python test_state_file.py。数据写 /tmp，不碰 ~/.subagent。

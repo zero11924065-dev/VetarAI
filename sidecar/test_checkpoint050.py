@@ -1,3 +1,20 @@
+# VetarAI - Local-first multi-agent orchestration application
+# Copyright (C) 2026 zero11924065-dev
+#
+# This file is part of VetarAI.
+#
+# VetarAI is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# VetarAI is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """checkpoint-050 全局查虫修复回归测试。
 覆盖 6 个实锤修复：
 - B-1 连接泄漏（写路径异常后数据库不锁死）

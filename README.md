@@ -318,8 +318,13 @@ If you encounter any issues or have suggestions, feel free to reach out!
 
 ## 📄 许可
 
-暂未声明许可证（No license）。如需使用/转载代码，请先联系作者确认。
+本项目采用 **[GNU GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.html)** 开源协议。
+你可以自由使用、学习、修改和分发本软件，但**分发修改后的版本时必须同样以 GPL v3.0 开源，并保留版权声明与许可文件**。完整条款见仓库根目录的 `LICENSE` 文件，每个源代码文件头部也附有许可声明。
 
 ## 📄 License
 
-No license declared. Please contact the author for permission before using or redistributing the code.
+This project is licensed under the **[GNU GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.html)**.
+You are free to use, study, modify and distribute this software, but **any distributed modified version must likewise be released under GPL v3.0 with copyright notices and license preserved**. See the `LICENSE` file at the repository root for full terms; each source file also carries a license header.
+
+> 注 / Note：安装包内置的语义模型 bge-m3 ONNX INT8 为 MIT 协议，其许可条款独立于本项目。
+> The semantic model bundled in the installer (bge-m3 ONNX INT8) is MIT-licensed; its terms apply independently of this project.

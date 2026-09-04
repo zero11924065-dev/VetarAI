@@ -1,3 +1,20 @@
+# VetarAI - Local-first multi-agent orchestration application
+# Copyright (C) 2026 zero11924065-dev
+#
+# This file is part of VetarAI.
+#
+# VetarAI is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# VetarAI is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """TS-101 B06 持久化单测（补齐留痕；审核实测版固化）。
 3 场景：① 正常完成落库（user+assistant+tool_steps）② 取消截断落盘（truncated=1）③ 旧 DB 幂等迁移。
 venv 内直接跑：python test_persist.py。只输出 PASS/FAIL 摘要。

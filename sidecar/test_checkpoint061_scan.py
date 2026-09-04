@@ -1,3 +1,20 @@
+# VetarAI - Local-first multi-agent orchestration application
+# Copyright (C) 2026 zero11924065-dev
+#
+# This file is part of VetarAI.
+#
+# VetarAI is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# VetarAI is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """checkpoint-061 后端端点边界扫荡（第二轮）。
 隔离：TestClient + TMP monkeypatch（与 test_checkpoint050/058 同模式），不碰真实数据。
 覆盖：缺失参数 / 非法类型 / 不存在资源 / 路径穿越 / 独立 Agent 命名空间边界。
