@@ -63,31 +63,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: #0EA5E9; }
 
 /* 问题2修复（0.3.2实测）：即时悬停提示。原生 title 有约 1 秒系统级延迟，
    新用户悬停无反应会以为没有提示。data-tip 属性 0.12s 即现，纯 CSS 无 JS。
-   长说明文本（>15字）继续用原生 title，不转换。 */
+   长说明文本（>15字）继续用原生 title，不转换。
+   0.4.5：CSS 伪元素实现已废弃（会被滚动容器裁切，底部按钮提示看不到），
+   改由 <TipPortal/> 全局 portal 层渲染（fixed 定位，不被任何容器裁切）。
+   此处仅保留 data-tip 的定位语义（relative），不再绘制伪元素。 */
 [data-tip] { position: relative; }
-[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute; left: 50%; top: calc(100% + 6px);
-  transform: translateX(-50%) scale(0.96);
-  padding: 3px 8px; border-radius: 4px;
-  background: rgba(26, 26, 30, 0.92); color: #fff;
-  font-size: 11px; line-height: 1.5; white-space: nowrap;
-  opacity: 0; pointer-events: none;
-  transition: opacity 0.12s ease 0.08s, transform 0.12s ease 0.08s;
-  z-index: 1000;
-}
-[data-tip]:hover::after { opacity: 1; transform: translateX(-50%) scale(1); }
 
 /* 问题（0.4.1实测）：整页可上下滑动、露出 body 深色底。
    桌面壳不应有页面级滚动——各面板内部自滚；根级锁死，
    杜绝任何绝对定位元素（如即时提示伪元素）把文档撑出滚动区。 */
 html, body, #root { height: 100%; overflow: hidden; }
 
-/* 即时提示的右侧弹出变体：最左导航栏按钮用，避免底部/左侧裁切 */
-[data-tip].tip-right::after {
-  left: calc(100% + 8px); top: 50%;
-  transform: translateY(-50%) scale(0.96);
-}
-[data-tip].tip-right:hover::after {
-  transform: translateY(-50%) scale(1);
-}
+/* tip-right 变体语义（右侧弹出）现由 TipPortal 读取 class 判断方向，
+   不再使用 CSS 伪元素绘制（见上方说明）。 */

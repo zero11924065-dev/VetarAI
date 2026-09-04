@@ -28,7 +28,7 @@ export type IconName =
   | 'chevron-down' | 'chevron-up' | 'chevron-right' | 'chevron-left'
   | 'arrow-left' | 'arrow-right' | 'arrow-up-right'
   | 'sliders' | 'pencil' | 'trash' | 'send' | 'stop' | 'play' | 'rotate-cw' | 'copy'
-  | 'folder' | 'file' | 'file-text' | 'image' | 'paperclip' | 'message-circle'
+  | 'folder' | 'folder-open' | 'file' | 'file-text' | 'image' | 'paperclip' | 'message-circle'
   | 'bot' | 'user' | 'mic' | 'clipboard' | 'download' | 'external-link'
   | 'alert-triangle' | 'alert-circle' | 'info' | 'clock' | 'shield' | 'crown'
   | 'wrench' | 'plug' | 'layers' | 'book' | 'database' | 'cpu' | 'globe'
@@ -55,6 +55,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
   'rotate-cw': <><path d="M21 4v6h-6" /><path d="M20 14a8 8 0 1 1-1.9-6.7L21 10" /></>,
   copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>,
   folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />,
+  'folder-open': <path d="M6 14l1.5-4.5A2 2 0 0 1 9.4 8H21a1 1 0 0 1 .96 1.3L20 15.5a2 2 0 0 1-1.9 1.5H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2 2h6" />,
   file: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></>,
   'file-text': <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></>,
   image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9.5" r="1.5" /><path d="M21 15.5l-5-5L6 20" /></>,

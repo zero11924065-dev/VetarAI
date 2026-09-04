@@ -28,6 +28,7 @@ import { RoundtableView } from './panels/RoundtableView';
 import { SettingsPage } from './panels/SettingsPage';
 import { WorkflowPanel } from './panels/WorkflowPanel';
 import { ModuleNav, ModuleKey } from './panels/ModuleNav';
+import { TipPortal } from './TipPortal';
 import { getApiBase } from './apiBase';
 import { colors, fonts } from './theme';
 import { Icon, Spinner } from './Icon';
@@ -151,6 +152,8 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: colors.bgApp, fontFamily: fonts.base, color: colors.textPrimary }}>
+      {/* 0.4.5：全局 portal 悬停提示层（不被任何滚动容器裁切，根治提示看不到） */}
+      <TipPortal />
       {/* 0.2.1（TS-119）：一级模块导航栏（最左竖条）。
           问题6修复：设置入口上移到此导航底部——职能/流程两个中心都能打开设置 */}
       <ModuleNav

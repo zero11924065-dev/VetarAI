@@ -1948,3 +1948,31 @@ async def api_knowledge_open_dir(req: OpenKnowledgeDirReq):
     except subprocess.TimeoutExpired:
         return {"ok": False, "dir": str(kdir), "detail": "打开超时"}
     return {"ok": True, "dir": str(kdir)}
+
+
+class OpenProjectDirReq(BaseModel):
+    project_id: str
+
+@app.post("/api/projects/open-working-dir")
+async def api_open_project_working_dir(req: OpenProjectDirReq):
+    """0.4.5：项目行"查看根目录"按钮后端。在 Finder 打开该项目登记的工作目录。
+    仅允许打开 projects 表中登记的 working_dir，防任意路径打开。"""
+    import platform
+    import subprocess
+    for p in list_projects():
+        if p.get("id") == req.project_id:
+            wd = str(p.get("working_dir") or "")
+            if not wd:
+                raise HTTPException(status_code=400, detail="该项目未设置工作目录")
+            d = Path(wd).expanduser()
+            if not d.is_dir():
+                raise HTTPException(status_code=400, detail=f"工作目录不存在：{d}")
+            if platform.system() != "Darwin":
+                return {"ok": False, "dir": str(d), "detail": "非 macOS，请手动打开：" + str(d)}
+            try:
+                await asyncio.to_thread(subprocess.run, ["open", str(d)],
+                                        capture_output=True, timeout=15)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "dir": str(d), "detail": "打开超时"}
+            return {"ok": True, "dir": str(d)}
+    raise HTTPException(status_code=404, detail="项目不存在")

@@ -159,6 +159,27 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
     setLoading(false);
   }
 
+  // 0.4.5：项目行"查看根目录"——在 Finder 打开该项目的工作目录
+  const [openingDirId, setOpeningDirId] = useState<string | null>(null);
+  async function openWorkingDir(pid: string) {
+    if (openingDirId) return;
+    setOpeningDirId(pid);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/projects/open-working-dir`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: pid }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+    } catch (e: any) {
+      setError('打开工作目录失败: ' + e.message);
+    } finally {
+      setOpeningDirId(null);
+    }
+  }
+
   // 用指定目录创建项目（内联输入确认 / Electron 分支共用）
   async function createWithDir(working_dir: string) {
     setLoading(true);
@@ -347,6 +368,13 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
                     <span style={{ ...typo.body, fontWeight: isSelected ? 500 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                   </div>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 2, opacity: isHover ? 1 : 0, transition: 'opacity .15s ease' }}>
+                    {/* 0.4.5：查看项目工作根目录（Finder 打开） */}
+                    <button data-tip="查看根目录"
+                      className="ui-btn ui-btn-ghost"
+                      onClick={e => { e.stopPropagation(); openWorkingDir(p.id); }}
+                      style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }}>
+                      {openingDirId === p.id ? <Spinner size={14} /> : <Icon name="folder-open" size={14} />}
+                    </button>
                     {/* TS-121（0.3.1 补遗2）：工作组 JSON 导出 */}
                     <button title="导出工作组（JSON：项目+Agent+会话+任务+圆桌）"
                       className="ui-btn ui-btn-ghost"

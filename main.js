@@ -28,7 +28,7 @@ let sidecarProcess = null;
 
 // checkpoint-053（用户需求：应用名全局改为 VetarAI + 关于信息放原生菜单栏）
 const APP_NAME = 'VetarAI';
-const APP_VERSION = '0.4.4';
+const APP_VERSION = '0.4.5';
 const APP_TAGLINE_CN = '一款零生态基础的Agent工具';
 const APP_TAGLINE_EN = 'An ecosystem-agnostic Agent tool.';
 
@@ -196,7 +196,7 @@ function createWindow() {
   });
   // 内容就绪 → 显示主窗口并关闭加载页
   mainWindow.once('ready-to-show', () => { mainWindow.show(); destroySplash(); });
-  // 0.4.4：任务执行中关闭弹确认
+  // 0.4.5：任务执行中关闭弹确认
   installCloseGuard(mainWindow);
 
   // checkpoint-063 封装：打包模式加载应用内静态前端产物（不依赖 Vite 开发服务器）；
@@ -446,7 +446,7 @@ app.whenReady().then(async () => {
   setSplashStep(ready ? '引擎已就绪，正在加载界面…' : '正在加载界面…');
   createWindow();
 });
-// ── 0.4.4：任务执行中关闭应用弹确认（防误触中断）──
+// ── 0.4.5：任务执行中关闭应用弹确认（防误触中断）──
 let _appBusy = false;          // 渲染层上报的忙碌态（会话发送/工作流/圆桌运行中）
 let _appBusyConfirmed = false; // 用户已确认仍要关闭
 
