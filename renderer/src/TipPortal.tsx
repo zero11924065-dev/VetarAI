@@ -94,17 +94,22 @@ export function TipPortal() {
 
   if (!tip) return null;
 
+  // 0.4.6 U1：长文本自动换行限宽（短文本保持单行）
+  const isLong = tip.text.length > 18;
   const style: React.CSSProperties = {
     position: 'fixed',
     zIndex: 2000,
-    padding: '3px 8px',
+    padding: isLong ? '6px 10px' : '3px 8px',
     borderRadius: 4,
     background: 'rgba(26, 26, 30, 0.92)',
     color: '#fff',
     fontSize: 11,
     lineHeight: 1.5,
-    whiteSpace: 'nowrap',
+    whiteSpace: isLong ? 'normal' : 'nowrap',
+    maxWidth: isLong ? 260 : undefined,
+    wordBreak: isLong ? 'break-word' : undefined,
     pointerEvents: 'none',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
   };
   if (tip.variant === 'down') { style.left = tip.x; style.top = tip.y; style.transform = 'translateX(-50%)'; }
   else if (tip.variant === 'up') { style.left = tip.x; style.top = tip.y; style.transform = 'translate(-50%, -100%)'; }

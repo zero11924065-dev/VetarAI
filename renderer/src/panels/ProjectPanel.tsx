@@ -376,7 +376,7 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
                       {openingDirId === p.id ? <Spinner size={14} /> : <Icon name="folder-open" size={14} />}
                     </button>
                     {/* TS-121（0.3.1 补遗2）：工作组 JSON 导出 */}
-                    <button title="导出工作组（JSON：项目+Agent+会话+任务+圆桌）"
+                    <button data-tip="导出工作组（JSON：项目+Agent+会话+任务+圆桌）"
                       className="ui-btn ui-btn-ghost"
                       onClick={e => { e.stopPropagation(); handleExportWorkgroup(p.id, p.name); }}
                       style={{ ...btnGhost, height: 22, padding: '0 4px', color: colors.textTertiary }}>

@@ -1345,7 +1345,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           {currentSessionId && (
             <>
               <button className="ui-btn ui-btn-ghost" onClick={handleSummarizeSession} disabled={summarizing}
-                title="生成会话总结并保存（Markdown + 记录）"
+                data-tip="生成会话总结并保存（Markdown + 记录）"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:summarizing?'wait':'pointer'}}>
                 {summarizing ? <Spinner size={14} /> : <Icon name="file-text" size={16} style={{color:colors.textSecondary}} />}
               </button>
@@ -1713,9 +1713,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* Input (§8.12) */}
       <div style={{ padding:'12px 16px', borderTop:`1px solid ${colors.borderSubtle}`, display:'flex', gap:8, alignItems:'flex-end', flexShrink:0 }}>
-        <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.docx,.xlsx,.xlsm" />
+        <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.docx,.xlsx,.xlsm,.pptx" />
         {/* 验收修复：补回上传按钮（checkpoint-003 会话系统重写时丢失，handleUpload 成死代码） */}
-        <button className="ui-btn ui-btn-secondary" onClick={handleUpload} title="上传图片或文本文件（发送前可在暂存区删除）"
+        <button className="ui-btn ui-btn-secondary" onClick={handleUpload} data-tip="上传图片或文本文件（发送前可在暂存区删除）"
           style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,flexShrink:0}}>
           <Icon name="paperclip" size={16} style={{color:colors.textSecondary}} />
         </button>

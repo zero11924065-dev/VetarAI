@@ -140,7 +140,7 @@ export function WarehouseManager() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <span style={{ fontSize: 13, fontWeight: 500, color: colors.textPrimary }}>知识分组</span>
         <button className="ui-btn ui-btn-secondary" style={{ ...btnSecondary, height: 26, fontSize: 12 }}
-          onClick={rebuild} disabled={loading} title="扫描全部 .md 重建索引（索引损坏时容灾）">
+          onClick={rebuild} disabled={loading} data-tip="扫描全部 .md 重建索引（索引损坏时容灾）">
           {loading ? <Spinner size={12} /> : null} 重建索引
         </button>
       </div>

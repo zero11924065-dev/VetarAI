@@ -74,8 +74,13 @@ describe('checkpoint-048 会话总结与上传扩容', () => {
       sel.dispatchEvent(new Event('change', { bubbles: true }));
     });
 
-    const sumBtn = await screen.findByTitle(/生成会话总结/);
-    await act(async () => { sumBtn.click(); });
+    // 0.4.6：提示属性统一为 data-tip（即时提示），查询同步更新
+    let sumBtn: HTMLElement | null = null;
+    await waitFor(() => {
+      sumBtn = document.querySelector('button[data-tip*="生成会话总结"]') as HTMLElement | null;
+      expect(sumBtn).toBeTruthy();
+    }, { timeout: 3000 });
+    await act(async () => { sumBtn!.click(); });
     await waitFor(() => {
       const call = spy.mock.calls.find(c => String(c[0]).includes('/summarize'));
       expect(call).toBeTruthy();

@@ -132,7 +132,8 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
     // 这里断言发送按钮（非发送中态）存在，说明 UI 渲染正常
     expect(document.querySelector('button[data-tip="发送"]')).toBeTruthy();
     // 验收修复：上传按钮必须存在（checkpoint-003 重写时丢失，防回归）
-    expect(document.querySelector('button[title*="上传"]')).toBeTruthy();
+    // 0.4.6：提示属性统一为 data-tip（即时提示），查询同步更新
+    expect(document.querySelector('button[data-tip*="上传"]')).toBeTruthy();
 
     unmount();
   }, 8000);

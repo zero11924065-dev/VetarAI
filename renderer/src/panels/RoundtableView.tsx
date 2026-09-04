@@ -272,12 +272,12 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
           {/* 参与者 */}
           <span>参与者：{detail.participants.map(p => p.name).join('、')}</span>
           {/* TS-109 增强：保存为文件 + 删除（H18-1/H18-2） */}
-          <button className="ui-btn ui-btn-secondary" onClick={handleExport} disabled={busy} title="把整场讨论保存为 Markdown 文件"
+          <button className="ui-btn ui-btn-secondary" onClick={handleExport} disabled={busy} data-tip="把整场讨论保存为 Markdown 文件"
             style={{ ...btnSecondary, height: 22, padding: '0 8px', fontSize: 12 }}>
             <Icon name="download" size={14} /> 保存为文件
           </button>
           <button className="ui-btn ui-btn-danger-soft" onClick={handleDelete} disabled={busy || detail.status === 'running'}
-            title={detail.status === 'running' ? '讨论进行中不能删除' : '删除这场讨论'}
+            data-tip={detail.status === 'running' ? '讨论进行中不能删除' : '删除这场讨论'}
             style={{ ...btnDangerSoft, height: 22, padding: '0 8px', fontSize: 12, opacity: detail.status === 'running' ? 0.5 : 1 }}>
             <Icon name="trash" size={14} /> 删除
           </button>
@@ -416,7 +416,7 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
             </span>
             {/* checkpoint-067 N-1：手动停止（在当前发言完成后中止本轮） */}
             <button className="ui-btn ui-btn-danger-soft" onClick={handleStop} disabled={stopping}
-              title="停止讨论（将在当前发言完成后中止本轮，已完成发言保留）"
+              data-tip="停止讨论（将在当前发言完成后中止本轮，已完成发言保留）"
               style={{ ...btnDangerSoft }}>
               {stopping ? <Spinner size={14} /> : <Icon name="stop" size={14} />} 停止
             </button>

@@ -88,6 +88,10 @@ CREATE_DIR_RETURN = {
     "required": ["ok", "path"],
     "types": {"ok": bool, "path": str},
 }
+CREATE_DOC_RETURN = {
+    "required": ["ok", "path", "bytes"],
+    "types": {"ok": bool, "path": str, "bytes": int},
+}
 DELETE_PATH_RETURN = {
     "required": ["ok", "path"],
     "types": {"ok": bool, "path": str},
@@ -119,6 +123,15 @@ TOOLS = {
     "create_dir": {
         "params": {"path": "str"},
         "return_schema": CREATE_DIR_RETURN,
+    },
+    # 0.4.6：Office 文档生成（内置，非插件；模型按结构化契约传内容）
+    "create_document": {
+        "params": {
+            "path": "str（保存路径，扩展名决定类型 .docx/.xlsx/.pptx/.md）",
+            "doc_type": "str（docx/xlsx/pptx/md，可选，默认从扩展名推断）",
+            "content": "dict（结构化内容，契约见 doc_writer：blocks/sheets/slides）",
+        },
+        "return_schema": CREATE_DOC_RETURN,
     },
     # 2026-08-28 权限重构：删除工具（敏感路径删除/覆盖需用户确认）
     "delete_path": {
@@ -159,7 +172,7 @@ _TOOL_NAMES = set(TOOLS.keys())
 
 # 工具 → 动作类型（敏感判定：仅 delete / 覆盖已存在的敏感目标 需确认）
 _ACTION = {"list_dir": "list", "read_file": "read", "write_file": "write",
-           "create_dir": "mkdir", "delete_path": "delete"}
+           "create_dir": "mkdir", "delete_path": "delete", "create_document": "write"}
 
 
 # ---------- RETURN_SCHEMA 校验 ----------
@@ -331,6 +344,21 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | N
         if tool_name == "create_dir":
             target.mkdir(parents=True, exist_ok=True)
             return {"ok": True, "path": str(target)}
+        if tool_name == "create_document":
+            # 0.4.6：Office 文档生成。类型默认从扩展名推断（模型可显式覆盖）。
+            from sidecar.tools.doc_writer import write_document
+            doc_type = str(args.get("doc_type") or "").strip().lower()
+            if not doc_type:
+                ext = target.suffix.lower().lstrip(".")
+                doc_type = {"docx": "docx", "xlsx": "xlsx", "pptx": "pptx",
+                            "md": "md", "markdown": "md"}.get(ext, "")
+            content = args.get("content")
+            if not isinstance(content, dict):
+                raise ValueError("bad_arg: content 必须是结构化 JSON 对象"
+                                 "（docx/md 用 title+blocks；xlsx 用 sheets；pptx 用 slides）")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            nbytes = write_document(doc_type, target, content)
+            return {"ok": True, "path": str(target), "bytes": nbytes}
         if tool_name == "delete_path":
             if not target.exists():
                 raise ValueError(f"not_found: {target}")

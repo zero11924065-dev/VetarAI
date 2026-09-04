@@ -251,7 +251,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
                   {t.target_agent_id && onJumpToAgent && (
                     <button className="ui-btn ui-btn-ghost"
                       onClick={() => onJumpToAgent(t.target_agent_id!, t.session_id || null)}
-                      title="打开该子 Agent 的委派会话"
+                      data-tip="打开该子 Agent 的委派会话"
                       style={{ ...btnGhost, height: 22, padding: '0 8px', fontSize: 12, gap: 4, marginLeft: t.status === 'failed' ? 6 : 'auto' }}>
                       <Icon name="arrow-up-right" size={14} />
                       查看

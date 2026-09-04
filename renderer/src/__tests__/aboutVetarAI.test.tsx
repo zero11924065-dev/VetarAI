@@ -35,8 +35,8 @@ describe('关于VetarAI 介绍弹窗', () => {
     expect(screen.getByText('An ecosystem-agnostic Agent tool.')).toBeTruthy();
   });
 
-  it('版本号 = 0.4.5（用户指定）', () => {
-    expect(APP_INFO.version).toBe('0.4.5');
+  it('版本号 = 0.4.6（用户指定）', () => {
+    expect(APP_INFO.version).toBe('0.4.6');
   });
 
   it('点关闭按钮触发 onClose', () => {

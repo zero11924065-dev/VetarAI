@@ -36,7 +36,7 @@ TEXT_EXTS = {".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".ini",
              ".log", ".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".htm",
              ".xml", ".toml", ".cfg", ".conf", ".sh", ".css", ".csv"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-SUPPORTED_EXTS = TEXT_EXTS | IMAGE_EXTS | {".pdf", ".docx", ".xlsx", ".xlsm"}
+SUPPORTED_EXTS = TEXT_EXTS | IMAGE_EXTS | {".pdf", ".docx", ".xlsx", ".xlsm", ".pptx"}
 
 # Excel 防爆炸：单 sheet 最多行数 / 单元格截断
 _XLSX_MAX_ROWS_PER_SHEET = 200
@@ -126,6 +126,44 @@ def _parse_xlsx(raw: bytes) -> str | None:
         return None
 
 
+def _parse_pptx(raw: bytes) -> str | None:
+    """0.4.6：PowerPoint .pptx 解析（python-pptx 逐页：标题+正文+表格+备注）。"""
+    try:
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(raw))
+        parts: list[str] = []
+        for i, slide in enumerate(prs.slides):
+            lines = [f"[第{i + 1}页]"]
+            if slide.shapes.title is not None and (slide.shapes.title.text or "").strip():
+                lines.append(f"标题: {(slide.shapes.title.text or '').strip()}")
+            for shape in slide.shapes:
+                if shape is slide.shapes.title:
+                    continue
+                if shape.has_text_frame:
+                    t = (shape.text_frame.text or "").strip()
+                    if t:
+                        lines.append(t)
+                elif shape.has_table:
+                    for row in shape.table.rows:
+                        cells = [(c.text or "").strip().replace("\n", " ") for c in row.cells]
+                        line = " | ".join(c for c in cells if c)
+                        if line.strip():
+                            lines.append(line)
+            # 演讲者备注（常含关键信息）
+            try:
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    note = (slide.notes_slide.notes_text_frame.text or "").strip()
+                    if note:
+                        lines.append(f"备注: {note}")
+            except Exception:
+                pass
+            if len(lines) > 1:
+                parts.append("\n".join(lines))
+        return "\n\n".join(parts) if parts else None
+    except Exception:
+        return None
+
+
 def parse_attachment(name: str, raw: bytes) -> tuple[str | None, str]:
     """解析附件内容为文本。
 
@@ -143,6 +181,8 @@ def parse_attachment(name: str, raw: bytes) -> tuple[str | None, str]:
         return _parse_docx(raw), "docx"
     if ext in (".xlsx", ".xlsm"):
         return _parse_xlsx(raw), "xlsx"
+    if ext == ".pptx":
+        return _parse_pptx(raw), "pptx"
     if ext == ".csv":
         return _parse_csv(raw), "csv"
     if ext in TEXT_EXTS:

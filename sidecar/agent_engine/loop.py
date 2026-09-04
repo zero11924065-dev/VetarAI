@@ -116,6 +116,28 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False) -> li
             },
         },
         {
+            # 0.4.6：Office 文档生成（内置）。生成真实的 Word/Excel/PPT/Markdown 文件。
+            "type": "function",
+            "function": {
+                "name": "create_document",
+                "description": "生成 Word(.docx) / Excel(.xlsx) / PowerPoint(.pptx) / Markdown(.md) 文档文件。"
+                               "当用户要求输出报告、表格、幻灯片等正式文档时使用本工具（而非 write_file 纯文本）。"
+                               "content 必须是结构化 JSON："
+                               "docx/md 用 {title, blocks:[{type:'heading',level,text}|{type:'paragraph',text}|{type:'bullets',items:[..]}|{type:'table',rows:[[..],..]}]}；"
+                               "xlsx 用 {sheets:[{name, rows:[[单元格,..],..]}]}；"
+                               "pptx 用 {slides:[{title, bullets:[..], notes}]}.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "保存路径含扩展名（如 报告.docx / 数据.xlsx / 幻灯片.pptx / 总结.md）"},
+                        "doc_type": {"type": "string", "description": "文档类型 docx/xlsx/pptx/md（默认从扩展名推断，可省略）"},
+                        "content": {"type": "object", "description": "结构化内容（按上方契约填写，对象而非字符串）"},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+        },
+        {
             "type": "function",
             "function": {
                 "name": "delete_path",
