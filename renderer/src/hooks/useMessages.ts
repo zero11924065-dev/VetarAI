@@ -46,6 +46,10 @@ export interface Message {
   stopped?: boolean;
   // TS-102 B13：思考中指示（thinking 事件到达→正文首 token 到达期间为 true）
   thinking?: boolean;
+  // 0.4.2 阶段化思考：当前思考阶段已持续秒数（每秒跳动）
+  thinkingElapsed?: number;
+  // 0.4.2 阶段化思考：简版思考预览（末尾 ~120 字，让用户知道 agent 在想什么）
+  thinkingPreview?: string;
   // checkpoint-067b D-1：思考完成后的累计秒数，固化为"思考用时 Xs"一直保留显示
   thinkingDuration?: number;
   // H17 问题3：本轮上下文已用 token（prompt_eval_count），持久化后历史会话可恢复指示器

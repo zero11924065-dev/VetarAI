@@ -283,8 +283,9 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | N
     try:
         if tool_name == "list_dir":
             if not target.is_dir():
-                hint = (f"not_a_dir: {args.get('path') or ''}（解析后: {target}，不存在或不是目录；"
-                        f"沙盒根: {root}。请用绝对路径重试，或先 list_dir 沙盒根确认结构）")
+                hint = (f"not_a_dir: {args.get('path') or ''}（解析后: {target}，该目录尚不存在"
+                        f"——可能还未创建；如需创建请用 create_dir/mkdir，或先 list_dir 其父目录确认结构；"
+                        f"沙盒根: {root}）")
                 if target.is_file():
                     hint = (f"not_a_dir: {args.get('path') or ''}（该路径是【文件】不是目录；"
                             f"请用 read_file 读取: {target}）")

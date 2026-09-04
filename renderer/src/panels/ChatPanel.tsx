@@ -1023,10 +1023,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       scheduleStreamCacheSync();
     };
     let accContent = '';
-    // TS-102 B13：是否已收到过正文 token（用于收起"思考中"指示）
-    let sawContent = false;
-    // checkpoint-067b D-1：记录思考开始时间，首正文token到达时计算并固化思考用时
+    // 问题（0.4.2实测·长思考界面静默）修复：旧版用一次性 sawContent 守卫，
+    // 导致【首轮正文之后的思考增量全被丢弃】——首轮先出正文、后续轮长思考时界面静默、
+    // 思考计时停跳。改为"阶段化"：思考指示随每个思考阶段开/关，任意一轮思考都可见、
+    // 计时持续跳动，并附简版思考预览（让你实时知道 agent 在想什么、不是空转）。
     let thinkingStartedAt: number | null = null;
+    let thinkingElapsedTimer: ReturnType<typeof setInterval> | null = null;
     // B05：工具事件也按 id 定位（防止数组变化时落到错误气泡）
     const patchStreamMsg = (patch: (m: Message) => Message) => {
       if (currentSessionIdRef.current !== streamSid) return;
@@ -1039,27 +1041,43 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       });
       scheduleStreamCacheSync();
     };
+    // 阶段化思考：开/关当前思考阶段（可多次开闭）
+    const startThinkingPhase = () => {
+      thinkingStartedAt = Date.now();
+      if (thinkingElapsedTimer) clearInterval(thinkingElapsedTimer);
+      thinkingElapsedTimer = setInterval(() => {
+        patchStreamMsg(mm => mm.thinking
+          ? { ...mm, thinkingElapsed: Math.round((Date.now() - (thinkingStartedAt || Date.now())) / 1000) }
+          : mm);
+      }, 1000);
+      patchStreamMsg(m => m.thinking ? m : { ...m, thinking: true, thinkingElapsed: 0 });
+    };
+    const closeThinkingPhase = () => {
+      if (thinkingElapsedTimer) { clearInterval(thinkingElapsedTimer); thinkingElapsedTimer = null; }
+      patchStreamMsg(m => {
+        if (!m.thinking) return m;
+        const duration = thinkingStartedAt ? Math.round((Date.now() - thinkingStartedAt) / 1000) : undefined;
+        return { ...m, thinking: false, thinkingElapsed: undefined,
+          ...(duration !== undefined ? { thinkingDuration: duration } : {}) };
+      });
+    };
 
     const applyEvent = (ev: { event: string; data: any }) => {
       const d = ev.data || {};
       if (ev.event === 'token') {
         accContent += (typeof d.delta === 'string' ? d.delta : '');
         if (!rafId) rafId = requestAnimationFrame(flushAcc);
-        // TS-102 B13：首个正文 token 到达 = 思考结束，收起"思考中"指示（只收一次）
-        if (!sawContent) {
-          sawContent = true;
-          // checkpoint-067b D-1：思考完成，计算并固化思考用时（秒）
-          const duration = thinkingStartedAt ? Math.round((Date.now() - thinkingStartedAt) / 1000) : undefined;
-          patchStreamMsg(m => ({ ...m, thinking: false, ...(duration !== undefined ? { thinkingDuration: duration } : {}) }));
-        }
+        // 正文到达 = 当前思考阶段结束（每轮都成立，不再一次性）
+        closeThinkingPhase();
       } else if (ev.event === 'thinking') {
-        // TS-102 B13：思考增量 → 显示"💭 思考中"指示（正文开始后不再响应）
-        if (!sawContent) {
-          // checkpoint-067b D-1：首次收到thinking事件时记录开始时间
-          if (thinkingStartedAt === null) thinkingStartedAt = Date.now();
-          patchStreamMsg(m => m.thinking ? m : { ...m, thinking: true });
+        // 思考增量（任意轮）→ 阶段化显示：思考中 + 每秒跳动 + 简版预览
+        startThinkingPhase();
+        const delta = typeof d.delta === 'string' ? d.delta : '';
+        if (delta) {
+          patchStreamMsg(m => ({ ...m, thinkingPreview: ((m.thinkingPreview || '') + delta).slice(-120) }));
         }
       } else if (ev.event === 'tool_call') {
+        closeThinkingPhase(); // 模型停止思考去调工具，关闭当前思考阶段
         patchStreamMsg(m => ({ ...m, toolSteps: [...(m.toolSteps||[]), { id: d.id||'', name: d.name||'tool', args: d.args, status: 'running' as const }] }));
       } else if (ev.event === 'tool_result') {
         patchStreamMsg(m => ({ ...m, toolSteps: (m.toolSteps||[]).map(st =>
@@ -1076,7 +1094,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             ? Math.round((Date.now() - m.startedAt) / 1000)
             : undefined;
           return {
-            ...m, streamError: d.detail || '生成出错', thinking: false, stopped: true,
+            ...m, streamError: d.detail || '生成出错', thinking: false, thinkingElapsed: undefined,
+            thinkingPreview: undefined, stopped: true,
             ...(completedDuration !== undefined ? { completedDuration } : {}),
           };
         });
@@ -1110,6 +1129,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       // done → 最终 content 以 done 为准（覆盖已累加，保证完整）
       if (ev.event === 'done') {
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+        closeThinkingPhase(); // 收尾：清思考计时器与阶段标记
         patchStreamMsg(m => {
           let content = m.content || '';
           if (typeof d.content === 'string') content = d.content;
@@ -1119,7 +1139,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             ? Math.round((Date.now() - m.startedAt) / 1000)
             : undefined;
           return {
-            ...m, content, thinking: false, stopped: true,
+            ...m, content, thinking: false, thinkingElapsed: undefined, thinkingPreview: undefined,
+            stopped: true,
             ...(completedDuration !== undefined ? { completedDuration } : {}),
           };
         });
@@ -1543,11 +1564,21 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                     <div style={{marginBottom:6}}>{_imgs.map((uri,j) => <img key={j} src={uri} alt="img" style={{maxWidth:150,maxHeight:150,borderRadius:radius.s,marginRight:4,verticalAlign:'top',border:`1px solid ${colors.borderDefault}`}} />)}</div>
                   ) : null;
                 })()}
-                {/* TS-102 B13：思考中指示（thinking 期间显示，正文首 token 到达即收起） */}
+                {/* 思考中指示（阶段化：任意轮思考都显示，秒数每秒跳动，附简版预览） */}
                 {msg.role === 'assistant' && msg.thinking && (
-                  <div style={{ ...calloutStyle('info'), marginBottom:8 }}>
-                    <Spinner size={14} />
-                    <span>思考中…</span>
+                  <div style={{ ...calloutStyle('info'), marginBottom:8, flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <Spinner size={14} />
+                      <span>思考中… {msg.thinkingElapsed != null ? `${msg.thinkingElapsed}s` : ''}</span>
+                    </span>
+                    {/* 简版思考预览：让你实时知道 agent 在想什么（只留末尾 120 字） */}
+                    {msg.thinkingPreview && (
+                      <span style={{ fontSize: 11, color: colors.textTertiary, lineHeight: 1.5,
+                        display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                        wordBreak: 'break-word', width: '100%' }}>
+                        {msg.thinkingPreview}
+                      </span>
+                    )}
                   </div>
                 )}
                 {/* checkpoint-067b D-1：思考完成后保留显示思考用时 */}
