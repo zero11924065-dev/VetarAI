@@ -43,6 +43,10 @@ export interface Message {
   maxStep?: number;
   tokensUsed?: number;
   streamError?: string;
+  // 0.4.9 任务161：报错诊断（由用户在设置里指定的报错分析模型生成的人话结论）
+  // 后端 _build_error_payload 随 error 事件回传；无分析（未配置/失败/超时）时为 undefined。
+  errorAnalysis?: string;
+  errorAnalysisModel?: string;
   stopped?: boolean;
   // TS-102 B13：思考中指示（thinking 事件到达→正文首 token 到达期间为 true）
   thinking?: boolean;

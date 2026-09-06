@@ -7,9 +7,14 @@
 > **Compute is free. Context is precious.**
 > VetarAI is a 100% local desktop app: multi-agent collaboration, visual workflows, a pull-mode knowledge warehouse with on-device semantic retrieval. All data stays on your disk — zero dependency on any cloud service.
 
-**当前版本 / Current version：0.4.6**（macOS · Apple Silicon）
+**当前版本 / Current version：0.4.10**（macOS · Apple Silicon）
 
 **Note: This project is developed by a Chinese team. English translations are provided immediately following each corresponding Chinese section. Full English language support will be included in a future update.**
+
+<p align="center">
+  <img src="docs/demo/auto-create-agent.gif" alt="VetarAI 演示：一句话自动创建并配置子 Agent / Demo: create a sub-agent from a single sentence" width="720">
+</p>
+<p align="center"><sub>主 Agent 收到一句话需求，自动创建子 Agent、装配角色与模型，随即开始干活。<br>The main agent receives a one-line request, auto-creates a sub-agent with role &amp; model configured, and gets to work.</sub></p>
 
 ---
 
@@ -32,7 +37,7 @@
 
 ## ⬇️ 下载 VetarAI / Download VetarAI
 
-**[⬇️ 下载 VetarAI 0.4.6 安装包 / Download VetarAI 0.4.6 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.6)**
+**[⬇️ 下载 VetarAI 0.4.10 安装包 / Download VetarAI 0.4.10 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.10)**
 
 （589MB · macOS Apple Silicon · dmg 格式 · **内置 bge-m3 语义嵌入模型，安装即用，无需额外下载**）
 (589MB · macOS Apple Silicon · dmg · **bge-m3 semantic embedding model is bundled — works out of the box, no extra download needed**)
@@ -92,6 +97,10 @@ Running agents on local LLMs means facing a few hard realities — each generati
 - **Never auto-injected**: unlike typical RAG, warehouse content is only read when you explicitly search/select, or instruct the agent to search.
 - **Files are the source of truth**: every entry is a plain Markdown file you can read, edit, or back up in Finder; delete a file and the index reconciles automatically.
 
+<img src="docs/demo/rag-ingest-warehouse.gif" alt="演示：勾选会话消息移入知识仓库 / Demo: move selected messages into the knowledge warehouse" width="720">
+
+<sub>勾选会话中的消息 → 移入知识仓库：消息转为独立 Markdown 文件永久保存，并从模型上下文中移除。<br>Select messages in a chat → move them into the warehouse: they become standalone Markdown files, permanently saved and removed from context.</sub>
+
 ### 🔍 三路检索 / Three-Way Retrieval
 
 | 模式 / Mode | 适用 / Best for | 原理 / How |
@@ -100,11 +109,19 @@ Running agents on local LLMs means facing a few hard realities — each generati
 | 语义 / Semantic | 换述与近义（搜"这颗星球的形状"找到"地球的形状"） | bge-m3 INT8：稠密余弦 + 稀疏词权 |
 | 混合 / Hybrid（默认） | 两者都要，结果最全 | 两路结果融合排序 |
 
+<img src="docs/demo/rag-search-index.gif" alt="演示：知识仓库混合检索 / Demo: hybrid retrieval over the knowledge warehouse" width="720">
+
+<sub>关键词 / 语义 / 混合三模式检索：换个说法也能搜到想要的内容。<br>Keyword / semantic / hybrid retrieval — finds content even when you phrase it differently.</sub>
+
 ### 🤖 Agent 主动检索 · 读完即忘 / Agent-Initiated Search · Read-and-Forget
 
 你可以直接对 Agent 说"检索知识库里关于 XX 的内容"。Agent 调用检索工具取回知识、用于当轮回答——**回答完成后，检索内容不会留在对话上下文里**。上下文只为真正需要的东西付费。
 
 Just tell the agent: "search the knowledge base for X." The agent retrieves the knowledge, answers the current turn — **and the retrieved content never stays in the conversation context**. You pay context only for what truly matters.
+
+<img src="docs/demo/context-free-delegation.gif" alt="演示：检索结果用完即弃，不占用上下文 / Demo: retrieved content is discarded after answering, never occupying context" width="720">
+
+<sub>Agent 检索知识仓库回答问题后，检索内容不留在对话上下文里——上下文占用纹丝不动。<br>After the agent answers using warehouse knowledge, the retrieved content never stays in the conversation — context usage stays flat.</sub>
 
 > 📦 **语义模型已内置**：bge-m3 ONNX INT8（544MB，MIT 协议）随安装包附带，纯本地 CPU 推理，不联网。
 > 📦 **Semantic model bundled**: bge-m3 ONNX INT8 (544MB, MIT license) ships inside the installer — pure local CPU inference, no network.
@@ -128,6 +145,10 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 - **Automatic model scheduling**: switching models unloads the previous one first; everything unloads when the workflow ends.
 - **Human approval nodes**: a workflow can pause at any step, waiting for your confirmation.
 
+<img src="docs/demo/workflow-builder.gif" alt="演示：可视化工作流编排 / Demo: visual workflow orchestration" width="720">
+
+<sub>节点 + 连线可视化编排：循环分批、并行、失败策略，把重复任务变成一条流水线。<br>Nodes + edges visual orchestration: loop batching, parallelism and failure policies turn repetitive tasks into one pipeline.</sub>
+
 ---
 
 ## 🧩 核心能力一览
@@ -143,6 +164,14 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 - **Roundtable**: multiple agents discuss a topic with shared minutes; hosted by user or AI — you always control when it ends.
 - **Independent agents**: first-class citizens on par with projects.
 - **Workgroup export**: one-click JSON snapshot of project + agents + sessions + task queue + roundtables.
+
+<img src="docs/demo/delegate-existing-agent.gif" alt="演示：主 Agent 委派任务给已有子 Agent / Demo: main agent delegates to an existing sub-agent" width="720">
+
+<sub>主 Agent 把任务委派给已有子 Agent：独立执行、按契约交卷，失败自动追问不阻塞主流程。<br>The main agent delegates to an existing sub-agent: independent execution, contract-based reporting; failures auto-retry without blocking.</sub>
+
+<img src="docs/demo/roundtable-demo.gif" alt="演示：多 Agent 圆桌讨论 / Demo: multi-agent roundtable discussion" width="720">
+
+<sub>圆桌讨论：多个 Agent 围绕议题共享纪要，结束权始终在你手里。<br>Roundtable: multiple agents discuss a topic with shared minutes — you always control when it ends.</sub>
 
 ### 上下文管理 / Context Management
 
@@ -178,7 +207,7 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 使用安装包（推荐普通用户）
 
-1. 下载 `VetarAI-0.4.6-arm64.dmg`，双击挂载
+1. 下载 `VetarAI-0.4.10-arm64.dmg`，双击挂载
 2. 把 **VetarAI** 拖入 **Applications** 文件夹
 3. 从启动台打开
 
@@ -188,7 +217,7 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 Install (Recommended)
 
-1. Download `VetarAI-0.4.6-arm64.dmg` and double-click to mount
+1. Download `VetarAI-0.4.10-arm64.dmg` and double-click to mount
 2. Drag **VetarAI** into **Applications**
 3. Open from Launchpad
 

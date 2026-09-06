@@ -412,7 +412,11 @@ async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
     full_text = ""
     steps: list[dict] = []
     _pe_max_box = [0]  # TS-116：本轮最大 prompt_eval_count（列表包装避免闭包 reassignment）
-    async for ev in run_tool_loop(model, msgs, tools_spec(with_delegation=False), sandbox_root,
+    async for ev in run_tool_loop(model, msgs,
+                                  # 0.4.9 F2：子 Agent 既不可再委派（防递归），也不可有联网安装权
+                                  # （实测事故：子 Agent 擅自 install_skill 去 GitHub 拉取，
+                                  #  触发 git 凭据弹窗并装入无关插件目录）
+                                  tools_spec(with_delegation=False, with_install=False), sandbox_root,
                                   authorizer=authorizer, max_rounds=max_rounds,
                                   context_limit=0, connector=conn,
                                   cancel_check=cancel_check,
@@ -497,8 +501,15 @@ async def run_delegated_task(
     connector: Any = None,
     images: list[str] | None = None,
     simple_mode: bool | None = None,
+    model_override: str | None = None,
 ) -> dict:
     """执行一次委派（默认串行锁内；task_concurrency 开启时并行）。
+
+    0.4.9（3.47.2 委派模型自选）：model_override 非空时覆盖子 Agent 自身模型运行本任务。
+    语义边界（需求文档 3.47.2）：
+      - 自动新建子 Agent → 用指定模型创建；
+      - 复用已有子 Agent → 本任务临时用指定模型（不改其持久配置，角色身份优先）；
+      - 指定模型在本地不存在 → 直接报错并列出可用模型，不静默回退（否则模型分工失效）。
     TS-114（3.27）：images=委派附着图片（base64 列表），传入子会话视觉流。
     0.1.71（TS-118）：simple_mode=简单委派模式（带图自动启用，见
     resolve_simple_mode）；带图委派遇无视觉能力模型直接拦截报错。
@@ -515,6 +526,30 @@ async def run_delegated_task(
     target_agent_id = str(target_agent.get("id", ""))
     target_name = str(target_agent.get("name", "")) or target_agent_id[:8]
     model = target_agent.get("model_name") or "qwen3.8"
+
+    # 0.4.9（3.47.2）：委派模型自选——model_override 覆盖子 Agent 默认模型
+    _model_overridden = False
+    if model_override and str(model_override).strip():
+        _ov = str(model_override).strip()
+        # 模型存在性校验：本地无此模型 → 报错并列出可用模型，引导主 Agent 换选
+        # （不静默回退到子 Agent 原模型，否则"按特长选模型"的意图被悄悄吞掉）
+        if connector is not None:
+            try:
+                _avail = [str(m.get("name", "")) for m in await connector.list_models()]
+            except Exception:
+                _avail = []
+            if _avail and _ov not in _avail:
+                # 兼容带/不带 tag 的写法（"glm-ocr" 命中 "glm-ocr:latest"）
+                _hit = next((a for a in _avail if a == _ov or a.split(":")[0] == _ov.split(":")[0]), None)
+                if _hit:
+                    _ov = _hit
+                else:
+                    return {"ok": False, "status": "failed", "task_id": "",
+                            "error": (f"model_not_found: 你指定的委派模型「{_ov}」在本机不存在。"
+                                      f"可用模型：{'、'.join(_avail[:12])}。"
+                                      "请改用其中某个模型重新委派，或不填 model 参数沿用目标 Agent 自身模型。")}
+        model = _ov
+        _model_overridden = True
 
     # 0.1.71（TS-118）：简单模式判定（带图强制启用 / 显式传参 / OCR 专用模型）
     _simple = resolve_simple_mode(images, model, simple_mode)
@@ -737,7 +772,12 @@ async def run_delegated_task(
                     pass
                 return {"ok": True, "task_id": task_id, "status": report["status"],
                         "summary": report["summary"], "artifacts": report["artifacts"],
-                        "target_agent_name": target_name}
+                        "target_agent_name": target_name,
+                        # 0.4.9（3.47.2）：报告本次实际使用的模型，让主 Agent 与用户
+                        # 能确认"按特长选的模型"确实生效（0.4.7 事故中子 Agent 与主 Agent
+                        # 同用 qwen3-vl:30b，委派毫无提速，却无人察觉）。
+                        "model_used": model,
+                        "model_overridden": _model_overridden}
             except asyncio.TimeoutError:
                 # checkpoint-068 D-7：活性超时 → 判卡死，标记失败并中止
                 _to_reason = (f"活性超时：子任务 {int(_activity_timeout)} 秒内未完成（疑似模型僵死），已中止")

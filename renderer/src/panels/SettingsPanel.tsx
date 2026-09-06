@@ -53,6 +53,230 @@ interface Config {
   // checkpoint-067b D-4：大模型并行 + 任务并发开关（两个独立布尔开关）
   model_parallel?: boolean;
   task_concurrency?: boolean;
+  // 0.4.9：报错分析 / 联网安装确认 / 委派模型自选与换装
+  error_analysis_model?: string;          // 任务161：报错分析用的默认模型（空=用 default_model）
+  confirm_network_install?: boolean;      // 任务152：联网安装前必须询问
+  model_strengths?: Record<string,string>; // 3.47.2：模型特长画像
+  delegation_model_swap?: boolean;        // 3.47.3：委派模型换装
+  // 0.4.9（3.48.2）应用内模块控制
+  app_control_enabled?: boolean;
+  app_control_confirm?: string[];
+  // 0.4.9（3.48.1）Computer Use
+  computer_use_enabled?: boolean;
+  computer_use_confirm_each?: boolean;
+  computer_use_app_whitelist?: string[];
+}
+
+// 0.4.9（3.48.1）：Computer Use 设置区——总开关 + 每步确认 + 应用白名单 + 权限探测。
+// ⚠️ 这是"Agent 直接操作真实电脑"的总闸，故默认关，且开启时强制展示权限状态与风险提示。
+function ComputerUseSection({ cfg, save }: { cfg: any; save: (patch: Record<string, any>) => void }) {
+  const api = getApiBase();
+  const [cap, setCap] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [newApp, setNewApp] = React.useState('');
+  const enabled = !!cfg.computer_use_enabled;
+
+  const probe = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${api}/computer-use/capabilities`);
+      setCap(r.ok ? await r.json() : { ok: false, problems: [`探测请求失败：HTTP ${r.status}`] });
+    } catch (e) {
+      setCap({ ok: false, problems: [`探测失败：${(e as Error).message}（侧车未运行？）`] });
+    } finally { setLoading(false); }
+  }, []);
+
+  React.useEffect(() => { if (enabled && !cap) probe(); }, [enabled, cap, probe]);
+
+  const wl: string[] = cfg.computer_use_app_whitelist || [];
+  const problems: string[] = (cap && cap.problems) || [];
+
+  return (
+    <div style={sectionCard}>
+      <div style={sectionTitle}>Computer Use（操作电脑）</div>
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+        <input type="checkbox" checked={enabled}
+          onChange={e => save({ computer_use_enabled: e.target.checked })} />
+        <span style={{ fontSize: 13, color: colors.textPrimary }}>允许 Agent 操作我的电脑（截屏 / 点击 / 键盘输入）</span>
+      </label>
+      <div style={hintStyle}>
+        ⚠️ 开启后 Agent 能看到你的屏幕并真实操作鼠标键盘——误操作后果立即可见且可能难以撤销（删文件、发消息、点支付）。
+        默认关闭。一期仅支持 macOS，全程本地不联网。建议保持"每步确认"开启，并用应用白名单限定可操作范围。
+      </div>
+
+      {enabled && (
+        <>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', margin: '10px 0 6px' }}>
+            <input type="checkbox" checked={cfg.computer_use_confirm_each ?? true}
+              onChange={e => save({ computer_use_confirm_each: e.target.checked })} />
+            <span style={{ fontSize: 13, color: colors.textPrimary }}>每步操作前都要我确认</span>
+          </label>
+          <div style={hintStyle}>强烈建议保持开启：每次点击/输入前弹窗告知"在哪个应用、做什么动作、参数是什么"，你同意才执行。关闭后 Agent 可连续自主操作，风险显著上升。</div>
+
+          <label style={formLabel}>允许操作的应用白名单</label>
+          {wl.length === 0 && (
+            <div style={hintStyle}>（空 = 不限制应用，仍受"每步确认"约束）</div>
+          )}
+          {wl.map((a, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ flex: 1, fontSize: 13, color: colors.textPrimary, fontFamily: fonts.mono }}>{a}</span>
+              <button className="ui-btn ui-btn-ghost ui-ico-danger"
+                onClick={() => save({ computer_use_app_whitelist: wl.filter(x => x !== a) })}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textTertiary, padding: 2 }}>
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <input className="ui-input" style={{ ...inpStyle, flex: 1 }} value={newApp}
+              placeholder="应用名，如 Finder / 预览 / 文本编辑"
+              onChange={e => setNewApp(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && newApp.trim() && !wl.includes(newApp.trim())) {
+                  save({ computer_use_app_whitelist: [...wl, newApp.trim()] }); setNewApp('');
+                }
+              }} />
+            <button className="ui-btn ui-btn-secondary" style={btnSecondary}
+              disabled={!newApp.trim() || wl.includes(newApp.trim())}
+              onClick={() => { save({ computer_use_app_whitelist: [...wl, newApp.trim()] }); setNewApp(''); }}>
+              添加
+            </button>
+          </div>
+          <div style={hintStyle}>白名单非空时，只有前台应用命中名单才允许操作，越界一律拒绝（防 Agent 跑到别的应用里乱点）。</div>
+
+          {/* 权限探测（防线1：门槛引导） */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+            <button className="ui-btn ui-btn-secondary" style={btnSecondary} onClick={probe} disabled={loading}>
+              {loading ? '正在探测…' : (cap ? '重新检测权限' : '检测权限')}
+            </button>
+            {cap && (
+              <span style={{ fontSize: 12.5, color: cap.ok ? colors.okText : colors.dangerText }}>
+                {cap.ok ? '✓ 能力与权限就绪' : '✗ 存在阻塞项'}
+              </span>
+            )}
+          </div>
+          {cap && (
+            <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.7, color: colors.textTertiary,
+              background: colors.bgSidebar, padding: '8px 10px', borderRadius: radius.s }}>
+              {cap.facts && (
+                <div style={{ fontFamily: fonts.mono, marginBottom: problems.length ? 6 : 0 }}>
+                  {cap.facts.frontmost_app && <div>前台应用：{cap.facts.frontmost_app}</div>}
+                  {cap.facts.screen_points && <div>屏幕逻辑尺寸：{cap.facts.screen_points} 点</div>}
+                  {cap.facts.screenshot_px && <div>截屏分辨率：{cap.facts.screenshot_px} px</div>}
+                  {cap.facts.retina_scale && <div>Retina 缩放：{cap.facts.retina_scale}x（点击坐标已自动换算）</div>}
+                  {/* ⚠️ 判据必须是 accessibility_trusted（AXIsProcessTrusted，问的是"本进程"）。
+                      不可用 accessibility（System Events 查询前台应用成功与否）——那走的是
+                      System Events 自己的权限，本进程无权限时它照样成功，会误显示"已授予"。 */}
+                  <div>辅助功能权限（本进程 AXIsProcessTrusted）：
+                    {cap.facts.accessibility_trusted === true ? '✓ 已授予'
+                      : cap.facts.accessibility_trusted === false ? '✗ 未授予（点击/输入会被系统静默丢弃）'
+                      : '？ 无法探测'}
+                  </div>
+                  <div>CoreGraphics 接口：{cap.facts.coregraphics || '未探测'}</div>
+                </div>
+              )}
+              {problems.map((pr, i) => (
+                <div key={i} style={{ color: colors.dangerText }}>· {pr}</div>
+              ))}
+              {!problems.length && cap.ok && (
+                <div style={{ color: colors.textTertiary }}>· 无需安装任何第三方工具（用系统内置 screencapture + JXA/CoreGraphics）。</div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// 0.4.9（3.47.2）：模型特长画像编辑——用户描述各模型擅长什么，
+// 主 Agent 委派时按画像自选模型（delegate_task 的 model 参数）。
+// 单条限 100 字（后端 config 层同样校验，超长会被拒绝）。
+function ModelStrengthsSection({ modelOptions, cfg, save }: {
+  modelOptions: string[];
+  cfg: any;
+  save: (patch: Record<string, any>) => void;
+}) {
+  const strengths: Record<string, string> = cfg.model_strengths || {};
+  const [draft, setDraft] = React.useState<Record<string, string>>({ ...strengths });
+  React.useEffect(() => { setDraft({ ...strengths }); }, [JSON.stringify(strengths)]);
+
+  const setOne = (model: string, text: string) => {
+    const next = { ...draft };
+    if (text.trim()) next[model] = text.slice(0, 100);
+    else delete next[model];
+    setDraft(next);
+  };
+  const commit = () => save({ model_strengths: draft });
+
+  return (
+    <div style={sectionCard}>
+      <div style={sectionTitle}>模型特长（委派时按此自选模型）</div>
+      <div style={hintStyle}>
+        描述每个本地模型擅长什么，主 Agent 委派子任务时会自动按特长挑模型——例如把图片识别派给 OCR 专用小模型、把长文推理留给大模型。
+        留空则不注入（主 Agent 沿用默认模型）。单条上限 100 字。
+      </div>
+      {/* 0.4.10（用户要求"模型变化后自动变化"）：列表 = 实时可用模型 ∪ 已配置模型。
+          并集是必要的：若只显示实时模型，被删模型的特长记录就【在界面上消失但仍留在配置里】，
+          用户既看不见也清不掉。故已配置但当前不可用的模型也列出，标记「已不可用」并可一键清理。
+          注意：后端注入提示词前已与可用模型取交集，故"已不可用"项不会误导 Agent；
+          这里保留它只为让用户能查看/恢复/清理（重新下载同名模型后特长自动恢复生效）。 */}
+      {(() => {
+        const avail = modelOptions.length ? modelOptions : [];
+        const configured = Object.keys(strengths);
+        const stale = configured.filter(m => !avail.includes(m));
+        const all = [...new Set([...avail, ...configured])];
+        return (
+          <>
+            {all.map(m => {
+              const isStale = avail.length > 0 && !avail.includes(m);
+              return (
+                <div key={m} style={{ marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <label style={{ ...formLabel, marginBottom: 0, flex: 1 }}>
+                      {m}
+                      {isStale && (
+                        <span style={{ marginLeft: 6, fontSize: 11, color: colors.textTertiary,
+                          background: colors.bgSidebar, padding: '1px 6px', borderRadius: radius.s }}>
+                          已不可用（未注入，可保留待恢复或删除）
+                        </span>
+                      )}
+                    </label>
+                    {isStale && (
+                      <button className="ui-btn ui-btn-ghost ui-ico-danger" data-tip="删除该模型的特长记录"
+                        onClick={() => setOne(m, '')}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer',
+                          color: colors.textTertiary, padding: 2 }}>
+                        <Icon name="trash" size={13} />
+                      </button>
+                    )}
+                  </div>
+                  <input className="ui-input" style={{ ...inpStyle, width: '100%', boxSizing: 'border-box', marginTop: 4 }}
+                    value={draft[m] || ''} maxLength={100}
+                    placeholder={isStale ? '（该模型当前不可用，特长已保留；重新下载后自动生效）'
+                                         : '如：OCR/图片转写专用，小而快'}
+                    onChange={e => setOne(m, e.target.value)} />
+                </div>
+              );
+            })}
+            {stale.length > 0 && (
+              <div style={hintStyle}>
+                有 {stale.length} 个模型的特长当前不会注入提示词（模型已从本机移除）。
+                记录已保留——重新下载同名模型后会自动恢复生效。要彻底清除请点右侧删除图标后保存。
+              </div>
+            )}
+          </>
+        );
+      })()}
+      {!modelOptions.length && !Object.keys(strengths).length && (
+        <div style={hintStyle}>当前推理后端没有可用模型（或未连接）。连上后即可在此填写特长。</div>
+      )}
+      <button className="ui-btn ui-btn-primary" style={{ ...btnPrimary, marginTop: 6 }} onClick={commit}>
+        保存模型特长
+      </button>
+    </div>
+  );
 }
 
 // M2 压缩记录展示
@@ -104,6 +328,14 @@ const sectionTitle: React.CSSProperties = {
 };
 
 /** 表单标签样式 */
+// 0.4.9（3.48.2）：与后端 app_modules/registry.py 的 APP_MODULE_REGISTRY 保持一致。
+// 后端新增模块/动作时，此处需同步（否则新动作在设置页无法配置确认级别）。
+const ALL_MODULE_ACTIONS = [
+  'workflow_list', 'workflow_run', 'workflow_get_runs',
+  'knowledge_search', 'knowledge_inject', 'knowledge_groups',
+  'roundtable_create',
+];
+
 const formLabel: React.CSSProperties = {
   display: 'block',
   fontSize: 12, fontWeight: 400, lineHeight: 1.5,
@@ -354,7 +586,62 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
               <span style={{ fontSize: 13, color: colors.textPrimary }}>任务并发</span>
             </label>
             <div style={hintStyle}>开启后多个委派任务可并行执行；关闭时任务排队依次运行（串行排队，本机性能受限时推荐关闭）。</div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 8 }}>
+              <input type="checkbox" checked={cfg.delegation_model_swap ?? true}
+                onChange={e => save({ delegation_model_swap: e.target.checked })} />
+              <span style={{ fontSize: 13, color: colors.textPrimary }}>委派模型换装</span>
+            </label>
+            <div style={hintStyle}>委派前卸载主模型、子 Agent 交卷后卸载子模型，腾出内存给子任务独占（本地内存有限时推荐开启）。开启「大模型并行」或「任务并发」时自动失效——并行场景卸载会互相冲突。已内置 0.4.7 事故防护：卸载带 20s 独立超时，且卸载前先确认模型确在内存（避免为卸载而加载）。</div>
           </div>
+
+          {/* ===== 0.4.9 任务161：报错分析 ===== */}
+          <div style={sectionCard}>
+            <div style={sectionTitle}>报错分析</div>
+            <label style={formLabel}>报错分析模型</label>
+            <select className="ui-input" style={{ ...select, width: '100%' }}
+              value={cfg.error_analysis_model || ''}
+              onChange={e => { const v = e.target.value; setCfg({ ...cfg, error_analysis_model: v }); save({ error_analysis_model: v }); }}>
+              <option value="">（跟随默认模型：{cfg.default_model || '未设置'}）</option>
+              {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <div style={hintStyle}>任务失败时，除显示具体原因（工具名 / 参数 / 真实错误）外，再用该模型给出一句人话诊断与下一步建议。当前模型是 OCR 等专用小模型、不具备分析能力时，会自动改用它来分析——这正是本项的用途。留空则跟随默认模型；分析失败或超时 60s 会静默跳过，只显示失败原因，不影响原始报错。</div>
+          </div>
+
+          {/* ===== 0.4.9 3.48.2：应用内模块控制 ===== */}
+          <div style={sectionCard}>
+            <div style={sectionTitle}>应用内模块控制</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={cfg.app_control_enabled ?? false}
+                onChange={e => save({ app_control_enabled: e.target.checked })} />
+              <span style={{ fontSize: 13, color: colors.textPrimary }}>允许 Agent 调动应用内模块</span>
+            </label>
+            <div style={hintStyle}>
+              <b style={{ color: colors.textSecondary }}>开启后：</b>Agent 可通过 app_control 调用工作流（跑确定性流程，如批量识图）、知识仓库（查历史沉淀）、圆桌（发起多 Agent 会诊）。其中查询类动作直接执行；运行工作流／创建圆桌等高成本动作会先弹窗请你确认。<br />
+              <b style={{ color: colors.textSecondary }}>关闭时（默认）：</b>该工具不会出现在 Agent 的工具列表里（零开销），Agent 无法调动任何应用内模块。<br />
+              以后新增模块只需在注册表登记一条，Agent 自动获得调用能力。
+            </div>
+
+            <label style={formLabel}>需要我确认的动作</label>
+            {(ALL_MODULE_ACTIONS || []).map(a => (
+              <label key={a} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 4 }}>
+                <input type="checkbox" checked={(cfg.app_control_confirm || []).includes(a)}
+                  onChange={e => {
+                    const cur = cfg.app_control_confirm || [];
+                    const next = e.target.checked ? [...cur, a] : cur.filter(x => x !== a);
+                    save({ app_control_confirm: next });
+                  }} />
+                <span style={{ fontSize: 12.5, color: colors.textPrimary, fontFamily: fonts.mono }}>{a}</span>
+              </label>
+            ))}
+            <div style={hintStyle}>勾选的动作在执行前会弹窗请你确认（默认勾选运行工作流与创建圆桌两项高成本动作）；取消勾选则直接执行。查询类动作建议保持不勾选。</div>
+          </div>
+
+          {/* ===== 0.4.9 3.48.1：Computer Use（操作真实电脑，风险最高） ===== */}
+          <ComputerUseSection cfg={cfg} save={save} />
+
+          {/* ===== 0.4.9 3.47.2：模型特长画像 ===== */}
+          <ModelStrengthsSection modelOptions={modelOptions} cfg={cfg} save={save} />
 
           {/* ===== 网络 ===== */}
           <div style={sectionCard}>
@@ -363,16 +650,16 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
             {/* 问题8（0.3.2实测）：代理引导——无代理/有代理两种情况分别说清楚 */}
             <div style={{ fontSize: 12, color: colors.textTertiary, lineHeight: 1.7, marginBottom: 10,
               background: colors.bgSidebar, padding: '8px 10px', borderRadius: radius.s }}>
-              <b style={{ color: colors.textSecondary }}>怎么填？</b><br />
-              · 电脑没装代理软件：什么都不用改——保持"自动探测"，应用会境内直连、境外失败自动暂停。<br />
-              · 有代理软件（Clash / 小飞机等）：境外访问模式选"走代理"，端口填代理软件的本地监听端口
-              （Clash 默认 HTTP 端口 7890；在代理软件的"端口/设置"里查看）。应用只在需要访问境外时走代理，
-              境内请求始终直连。
+              <b style={{ color: colors.textSecondary }}>怎么选？</b><br />
+              · 关闭全量联网（默认「标准」）：可以正常上网——国内网站、以及不需要代理就能访问的境外网站都能正常触达；只有"必须经代理才能连接"的境外网站访问不到（会自动跳过、不空转）。<br />
+              · 开启全量联网（「全量」）：触达所有网站，包括海外原本受限的网站。需先在电脑启动代理软件（Clash / 小飞机等），
+              端口填代理软件的本地监听端口（Clash 默认 HTTP 端口 7890；在代理软件"端口/设置"里查看）。
+              国内网站在两种模式下都始终直连，不经代理。
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={formLabel}>HTTP 代理端口（仅"走代理"模式生效）</label>
+                <label style={formLabel}>HTTP 代理端口（仅「全量」模式生效）</label>
                 <input className="ui-input" style={inpStyle} type="number" value={cfg.proxy_http_port}
                   onChange={e => setCfg({ ...cfg, proxy_http_port: Number(e.target.value) })} />
               </div>
@@ -383,19 +670,26 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
               </div>
             </div>
 
-            <label style={formLabel}>境外访问模式</label>
+            <label style={formLabel}>联网范围（境外网站）</label>
             <select className="ui-input" style={{ ...select, width: '100%' }} value={cfg.network_switch === 'on' ? 'proxy' : cfg.network_switch === 'off' ? 'auto' : cfg.network_switch}
               onChange={e => {
                 const v = e.target.value as 'auto' | 'proxy';
                 setCfg({ ...cfg, network_switch: v });
                 save({ network_switch: v });   // 切换即保存，立即生效
               }}>
-              <option value="auto">自动探测（默认，无需管理）</option>
-              <option value="proxy">走代理（已启动代理软件时使用）</option>
+              <option value="auto">标准（默认）：国内 + 免代理境外站正常触达，需代理的境外站访问不到</option>
+              <option value="proxy">全量：触达所有网站（含海外受限站），需先启动代理软件</option>
             </select>
             <div style={hintStyle}>
-              自动探测：境内直连；境外先尝试，连续失败自动暂停重试（防空转）。走代理：境外请求经代理端口访问
+              标准＝不主动走代理：能直连的都直连，连不上的境外站自动暂停重试防空转；全量＝境外请求都经代理端口，可达受限站
             </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 10 }}>
+              <input type="checkbox" checked={cfg.confirm_network_install ?? true}
+                onChange={e => save({ confirm_network_install: e.target.checked })} />
+              <span style={{ fontSize: 13, color: colors.textPrimary }}>联网安装插件/技能前必须询问我</span>
+            </label>
+            <div style={hintStyle}>开启后，Agent 要从外部仓库（如 GitHub）下载安装插件或技能时，会先弹窗告知下载来源与类型，你同意才联网；当前为标准联网模式时还会一并询问是否切换到全量联网。强烈建议保持开启——曾发生子 Agent 擅自联网拉取、弹出账号密码窗并装入两个无关插件的事故。</div>
 
             <label style={formLabel}>放行名单（境内/白名单，支持 *.xxx 通配）</label>
             {(cfg.egress_allowlist || []).map((a, i) => (

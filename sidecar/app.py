@@ -100,26 +100,39 @@ _auth_pending: dict[str, dict] = {}
 _AUTH_TIMEOUT = 120.0  # 用户 2 分钟未响应 → 自动拒绝
 
 
-async def _sse_authorizer(tool_name: str, target_path: str, action: str) -> bool:
-    """SSE 驱动的越界授权回调（注入 run_tool_loop 的 authorizer 参数）。
+async def _sse_authorizer(tool_name: str, target_path: str, action: str,
+                          extra: dict | None = None):
+    """SSE 驱动的授权回调（注入 run_tool_loop 的 authorizer 参数）。
 
-    流程：生成唯一 request_id → 存入 _auth_pending → yield auth_request 事件由 gen() 发出
-    → 等待前端 /api/auth/respond 唤醒 Event → 返回用户选择。
+    流程：生成唯一 request_id → 存入 _auth_pending → gen() 主循环发出 auth_request 事件
+    → 前端弹窗 → /api/auth/respond 唤醒 Event → 返回用户选择。
     注意：此函数被 loop 调用时处于 gen() 的 async for 内，无法直接 yield SSE 事件；
     改为把请求挂到全局字典，由 gen() 主循环在下次迭代时检测并发出事件。
+
+    0.4.9 任务152：新增 extra（联网安装确认所需的附加信息：来源 URL/类型/当前网络模式）。
+    返回值分两类：
+      - 普通授权（敏感路径删除等）→ bool，保持既有 `allowed is False` 判定不变；
+      - 联网安装确认（action="net_install"）→ dict {"allowed", "enable_network"}，
+        以便用户同意后由调用方自动把网络模式切到 proxy（全量联网）。
+    超时（120s 未响应）一律按"拒绝"处理。
     """
     import uuid
+    _is_net_install = action == "net_install"
     req_id = str(uuid.uuid4())[:8]
     evt = asyncio.Event()
     _auth_pending[req_id] = {"event": evt, "result": False,
-                              "tool": tool_name, "path": target_path, "action": action}
+                              "tool": tool_name, "path": target_path, "action": action,
+                              "extra": extra or {}, "enable_network": False}
     # 等待 gen() 主循环检测到新请求并发出 SSE 事件后，前端响应唤醒此 Event
     try:
         await asyncio.wait_for(evt.wait(), timeout=_AUTH_TIMEOUT)
     except asyncio.TimeoutError:
         _auth_pending.pop(req_id, None)
-        return False
+        return {"allowed": False, "enable_network": False} if _is_net_install else False
     entry = _auth_pending.pop(req_id, {})
+    if _is_net_install:
+        return {"allowed": bool(entry.get("result", False)),
+                "enable_network": bool(entry.get("enable_network", False))}
     return entry.get("result", False)
 
 @app.exception_handler(NetworkGuardError)
@@ -629,14 +642,17 @@ async def api_load_session_messages(session_id: str, project_id: str):
 class AuthRespondReq(BaseModel):
     request_id: str
     allowed: bool
+    # 0.4.9 任务152：联网安装确认时，用户是否同时同意开启全量联网（切 proxy 模式）
+    enable_network: bool = False
 
 @app.post("/api/auth/respond")
 async def api_auth_respond(req: AuthRespondReq):
-    """前端回传用户对越界操作的授权决定。"""
+    """前端回传用户对授权请求的决定（敏感路径操作 / 联网安装）。"""
     entry = _auth_pending.get(req.request_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="授权请求不存在或已过期")
     entry["result"] = req.allowed
+    entry["enable_network"] = bool(req.enable_network)
     entry["event"].set()
     return {"ok": True}
 
@@ -758,6 +774,9 @@ class ChatStreamReq(ChatReq):
     # M5（TS-111）：前端断线重连时置 true —— user 消息首次请求已落库，重连不重复保存
     skip_user_persist: bool = False
     sandbox_root: str | None = None
+    # 0.4.9（3.47.1 单元归档）：会话窗"单元归档"开关。仅当为 true 时后端才在
+    # tools 列表中暴露 archive_work_unit 工具并注入使用纪律；关闭时工具不存在，零开销。
+    auto_archive_unit: bool = False
 
 
 # checkpoint-048：聊天上传附件解析端点（复用圆桌内置解析器，限制与圆桌一致）。
@@ -888,6 +907,57 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
     _can_delegate = bool(_pid_e and _aid_e and _sid_e)
     delegation_ctx = ({"project_id": _pid_e, "agent_id": _aid_e, "session_id": _sid_e,
                        "connector": None, "model": req.model} if _can_delegate else None)
+    # 0.4.9（3.48.2 应用内模块控制）：设置开关（默认关）。开启才注入动作清单并暴露 app_control。
+    _app_control_on = False
+    _module_catalog_text = ""
+    try:
+        _app_control_on = bool(get_config().get("app_control_enabled", False))
+        if _app_control_on:
+            from sidecar.app_modules import build_module_catalog_text
+            _module_catalog_text = build_module_catalog_text()
+    except Exception:
+        _app_control_on = False
+        _module_catalog_text = ""
+    # 0.4.9（3.48.1 Computer Use）：总开关，默认关。⚠️ 开启即允许 Agent 操作真实电脑，
+    # 故必须用户显式开启；开启后仍受白名单与每步确认两道防线约束（见 loop 路由）。
+    _computer_use_on = False
+    try:
+        _computer_use_on = bool(get_config().get("computer_use_enabled", False))
+    except Exception:
+        _computer_use_on = False
+    # 0.4.9（3.47.2 委派模型自选）：仅在用户配置了模型特长画像【且】本会话可委派时生成注入文本。
+    # 单条限 100 字（config 层已校验），最多列 20 个模型，防止提示词无限膨胀。
+    _model_strengths_text = ""
+    if _can_delegate:
+        try:
+            _ms_raw = get_config().get("model_strengths") or {}
+            _ms = {k: v for k, v in (_ms_raw.items() if isinstance(_ms_raw, dict) else [])
+                   if str(k).strip() and str(v).strip()}
+            if _ms:
+                # 0.4.10（用户要求"模型变化后自动变化"）：注入前与实际可用模型取交集。
+                # 此前直接遍历配置字典 → 模型被删除后其特长仍注入提示词，会误导 Agent
+                # 去委派一个不存在的模型（虽会被 model_not_found 拦下，但白耗一轮）。
+                #
+                # ⚠️ 只【过滤注入】，绝不自动删除 config 里的记录——用户重新下载同名模型时
+                # 特长应原样恢复，不该被迫重填。清理入口在设置页（ModelStrengthsSection）。
+                # 仅当配了画像时才拉模型列表（未配置则完全不查，零开销）。
+                _avail: list[str] = []
+                try:
+                    _avail = [str(m.get("name", "")) for m
+                              in await get_ollama_connector().list_models()]
+                except Exception:
+                    _avail = []
+                if _avail:
+                    _avail_bases = {a.split(":")[0] for a in _avail}
+                    # tag 兼容：配置写 "glm-ocr" 而实际是 "glm-ocr:latest" 也算命中
+                    _ms = {k: v for k, v in _ms.items()
+                           if k in _avail or str(k).split(":")[0] in _avail_bases}
+                if _ms:
+                    _lines = [f"- {str(k)}：{str(v)[:100]}"
+                              for k, v in list(_ms.items())[:20]]
+                    _model_strengths_text = "\n".join(_lines)
+        except Exception:
+            _model_strengths_text = ""
     sys_prompt = build_system_prompt(
         agent_name=agent.get("name") if agent else "SubAgent",
         agent_role=agent.get("role") if agent else None,
@@ -899,6 +969,9 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         memory_text=_memory_text,
         prohibitions=_prohibitions,
         skills_list_text=_skills_list_text,
+        model_strengths_text=_model_strengths_text,
+        archive_enabled=bool(req.auto_archive_unit and req.project_id and req.session_id),
+        module_catalog_text=_module_catalog_text,
     )
     msgs = [{"role": "system", "content": sys_prompt}] + list(req.messages)
 
@@ -988,7 +1061,13 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
             _ctx_limit = 0
         aiter = run_tool_loop(req.model, msgs,
                               tools_spec(with_delegation=True,
-                                         with_knowledge=bool(req.project_id)) if _tools_enabled else [],
+                                         with_knowledge=bool(req.project_id),
+                                         # 0.4.9（3.47.1）：仅当开关开启且会话上下文齐备时才暴露归档工具
+                                         with_archive=bool(req.auto_archive_unit and req.project_id
+                                                           and req.session_id),
+                                         # 0.4.9（3.48.2）：应用内模块控制（设置开关，默认关）
+                                         with_app_control=_app_control_on,
+                                         with_computer_use=_computer_use_on) if _tools_enabled else [],
                               sandbox_root,
                               authorizer=_sse_authorizer, max_rounds=_max_rounds,
                               context_limit=_ctx_limit,
@@ -996,6 +1075,19 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                               # TS-120 阶段二：知识仓库主动检索上下文（拉模式）
                               knowledge_ctx=({"project_id": req.project_id}
                                              if (_tools_enabled and req.project_id) else None),
+                              # 0.4.9（3.47.1）：归档上下文（开关关闭时为 None → 路由直接拒绝）
+                              archive_ctx=({"project_id": req.project_id, "session_id": req.session_id}
+                                           if (_tools_enabled and req.auto_archive_unit
+                                               and req.project_id and req.session_id) else None),
+                              # 0.4.9（3.48.2）：应用内模块控制上下文（含 authorizer 供副作用动作确认）
+                              app_control_ctx=({"project_id": req.project_id,
+                                                "session_id": req.session_id,
+                                                "sandbox_root": sandbox_root,
+                                                "authorizer": _sse_authorizer}
+                                               if (_tools_enabled and _app_control_on) else None),
+                              # 0.4.9（3.48.1）：Computer Use 上下文（只需 authorizer 做每步确认）
+                              computer_use_ctx=({"authorizer": _sse_authorizer}
+                                                if (_tools_enabled and _computer_use_on) else None),
                               first_round_images=req.images).__aiter__()
         # M2 打回修复（2026-08-29）：compact_auto 服务端闭环。
         # loop 发 compact_auto 只是"通知该压缩了"，真正压缩在此处执行。
@@ -1034,6 +1126,8 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                             "tool_name": entry["tool"],
                             "target_path": entry["path"],
                             "action": entry["action"],
+                            # 0.4.9 任务152：联网安装确认的附加信息（来源/类型/是否需切全量联网）
+                            "extra": entry.get("extra") or {},
                         })
                 if next_task in done:
                     try:
@@ -1822,6 +1916,28 @@ async def api_knowledge_transfer(req: KnowledgeTransferReq):
     archived = _archive_msgs(req.project_id, req.message_ids)
     return {"ok": True, "entry_id": entry["id"], "title": title,
             "file_path": entry["file_path"], "archived": archived}
+
+
+@app.get("/api/computer-use/capabilities")
+async def api_computer_use_capabilities():
+    """0.4.9（3.48.1）：探测本机 Computer Use 能力与权限状态（只读，不点击不输入）。
+
+    前端设置页用它展示：是否 macOS、截屏/辅助功能权限是否已授予、屏幕尺寸与缩放比，
+    并在缺权限时给出具体授权路径（防线1：权限门槛首次使用引导）。
+    """
+    try:
+        from sidecar.computer_use import check_capabilities
+        cap = await asyncio.to_thread(check_capabilities)
+    except Exception as e:
+        cap = {"ok": False, "problems": [f"探测失败：{type(e).__name__}: {e}"], "facts": {}}
+    try:
+        cfg = get_config()
+        cap["enabled"] = bool(cfg.get("computer_use_enabled", False))
+        cap["confirm_each"] = bool(cfg.get("computer_use_confirm_each", True))
+        cap["app_whitelist"] = cfg.get("computer_use_app_whitelist") or []
+    except Exception:
+        pass
+    return cap
 
 
 @app.get("/api/knowledge/entries")

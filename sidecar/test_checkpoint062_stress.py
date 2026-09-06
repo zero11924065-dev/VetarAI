@@ -46,6 +46,14 @@ os.environ["SUBAGENT_NO_FILE_LOG"] = "1"
 
 import sidecar.config.store as cs
 cs.DEFAULT_CONFIG["data_root"] = str(TMP)  # 必须在 sidecar.app 导入前
+# 0.4.9 加固：仅改 DEFAULT_CONFIG 不够——data_root() 优先读 _MEM，只有 _MEM 为空
+# 才回落 DEFAULT_CONFIG。若本进程此前已有任何 get_config() 调用（如与其他测试同进程跑），
+# _MEM 已被真实值填充，隔离随即失效；更危险的是下方 reload_config() 会 _save() 到
+# data_root()/config.json —— 那会直接覆盖用户真实配置。
+# 故三处一起钉死：_MEM（若已填充）+ get_config_path（读写路径）+ DEFAULT_CONFIG。
+if cs._MEM.get("data_root"):
+    cs._MEM["data_root"] = str(TMP)
+cs.get_config_path = lambda: TMP / "config.json"
 
 MOCK_PORT = 11499
 SIDE_PORT = 8799

@@ -371,6 +371,28 @@ class OllamaConnector:
         r = await client.delete(f"{self._base}/api/delete", json={"name": name})
         return r.status_code == 200
 
+    async def list_loaded_models(self) -> list[str]:
+        """0.4.9（3.47.3）：查询当前【已驻留内存】的模型名列表（GET /api/ps）。
+
+        用途：委派换装前判断主/子模型是否真的在内存里。
+        ⚠️ 0.4.7 回退教训：unload_model 用 keep_alive=0，而 Ollama 对"未加载的模型"
+        会【先加载再卸载】——若不先查 /api/ps，委派结束后卸载子模型反而会白白触发
+        一次完整加载，批量委派时累积成严重卡顿。故卸载前必须先确认模型确在内存。
+        失败（Ollama 未运行等）返回空列表，调用方应据此跳过卸载（不阻塞主流程）。
+        """
+        try:
+            client = await self._client()
+            r = await client.get(f"{self._base}/api/ps", timeout=8)
+            r.raise_for_status()
+            models = (r.json() or {}).get("models") or []
+            out = []
+            for m in models:
+                if isinstance(m, dict) and m.get("name"):
+                    out.append(str(m["name"]))
+            return out
+        except Exception:
+            return []
+
     async def unload_model(self, name: str) -> bool:
         """0.2.1（TS-119）：立即卸载指定模型，释放显存/内存。
 

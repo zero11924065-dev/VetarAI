@@ -81,6 +81,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # checkpoint-047：插件/技能改为逐项启用开关（用户需求：针对单个插件和技能）。
     # 插件状态存 <plugins>/plugins_state.json；技能状态随技能自身元数据。
     # 原全局 plugins_enabled/skills_enabled 已废弃（get_config 幂等清理旧值）。
+
+    # ── 0.4.9 新增 ────────────────────────────────────────────────────────
+    # 任务161（报错必带原因 + 低等模型自动切默认模型分析）：
+    "error_analysis_model": "",          # 报错分析模型（空=回落 default_model）。出错的是 OCR 等
+                                         # 专用小模型时，用它把技术性错误翻译成人话诊断+下一步建议。
+                                         # 未配置/分析失败/超时(60s) 一律静默降级，只给失败明细。
+    # 任务152（联网安装须先询问）：
+    "confirm_network_install": True,     # Agent 联网安装插件/技能前必须弹窗告知来源并经用户同意；
+                                         # 关闭联网状态时额外请求开启联网，同意后自动切 proxy 并重置熔断。
+    # 3.47.2 委派模型自选（模型特长画像）：
+    "model_strengths": {},               # 模型名 → 特长描述（单条限 100 字）。仅配置了画像时注入提示词，
+                                         # 主 Agent 委派时按画像自选模型（delegate_task 的 model 参数）。
+    # 3.47.3 委派模型换装（主/子模型显式卸载编排）：
+    "delegation_model_swap": True,       # 委派前卸主模型、交卷后 finally 卸子模型，腾内存给子任务独占。
+                                         # task_concurrency / model_parallel 开启时自动禁用（并行卸载会互相冲突）。
+                                         # ⚠️ 0.4.7 事故教训：卸载必须带 wait_for 超时 + 先查 /api/ps
+                                         # 确认模型确在内存 + 纳入活性超时守卫，否则批量委派会卡死。
+    # 3.48.2 应用内模块控制：
+    "app_control_enabled": False,        # 允许 Agent 通过 app_control 调动应用内模块（工作流/知识仓库/圆桌）。
+    "app_control_confirm": ["workflow_run", "roundtable_create"],  # 需用户确认的高成本动作；查询类不确认。
+    # 3.48.1 Computer Use（本地桌面控制）：
+    "computer_use_enabled": False,       # 总开关，默认关（Agent 直接操作真实电脑，风险高）。
+    "computer_use_confirm_each": True,   # 每步点击/输入前弹确认；熟练后可关。
+    "computer_use_app_whitelist": [],    # 允许操作的应用白名单（空=不限制，仍受每步确认约束）。
 }
 
 _MEM: dict[str, Any] = {}
@@ -248,6 +272,31 @@ def _validate(cur: dict[str, Any]) -> None:
         v = cur.get(k)
         if v is not None and not isinstance(v, bool):
             raise ValueError(f"{k} 必须是 bool")
+    # 0.4.9 新增配置校验
+    for k in ("confirm_network_install", "delegation_model_swap",
+              "app_control_enabled", "computer_use_enabled", "computer_use_confirm_each"):
+        v = cur.get(k)
+        if v is not None and not isinstance(v, bool):
+            raise ValueError(f"{k} 必须是 bool")
+    for k in ("error_analysis_model",):
+        v = cur.get(k)
+        if v is not None and not isinstance(v, str):
+            raise ValueError(f"{k} 必须是字符串（模型名，空=用默认模型）")
+    ms = cur.get("model_strengths")
+    if ms is not None:
+        if not isinstance(ms, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                               for k, v in ms.items()):
+            raise ValueError("model_strengths 必须是 {模型名: 特长描述} 的字符串字典")
+        # 单条限 100 字，防注入提示词时无限膨胀（需求文档 3.47.2 约束）
+        for _mk, _mv in ms.items():
+            if len(_mv) > 100:
+                raise ValueError(f"model_strengths[{_mk}] 特长描述超过 100 字，请精简")
+    ac = cur.get("app_control_confirm")
+    if ac is not None and (not isinstance(ac, list) or not all(isinstance(x, str) for x in ac)):
+        raise ValueError("app_control_confirm 必须是字符串数组（需确认的动作名）")
+    wl = cur.get("computer_use_app_whitelist")
+    if wl is not None and (not isinstance(wl, list) or not all(isinstance(x, str) for x in wl)):
+        raise ValueError("computer_use_app_whitelist 必须是字符串数组（应用名）")
 
 
 def get_config() -> dict[str, Any]:

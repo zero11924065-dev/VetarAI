@@ -35,6 +35,10 @@ interface DialogOptions {
   confirmText?: string;
   cancelText?: string;
   danger?: boolean;       // 确认按钮用危险色（删除类）
+  // 0.4.9 任务152：可选勾选项（如联网安装确认时的"同时开启全量联网"）
+  checkboxLabel?: string;
+  checkboxDefault?: boolean;
+  onCheckbox?: (checked: boolean) => void;  // 确认时回传勾选值（取消不回传）
 }
 
 interface DialogState extends DialogOptions {
@@ -75,6 +79,8 @@ function openDialog(opts: DialogOptions): Promise<boolean> {
 export function confirmDialog(opts: {
   title?: string; message: React.ReactNode;
   confirmText?: string; cancelText?: string; danger?: boolean;
+  checkboxLabel?: string; checkboxDefault?: boolean;
+  onCheckbox?: (checked: boolean) => void;
 }): Promise<boolean> {
   return openDialog({ kind: 'confirm', ...opts });
 }
@@ -171,6 +177,11 @@ function PromptHost({ state }: { state: PromptState | null }) {
 }
 
 function DialogHost({ state }: { state: DialogState | null }) {
+  // 0.4.9 任务152：勾选项当前值（用 ref 避免重渲染，close 时读取）
+  const checkedRef = React.useRef(false);
+  useEffect(() => {
+    if (state) checkedRef.current = !!state.checkboxDefault;
+  }, [state]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!current) return;
@@ -185,8 +196,11 @@ function DialogHost({ state }: { state: DialogState | null }) {
 
   const close = (v: boolean) => {
     const r = current?.resolve;
+    const cb = current?.onCheckbox;
     current = null;
     listeners.forEach((l) => l());
+    // 仅用户主动确认时回传勾选值；取消/Esc/遮罩关闭视为未勾选
+    if (v && cb) cb(!!checkedRef.current);
     r?.(v);
   };
 
@@ -220,6 +234,20 @@ function DialogHost({ state }: { state: DialogState | null }) {
         <div style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {state.message}
         </div>
+        {isConfirm && state.checkboxLabel && (
+          <label style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14,
+            fontSize: 12.5, color: colors.textSecondary, lineHeight: 1.55, cursor: 'pointer',
+          }}>
+            <input
+              type="checkbox"
+              defaultChecked={!!state.checkboxDefault}
+              onChange={(e) => { checkedRef.current = e.target.checked; }}
+              style={{ marginTop: 2, flexShrink: 0, cursor: 'pointer' }}
+            />
+            <span>{state.checkboxLabel}</span>
+          </label>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
           {isConfirm && (
             <button className="ui-btn ui-btn-secondary" style={btnSecondary} onClick={() => close(false)}>

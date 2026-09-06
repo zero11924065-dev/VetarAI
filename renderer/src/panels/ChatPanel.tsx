@@ -291,6 +291,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const [transferKeywords, setTransferKeywords] = useState('');
   const [transferring, setTransferring] = useState(false);
   const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
+  // 0.4.9（3.47.1 单元归档）：会话窗开关，默认关。仅开启时后端才暴露 archive_work_unit
+  // 工具并注入归档纪律（关闭时工具不存在，零开销）；非自动——必须用户主动启用。
+  const [autoArchiveUnit, setAutoArchiveUnit] = useState(false);
   // 查虫K-3：转移序号——面板 key 的一部分，保证连续转移到同一作用域
   // （期间手动切过作用域）也能重新定位到转移目标作用域
   const [warehouseTransferSeq, setWarehouseTransferSeq] = useState(0);
@@ -384,11 +387,19 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const [tokenUsed, setTokenUsed] = useState<number>(0);
   const [contextLimit, setContextLimit] = useState<number>(0);
   const [contextSource, setContextSource] = useState<string>('');
+  // B3（0.4.8）：后端每轮经 state 事件回传的【真实】上下文字数（含 system prompt、
+  // 工具结果、tools 声明）。此前前端只按 user/assistant 消息估算，漏算工具读入的大段
+  // 内容（如 read_file 读 90KB PDF），顶栏显示"≈17"而实际已数万 token。
+  // 有后端真实值时优先采用；无值时回退本地估算。新流/切会话时复位（见各复位点）。
+  const backendCtxCharsRef = useRef<number>(0);
 
   // 问题4：上下文估算——对未归档消息文本做 token 估计（启发式，与发送过滤规则一致：
   // 仅 user/assistant、排除 archived）。中文约 1 字 1 token，英文约 4 字符 1 token，
   // 混合文本按 0.6 系数近似。目的不是精确计费，而是让用户直观看到"移入仓库后确实变少了"。
   function estimateContextTokens(msgs: Message[]): number {
+    // B3：后端真实字数优先（同一 0.6 系数换算为 token，与上限口径一致）
+    const real = backendCtxCharsRef.current;
+    if (real > 0) return Math.round(real * 0.6);
     let total = 0;
     for (const m of msgs) {
       if (m.archived) continue;
@@ -447,6 +458,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   // 与 syncSessionLocal 写的 localStorage 可能不同步，直接读 localStorage 为准；
   // 缓存为空时保留现有状态，避免清空进行中的流式内容）
   useEffect(() => {
+    // B3（0.4.8）：切换会话时，后端回传的真实字数属于上一个会话 → 复位，
+    // 避免新会话短暂沿用旧值。活流会话（流仍在推进）不复位，下一轮 state 会刷新。
+    if (activeStreamSidRef.current !== currentSessionId) backendCtxCharsRef.current = 0;
     if (currentSessionId) {
       // checkpoint-055：缓存仅瞬显防白屏，随后一律以 DB 为准合并加载
       try {
@@ -763,6 +777,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m);
       setLocalMessages(nextArchived);
       if (currentSessionId) syncSessionLocal(currentSessionId, nextArchived);
+      // B3（0.4.8）：归档后消息已脱离上下文，后端上一轮的真实字数已过期 →
+      // 复位为 0，让估算 effect 立即按"未归档消息"重算（保持"移入仓库即下降"）。
+      backendCtxCharsRef.current = 0;
       setToast(`已移入知识仓库 ✓（${d.title}）`);
       setTimeout(() => setToast(null), 4000);
       // 关闭弹窗、清空勾选；自动展开右侧面板（问题2：转移后即时可见新条目）。
@@ -1045,7 +1062,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       scheduleStreamCacheSync();
     };
     // 阶段化思考：开/关当前思考阶段（可多次开闭）
+    // B1（0.4.8）修复：thinking 增量连续到达（间隔常<1s），此前每次都无条件重置
+    // thinkingStartedAt 并重建计时器 → 计时器"创建即清除"永不触发，界面恒显 0s。
+    // 改为"阶段开一次"语义：仅当不在思考态时才记录开始时间并建计时器；已在思考态
+    // 则直接返回，让计时器继续跑。closeThinkingPhase 复位标记，下阶段重新计时。
+    let thinkingPhaseOpen = false;
     const startThinkingPhase = () => {
+      if (thinkingPhaseOpen && thinkingElapsedTimer) return; // 阶段已开，计时器继续跑
+      thinkingPhaseOpen = true;
       thinkingStartedAt = Date.now();
       if (thinkingElapsedTimer) clearInterval(thinkingElapsedTimer);
       thinkingElapsedTimer = setInterval(() => {
@@ -1057,6 +1081,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     };
     const closeThinkingPhase = () => {
       if (thinkingElapsedTimer) { clearInterval(thinkingElapsedTimer); thinkingElapsedTimer = null; }
+      thinkingPhaseOpen = false; // B1：复位，下一个思考阶段重新计时
       patchStreamMsg(m => {
         if (!m.thinking) return m;
         const duration = thinkingStartedAt ? Math.round((Date.now() - thinkingStartedAt) / 1000) : undefined;
@@ -1087,8 +1112,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           st.id === d.id ? { ...st, status: d.ok ? 'ok' as const : 'error' as const, summary: d.summary, error: d.error } : st) }));
       } else if (ev.event === 'state') {
         // 问题4：不再用 prompt_eval_count 覆盖指示器——那是"本轮实际评估增量"（KV缓存复用时偏小）。
-        // 指示器统一由"未归档消息实时估算"驱动（见 localMessages 变化的 effect）。
         // prompt_eval_count 仍记录到消息对象，供调试/历史参考。
+        // B3（0.4.8）：改用后端回传的真实上下文字数 ctx_chars 驱动指示器（含工具结果
+        // 与 system prompt），根治"≈17"严重低估；无该字段时保持原估算驱动。
+        if (typeof d.ctx_chars === 'number' && d.ctx_chars > 0) {
+          backendCtxCharsRef.current = d.ctx_chars;
+          setTokenUsed(Math.round(d.ctx_chars * 0.6));
+        }
         patchStreamMsg(m => ({ ...m, step: d.step, maxStep: d.max, tokensUsed: d.tokens_used,
           ...(typeof d.prompt_eval_count === 'number' ? { prompt_eval_count: d.prompt_eval_count } : {}) }));
       } else if (ev.event === 'error') {
@@ -1097,31 +1127,95 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             ? Math.round((Date.now() - m.startedAt) / 1000)
             : undefined;
           return {
-            ...m, streamError: d.detail || '生成出错', thinking: false, thinkingElapsed: undefined,
+            ...m, streamError: d.detail || '生成出错',
+            // 0.4.9 任务161：接收后端报错分析（人话诊断 + 用的哪个模型）
+            ...(typeof d.analysis === 'string' && d.analysis ? { errorAnalysis: d.analysis } : {}),
+            ...(typeof d.analysis_model === 'string' && d.analysis_model ? { errorAnalysisModel: d.analysis_model } : {}),
+            thinking: false, thinkingElapsed: undefined,
             thinkingPreview: undefined, stopped: true,
             ...(completedDuration !== undefined ? { completedDuration } : {}),
           };
         });
       } else if (ev.event === 'auth_request') {
-        // 敏感操作授权弹窗（2026-08-28 权限宽松化）：仅当 Agent 要【删除】系统敏感位置
-        // （系统目录/用户关键资产/应用数据）时弹出确认框。其余操作默认放行，不弹窗。
+        // 授权弹窗两类：①敏感路径删除（2026-08-28）②联网安装插件/技能（0.4.9 任务152）。
+        // 其余操作默认放行，不弹窗。
         const rid = d.request_id;
         const toolName = d.tool_name || '未知工具';
         const targetPath = d.target_path || '未知路径';
-        const actionLabel = d.action === 'delete' ? '删除' : d.action === 'write' ? '写入' : d.action === 'mkdir' ? '新建目录' : d.action === 'read' ? '读取' : d.action === 'list' ? '列出' : d.action || '操作';
+        const isNetInstall = d.action === 'net_install';
+        const isAppModule = d.action === 'app_module';   // 0.4.9（3.48.2）应用内模块高成本动作确认
+        const isComputerUse = d.action === 'computer_use'; // 0.4.9（3.48.1）操作真实电脑，逐步确认
+        const ex = d.extra || {};
+        const actionLabel = d.action === 'computer_use' ? '操作电脑' : d.action === 'app_module' ? '调用应用模块' : d.action === 'net_install' ? '联网安装' : d.action === 'delete' ? '删除' : d.action === 'write' ? '写入' : d.action === 'mkdir' ? '新建目录' : d.action === 'read' ? '读取' : d.action === 'list' ? '列出' : d.action || '操作';
         // 异步执行，不阻塞 SSE 事件循环
         (async () => {
-          const allowed = await confirmDialog({
-            title: '操作授权',
-            message: `Agent 请求${actionLabel}敏感位置的内容：\n\n${targetPath}\n\n工具：${toolName}\n\n该操作位于系统敏感区域，是否允许？`,
-            danger: true,
-            confirmText: '允许',
-            cancelText: '拒绝',
-          });
+          let allowed = false;
+          let enableNetwork = false;
+          if (isNetInstall) {
+            // 联网安装：必须告知"下载什么、从哪下载"，用户确认后才联网（用户实测事故：
+            // 子 Agent 擅自 install_skill 去 GitHub 拉取，弹 git 凭据窗并装入无关插件）。
+            const needEnable = !!ex.need_enable_network;
+            allowed = await confirmDialog({
+              title: '联网安装确认',
+              message: `Agent 请求联网下载并安装${ex.install_type || '内容'}：\n\n来源：${ex.source_url || targetPath}\n\n⚠️ 这会从外部仓库下载代码并装入应用。请确认来源可信后再允许；拒绝则不联网、不安装。`,
+              danger: true,
+              confirmText: '允许安装',
+              cancelText: '拒绝',
+              // 当前非全量联网（auto）→ GitHub 大概率连不上，额外提供"同时开启全量联网"勾选
+              ...(needEnable ? {
+                checkboxLabel: '同时开启全量联网（切换到「全量」模式，经代理访问海外站点）',
+                checkboxDefault: true,
+                onCheckbox: (c: boolean) => { enableNetwork = c; },
+              } : {}),
+            });
+          } else if (isAppModule) {
+            // 3.48.2：运行工作流 / 创建圆桌等高成本动作，执行前请用户确认
+            const mod = ex.module || '?';
+            const act = ex.action || '?';
+            const paramsTxt = (() => {
+              try {
+                const t = JSON.stringify(ex.params || {}, null, 2);
+                return t.length > 600 ? t.slice(0, 600) + '\n…（已截断）' : t;
+              } catch { return '（参数无法显示）'; }
+            })();
+            allowed = await confirmDialog({
+              title: '应用模块操作确认',
+              message: `Agent 请求调用应用内模块：\n\n模块：${mod}\n动作：${act}\n\n参数：\n${paramsTxt}\n\n该操作成本较高（会运行工作流或创建圆桌讨论、占用模型与内存），是否允许？`,
+              danger: true,
+              confirmText: '允许执行',
+              cancelText: '拒绝',
+            });
+          } else if (isComputerUse) {
+            // 3.48.1：Agent 要操作真实电脑（点击/输入）。误操作后果可见（删文件/发消息/点支付），
+            // 故每一步都必须让用户看清"在哪个应用、做什么动作、参数是什么"再决定。
+            const desc = ex.desc || '操作电脑';
+            const app = ex.app || '（未知前台应用）';
+            const argsTxt = (() => {
+              try {
+                const t = JSON.stringify(ex.args || {}, null, 2);
+                return t.length > 500 ? t.slice(0, 500) + '\n…（已截断）' : t;
+              } catch { return '（参数无法显示）'; }
+            })();
+            allowed = await confirmDialog({
+              title: '电脑操作确认',
+              message: `Agent 请求${desc}：\n\n当前前台应用：${app}\n参数：\n${argsTxt}\n\n⚠️ 这会真实操作你的电脑（鼠标/键盘），效果立即可见且可能难以撤销。确认要执行吗？`,
+              danger: true,
+              confirmText: '允许执行',
+              cancelText: '拒绝',
+            });
+          } else {
+            allowed = await confirmDialog({
+              title: '操作授权',
+              message: `Agent 请求${actionLabel}敏感位置的内容：\n\n${targetPath}\n\n工具：${toolName}\n\n该操作位于系统敏感区域，是否允许？`,
+              danger: true,
+              confirmText: '允许',
+              cancelText: '拒绝',
+            });
+          }
           try {
             await fetch(`${API}/auth/respond`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ request_id: rid, allowed }),
+              body: JSON.stringify({ request_id: rid, allowed, enable_network: allowed && enableNetwork }),
             });
           } catch (e) { console.error('auth respond failed:', e); }
         })();
@@ -1208,6 +1302,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               session_id: currentSessionId, messages: finalMessages,
               images: imageItems.map(i => i.dataUri),
               skip_user_persist: usedSkipPersist,
+              // 0.4.9（3.47.1）：单元归档开关透传（关闭时后端不暴露该工具）
+              auto_archive_unit: autoArchiveUnit,
             }),
             signal: controller.signal,
           });
@@ -1366,6 +1462,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 data-tip="知识仓库（检索/注入）"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:showKnowledgePanel?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
                 <Icon name="database" size={16} style={{color:showKnowledgePanel?colors.accentText:colors.textSecondary}} />
+              </button>
+              {/* 0.4.9（3.47.1）：单元归档开关——批量任务每完成一个单元即把该段对话移入知识仓库 */}
+              <button className="ui-btn ui-btn-ghost"
+                onClick={() => setAutoArchiveUnit(v => !v)}
+                data-tip="单元归档：开启后 Agent 每完成一个工作单元（批量任务）会把该段对话移入知识仓库，防止上下文膨胀。默认关闭，需手动开启"
+                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:autoArchiveUnit?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
+                <Icon name="layers" size={16} style={{color:autoArchiveUnit?colors.accentText:colors.textSecondary}} />
               </button>
               <button className="ui-btn ui-btn-ghost" onClick={() => handleRenameSession(currentSessionId)} data-tip="重命名"
                 style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
@@ -1628,8 +1731,26 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 <div style={{ ...calloutStyle('error'), marginTop:8, flexDirection:'column', maxWidth:'78%' }}>
                   <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
                     <Icon name="alert-triangle" size={16} style={{flexShrink:0,marginTop:2}} />
-                    <span>{msg.streamError}</span>
+                    <span style={{whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{msg.streamError}</span>
                   </div>
+                  {/* 0.4.9 任务161：报错分析（用户设置的默认模型给出的人话诊断） */}
+                  {msg.errorAnalysis && (
+                    <div style={{
+                      marginTop:10, padding:'8px 10px', borderRadius:radius.s,
+                      background:colors.bgSidebar, border:`1px solid ${colors.borderDefault}`,
+                      display:'flex', alignItems:'flex-start', gap:8,
+                    }}>
+                      <Icon name="sparkle" size={15} style={{flexShrink:0,marginTop:2,color:colors.accent}} />
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:11.5,color:colors.textTertiary,marginBottom:3}}>
+                          报错分析{msg.errorAnalysisModel ? `（${msg.errorAnalysisModel}）` : ''}
+                        </div>
+                        <div style={{fontSize:12.5,color:colors.textSecondary,lineHeight:1.6,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
+                          {msg.errorAnalysis}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div style={{ marginTop:8, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
                     <span style={{ color:colors.dangerText, fontSize:12 }}>已完成部分见上方</span>
                     <button className="ui-btn ui-btn-danger-soft" onClick={resendLast} style={{...btnDangerSoft, height:22, padding:'0 8px', fontSize:12}}>

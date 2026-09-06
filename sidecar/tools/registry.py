@@ -36,6 +36,14 @@ from .web_search import web_search as _web_search, WEB_SEARCH_RETURN
 from sidecar.network.guard import NetworkGuardError
 
 MAX_READ_BYTES = 1 * 1024 * 1024  # read_file 截断阈值（协议常量，非环境路径）
+# B2（0.4.8）：大文本软提示阈值。此前只有 1MB 硬截断，89KB 的 PDF 全文照样被整篇
+# 读入主 Agent 上下文 → 30B 模型大 prompt prefill 极慢（实测一次委派前空耗约 20 分钟）。
+# 阈值取 200KB（用户实际场景核实）：正常案件文本文件（聊天记录/判决书/借条纯文本，
+# 通常几 KB~一百多 KB）干净读取不受干扰；只有真正会撑爆上下文的大文件 / 大 PDF
+# （数十 MB 级，远超此线）才提示改用委派/工作流处理。
+# 注意：仅"提示"，不截断、不拦截——content 头部嵌入一句引导，正文按剩余预算照常返回，
+# 模型确需全文分析时可继续使用（提示文案已注明）。1MB 硬截断仍兜底防极端文件。
+LARGE_TEXT_ADVISORY_BYTES = 200 * 1024
 
 # checkpoint-067 R-4：read_file 识别图片扩展名 → 不读字节成乱码，
 # 改返回图片标记+base64，由 loop 注入视觉输入，让多模态模型真正读图（而非看到乱码说"没 OCR"）。
@@ -231,6 +239,56 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
         if not isinstance(src, str) or not src.strip():
             return {"ok": False, "error": "bad_arg: source（需要 GitHub 仓库 URL 或本地目录绝对路径）"}
         src = src.strip()
+
+        # 0.4.9 任务152：联网安装必须先询问用户（用户实测事故：子 Agent 擅自调
+        # install_skill 去 GitHub 拉取，触发 git 凭据弹窗并装入两个无关插件目录）。
+        # 判定：src 是远程地址（http/https/git@ 等非本地路径）→ 必须经用户确认。
+        # 本地目录安装不弹窗（无联网、无外来代码风险）。
+        _is_remote = not Path(src).expanduser().exists() and (
+            src.startswith(("http://", "https://", "git@", "ssh://", "git://")))
+        if _is_remote:
+            import sidecar.config as _cfg_net
+            _cfg_n = _cfg_net.get_config()
+            if _cfg_n.get("confirm_network_install", True):
+                if authorizer is None:
+                    # 无授权通道（如后台任务/测试）→ 不静默联网，直接拒绝
+                    return {"ok": False, "error": (
+                        "network_install_denied: 需要联网下载安装，但当前无用户授权通道，"
+                        "已拒绝执行（不静默联网）。请在会话中让主 Agent 发起，"
+                        "或改用本地目录安装。")}
+                _cur_mode = _cfg_n.get("network_switch", "auto")
+                _kind = "插件（Plugin）" if tool_name == "install_plugin" else "技能（Skill）"
+                _extra = {
+                    "kind": "net_install",
+                    "source_url": src,
+                    "install_type": _kind,
+                    "current_mode": _cur_mode,
+                    # 当前不是全量联网（proxy）→ GitHub 大概率连不上，需一并请求开启
+                    "need_enable_network": _cur_mode != "proxy",
+                }
+                _decision = await authorizer(tool_name, src, "net_install", _extra)
+                # net_install 返回 dict（见 app._sse_authorizer）；兼容 bool 实现
+                if isinstance(_decision, dict):
+                    _allowed = bool(_decision.get("allowed"))
+                    _enable_net = bool(_decision.get("enable_network"))
+                else:
+                    _allowed, _enable_net = bool(_decision), False
+                if not _allowed:
+                    return {"ok": False, "error": (
+                        "denied_by_user: 用户拒绝了本次联网安装（来源：" + src + "）。"
+                        "不要再重试安装，也不要改换其他来源绕过；"
+                        "请如实告知用户已取消，并询问是否需要改用本地目录安装。")}
+                # 用户同意 + 勾选"开启全量联网" → 自动切 proxy 模式并清空熔断
+                if _enable_net and _cur_mode != "proxy":
+                    try:
+                        _cfg_n = _cfg_net.reload_config({"network_switch": "proxy"})
+                        from sidecar.network.guard import guard_reset_circuit
+                        guard_reset_circuit()
+                    except Exception as _e:
+                        return {"ok": False, "error": (
+                            f"enable_network_failed: 已同意安装，但切换全量联网失败（{_e}）。"
+                            "请手动在 设置→网络 切为「全量」后重试。")}
+
         try:
             if tool_name == "install_plugin":
                 from sidecar.plugin_loader.loader import PluginLoader
@@ -246,6 +304,7 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
         except (ValueError, Exception) as e:  # clone 失败/路径非法/超时
             return {"ok": False, "error": f"install_failed: {e}"}
         result = {"ok": True, "name": info.get("name", "")}
+        # 0.4.9 T1：成功路径才走 schema 校验（错误路径已在上方直接返回，不被覆盖）
         problems = _validate(result, TOOLS[tool_name]["return_schema"])
         if problems:
             return {"ok": False, "error": f"schema_violation: {', '.join(problems)}"}
@@ -285,6 +344,15 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
         result = await _exec_on_path(tool_name, args, resolved, root)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
+    except Exception as e:
+        # T1（0.4.8）：非预期异常也把真实原因回传（此前会 500 或被下方校验吞掉，
+        # 模型只看到笼统报错无法自纠正）。类型名+消息，便于模型与用户定位。
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    # T1（0.4.8）：错误结果直接返回，不走 schema 校验——真实错误原因不被
+    # 笼统的 "schema_violation: missing:path, missing:bytes" 覆盖。
+    # 与 web_search 分支行为一致（该分支注释早已声明"与文件工具一致"，此处补齐）。
+    if not result.get("ok"):
+        return result
     problems = _validate(result, TOOLS[tool_name]["return_schema"])
     if problems:
         return {"ok": False, "error": f"schema_violation: {', '.join(problems)}"}
@@ -331,7 +399,23 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | N
                 return {"ok": True, "_kind": "image", "path": str(target),
                         "image_base64": b64, "size": size,
                         "content": f"[图片文件 {target.name}，{size} 字节，已转为图像输入]"}
-            content = target.read_bytes()[:MAX_READ_BYTES].decode("utf-8", errors="replace")
+            # B2（0.4.8）：大文本软提示——在头部嵌入文字提醒，引导模型改委派子 Agent /
+            # 工作流处理，而非自行消化全文。提示文案占用 MAX_READ_BYTES 预算的一部分，
+            # 正文按剩余预算截取，保证 content 总长仍不超 1MB 上限（不破坏截断契约）。
+            # 仅文字提示进不了模型注意力的情况由技能纪律兜底（case-material-processing
+            # 已禁止主 Agent 自读 PDF/文档全文）。
+            _advisory = ""
+            if size > LARGE_TEXT_ADVISORY_BYTES:
+                _advisory = (
+                    f"⚠️ 大文件提示：本文件 {size} 字节（超过 {LARGE_TEXT_ADVISORY_BYTES} 字节）。"
+                    f"全文读入会大量占用上下文并显著拖慢推理。"
+                    f"如需转写/OCR/摘要，建议委派子 Agent 或走工作流（传【文件路径】而非【文件内容】），"
+                    f"只回传结果。若确需全文分析再继续使用以下内容。\n\n---\n\n"
+                )
+            _budget = MAX_READ_BYTES - len(_advisory.encode("utf-8"))
+            content = target.read_bytes()[:_budget].decode("utf-8", errors="replace")
+            if _advisory:
+                content = _advisory + content
             return {"ok": True, "content": content, "size": size, "truncated": size > MAX_READ_BYTES}
         if tool_name == "write_file":
             content = args.get("content")
