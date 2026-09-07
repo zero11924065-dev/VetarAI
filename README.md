@@ -207,7 +207,7 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 使用安装包（推荐普通用户）
 
-1. 下载 `VetarAI-0.4.10-arm64.dmg`，双击挂载
+1. 下载 `VetarAI-0.4.11-arm64.dmg`，双击挂载
 2. 把 **VetarAI** 拖入 **Applications** 文件夹
 3. 从启动台打开
 
