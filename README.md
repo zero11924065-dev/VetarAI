@@ -7,7 +7,7 @@
 > **Compute is free. Context is precious.**
 > VetarAI is a 100% local desktop app: multi-agent collaboration, visual workflows, a pull-mode knowledge warehouse with on-device semantic retrieval. All data stays on your disk — zero dependency on any cloud service.
 
-**当前版本 / Current version：0.4.10**（macOS · Apple Silicon）
+**当前版本 / Current version：0.4.11**（macOS · Apple Silicon）
 
 **Note: This project is developed by a Chinese team. English translations are provided immediately following each corresponding Chinese section. Full English language support will be included in a future update.**
 
@@ -37,7 +37,7 @@
 
 ## ⬇️ 下载 VetarAI / Download VetarAI
 
-**[⬇️ 下载 VetarAI 0.4.10 安装包 / Download VetarAI 0.4.10 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.10)**
+**[⬇️ 下载 VetarAI 0.4.11 安装包 / Download VetarAI 0.4.11 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.11)**
 
 （589MB · macOS Apple Silicon · dmg 格式 · **内置 bge-m3 语义嵌入模型，安装即用，无需额外下载**）
 (589MB · macOS Apple Silicon · dmg · **bge-m3 semantic embedding model is bundled — works out of the box, no extra download needed**)

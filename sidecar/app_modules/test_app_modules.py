@@ -441,6 +441,61 @@ def _raises(fn) -> bool:
         return False
 
 
+def test_e_workflow_run_wait():
+    """0.4.11：workflow_run 有界等待（wait_s）。
+
+    此前一律「后台跑 + 返 run_id」，Agent 必须自己反复 get_runs 轮询，每次轮询都是
+    一整轮模型往返。现允许传 wait_s 在窗口内直接拿到终态，省去多轮空耗。
+    ⛔ 用极简 start→end 工作流（秒级完成），不触发任何推理节点/模型加载。
+    """
+    from sidecar.app_modules import dispatch
+    tmp = isolate_all("ac_w_")
+    import sidecar.storage.store as store
+    from sidecar.app_modules.registry import WORKFLOW_RUN_MAX_WAIT
+
+    wf_id = store.create_workflow("秒级流程", {
+        "nodes": [{"id": "s", "type": "start", "label": "开始"},
+                  {"id": "e", "type": "end", "label": "结束"}],
+        "edges": [{"from": "s", "to": "e"}], "params": {}}, description="测试有界等待")
+
+    async def go():
+        ctx = {"project_id": "", "session_id": "", "sandbox_root": str(tmp)}
+
+        # W1~W4：传 wait_s → 在窗口内等到终态，一轮拿到结果
+        r = await dispatch("workflow", "run",
+                           {"workflow_id": wf_id, "wait_s": 30}, ctx)
+        check("W1 传 wait_s → 返回 ok 且带 run_id",
+              r.get("ok") is True and bool(r.get("run_id")), str(r)[:200])
+        check("W2 在等待窗口内拿到终态 done（无需再轮询）",
+              r.get("status") == "done", str(r)[:200])
+        check("W3 终态时 note 明确「无需再轮询」",
+              "无需再轮询" in str(r.get("note", "")), str(r)[:200])
+        check("W4 返回 waited_s（实际等待秒数，供观测）",
+              isinstance(r.get("waited_s"), (int, float)), str(r)[:200])
+
+        # W5~W6：不传 wait_s → 保持原有「后台跑 + running」行为（向后兼容）
+        r2 = await dispatch("workflow", "run", {"workflow_id": wf_id}, ctx)
+        check("W5 不传 wait_s → status=running（后台模式不变）",
+              r2.get("ok") is True and r2.get("status") == "running", str(r2)[:200])
+        check("W6 后台模式 note 提示可用 wait_s 直接拿结果",
+              "wait_s" in str(r2.get("note", "")), str(r2)[:220])
+
+        # W7~W8：wait_s 上限被夹住（防工具循环被长时间占住）
+        r3 = await dispatch("workflow", "run",
+                            {"workflow_id": wf_id, "wait_s": 99999}, ctx)
+        check("W7 超大 wait_s 不报错（被夹到上限内）",
+              r3.get("ok") is True, str(r3)[:180])
+        check("W8 上限常量=120s", WORKFLOW_RUN_MAX_WAIT == 120.0, str(WORKFLOW_RUN_MAX_WAIT))
+
+        # W9：非法 wait_s（字符串）→ 安全回落为 0（后台模式），不抛异常
+        r4 = await dispatch("workflow", "run",
+                            {"workflow_id": wf_id, "wait_s": "abc"}, ctx)
+        check("W9 非法 wait_s → 安全回落后台模式（不崩）",
+              r4.get("ok") is True and r4.get("status") == "running", str(r4)[:180])
+
+    asyncio.run(go())
+
+
 def main():
     print("=" * 70)
     print("0.4.9（3.48.2）应用内模块控制 专项回归")
@@ -450,6 +505,7 @@ def main():
     test_b_dispatch_real_modules()
     test_d_loop_routing()
     test_d_tools_spec_and_config()
+    test_e_workflow_run_wait()
     print("\n" + "=" * 70)
     print(f"===== SUMMARY: PASS={PASS} FAIL={FAIL} =====")
     if FAILURES:

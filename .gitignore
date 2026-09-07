@@ -15,6 +15,25 @@ build/
 subagent.dmg
 subagent-setup.exe
 
+# ⚠️ 0.4.11 例外：build/ 下的【打包配置与脚本】必须纳入版本控制。
+# 此前 `build/` 被整目录忽略 → vetarai-sidecar.spec 与两个打包脚本都不在 git 里，
+# 冻结包 Office 缺陷的修复（spec 内的 collect_data_files 参数）只存在于磁盘，
+# **重新 clone 仓库即丢失**，且 SOP 里的 venv 路径错误也无人能从历史发现。
+# 下面用否定规则精确放行"源文件"，仍忽略 1.8GB 级的构建产物。
+!build/
+build/*
+!build/*.sh
+!build/*.spec
+!build/*.js
+!build/*.icns
+!build/*.iconset/
+# 构建产物仍忽略（.app 目录 / dist / work / 历史 DMG）
+build/VetarAI.app/
+build/dist/
+build/work/
+build/build/
+build/*.dmg
+
 # 日志 / 缓存 / 系统文件
 *.log
 logs/

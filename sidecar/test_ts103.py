@@ -128,8 +128,8 @@ async def main():
     from sidecar import app as appmod
     appmod.get_config = lambda: {"network_switch": "off"}
 
-    async def hanging_loop(model, msgs, spec, root, authorizer=None, max_rounds=5,
-                           context_limit=0, delegation_ctx=None, first_round_images=None):
+    # 0.4.11：桩签名改 **kw 兜底（真实 run_tool_loop 新增 knowledge_ctx 等参数后即崩）
+    async def hanging_loop(model, msgs, spec, root, **kw):
         yield {"event": "token", "data": {"delta": "x"}}
         await asyncio.Event().wait()  # 模拟模型长时间不产出（挂起）
 

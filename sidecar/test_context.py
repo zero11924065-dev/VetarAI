@@ -37,10 +37,34 @@ def main():
     client = TestClient(app)
 
     # 1. 模型已加载 → /api/ps 读 context_length
-    r = client.get("/api/context/limit", params={"model": "qwen3.8"})
-    d = r.json()
-    check("1 已加载模型 context_length=262144", d.get("context_length") == 262144, str(d))
-    check("1 source=ps", d.get("source") == "ps", str(d))
+    # ⛔ 0.4.11 改造：此前硬编码断言 context_length == 262144，但 Ollama 返回的真实值
+    #    取决于模型载入时的 num_ctx（实测 num_ctx=1024 → 返回 2048；载入方式不同值就不同），
+    #    硬编码必然假失败。改为【先读 /api/ps 真实值，再断言端点返回同一值】——
+    #    验证"端点如实透传 ps 的值"这一真实契约，与具体数值解耦。
+    #    模型未加载时优雅 SKIP（与 m31/m32 E2E 同一约定），不判失败。
+    import json
+    import urllib.request
+    import urllib.error
+    base_url = "http://localhost:11434"
+    ps_cl = None
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/ps", timeout=8) as resp:
+            for m in json.loads(resp.read().decode("utf-8")).get("models", []):
+                if str(m.get("name", "")).startswith("qwen3.8"):
+                    ps_cl = m.get("context_length")
+                    break
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"  SKIP  /api/ps 不可达（{type(e).__name__}），跳过用例 1")
+    if ps_cl is None:
+        print("  SKIP  qwen3.8 未加载（/api/ps 无该模型），跳过用例 1。"
+              "请先发一次推理请求载入（curl -X POST localhost:11434/api/chat ...）")
+    else:
+        r = client.get("/api/context/limit", params={"model": "qwen3.8"})
+        d = r.json()
+        check("1 端点如实透传 /api/ps 的 context_length（不硬编码具体数值）",
+              d.get("context_length") == int(ps_cl), f"ps={ps_cl} 端点={d}")
+        check("1 source=ps", d.get("source") == "ps", str(d))
+        check("1 返回真实模型名（含 tag）", str(d.get("model", "")).startswith("qwen3.8"), str(d))
 
     # 2. 模型未加载 → default 兜底
     r2 = client.get("/api/context/limit", params={"model": "nonexistent_xyz_999"})

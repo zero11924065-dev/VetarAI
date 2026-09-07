@@ -38,6 +38,10 @@ from typing import Any, Callable, Awaitable
 # ctx 由 loop 传入：{"project_id", "session_id", "sandbox_root"}
 Handler = Callable[[dict, dict], Awaitable[dict]]
 
+# 0.4.11：workflow_run 有界等待（wait_s）参数。
+WORKFLOW_RUN_MAX_WAIT = 120.0          # wait_s 上限（秒）：工具循环不可被单个动作长时间占住
+_WORKFLOW_FINAL_STATUSES = ("done", "failed", "stopped")   # 终态（running 为进行中）
+
 
 # ── 各模块动作的执行器（与 app.py 端点行为一致，直接调 Python 层）──────────
 
@@ -121,8 +125,50 @@ async def _workflow_run(params: dict, ctx: dict) -> dict:
                 pass
 
     asyncio.create_task(_drive())
+
+    # 0.4.11：有界等待（wait_s）。此前一律「后台跑 + 返 run_id」，Agent 必须自己反复调
+    # workflow_get_runs 轮询——每次轮询都是一整轮模型往返（读结果→决定再查→再读），
+    # 一个几十秒的短流程要空耗好几轮 token 与时间。
+    # 现允许 Agent 显式指定最多等多少秒：
+    #   - 短流程：等到终态直接返回 status/result/error，一轮拿完
+    #   - 长流程：超时即返回 running + run_id，退回原有轮询模式（不阻塞工具循环）
+    # ⛔ 上限 120s：工具循环不能被单个动作长时间占住（与委派活性超时同一考量）。
+    try:
+        wait_s = float(params.get("wait_s") or 0)
+    except (TypeError, ValueError):
+        wait_s = 0.0
+    wait_s = max(0.0, min(wait_s, WORKFLOW_RUN_MAX_WAIT))
+
+    if wait_s > 0:
+        from sidecar.storage.store import get_workflow_run
+        # ⛔ 用 get_running_loop()：get_event_loop() 在 Python 3.12+ 已弃用，
+        #    且本函数必在事件循环内被调用（async），running loop 一定存在。
+        _loop = asyncio.get_running_loop()
+        deadline = _loop.time() + wait_s
+        poll = 0.4
+        while True:
+            await asyncio.sleep(poll)
+            rec = get_workflow_run(run_id) or {}
+            status = str(rec.get("status") or "")
+            if status in _WORKFLOW_FINAL_STATUSES:
+                return {"ok": True, "run_id": run_id, "workflow_name": wf.get("name"),
+                        "status": status,
+                        "waited_s": round(wait_s - (deadline - _loop.time()), 1),
+                        "result": rec.get("result"), "error": rec.get("error"),
+                        "current_node": rec.get("current_node"),
+                        "note": "工作流已结束（在等待窗口内完成），无需再轮询。"}
+            if _loop.time() >= deadline:
+                return {"ok": True, "run_id": run_id, "workflow_name": wf.get("name"),
+                        "status": status or "running",
+                        "note": (f"等待 {wait_s:.0f}s 后仍未结束（工作流含多节点推理，可能需数分钟）。"
+                                 f"已转为后台运行，用 workflow_get_runs(run_id=\"{run_id}\") 查询进度与结果。")}
+            poll = min(poll * 1.5, 3.0)   # 退避轮询，避免频繁读库
+
     return {"ok": True, "run_id": run_id, "workflow_name": wf.get("name"),
-            "note": "工作流已在后台开始运行。用 workflow_get_runs(run_id=...) 查询进度与结果。"}
+            "status": "running",
+            "note": ("工作流已在后台开始运行。用 workflow_get_runs(run_id=...) 查询进度与结果；"
+                     "若想在本轮直接拿到结果，可传 wait_s（秒，上限 "
+                     f"{int(WORKFLOW_RUN_MAX_WAIT)}）等待其结束。")}
 
 
 async def _knowledge_search(params: dict, ctx: dict) -> dict:
@@ -252,12 +298,16 @@ APP_MODULE_REGISTRY: dict[str, dict[str, Any]] = {
                 "needs_confirm": False,
             },
             "run": {
-                "description": "触发运行指定工作流。工作流是长任务，本动作立即返回 run_id 并在后台执行；"
-                             "之后用 get_runs 查询进度与结果。",
+                "description": "触发运行指定工作流。工作流是长任务，默认立即返回 run_id 并在后台执行，"
+                             "之后用 get_runs 查询进度与结果。"
+                             "⚡ 若希望本轮直接拿到结果（省去反复轮询的多轮往返），可传 wait_s 有界等待：短流程等到结束即返回 "
+                             "status/result/error；长流程超时则返回 running + run_id，退回轮询。",
                 "params": {
                     "workflow_id": "str（必填，工作流 id；用 workflow.list 查）",
                     "params": "dict（可选，工作流入参 variables）",
                     "sandbox_root": "str（可选，文件节点的根目录；默认用当前会话工作目录）",
+                    "wait_s": "float（可选，0.4.11 新增，有界等待秒数，上限 120；"
+                              "不传或 0=立即返回 run_id 后台跑；传正值=最多等这么久拿结果）",
                 },
                 "handler": _workflow_run,
                 "needs_confirm": True,   # 高成本：会跑多节点推理、占用模型与内存

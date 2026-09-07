@@ -45,8 +45,9 @@ def main():
     aid = store.add_agent_config(pid, "A", "main", model_name="qwen3.8")
     sid = store.create_session(pid, aid)
 
-    def loop_with_tools(model, msgs, spec, root, authorizer=None, max_rounds=5, context_limit=0,
-                        delegation_ctx=None, first_round_images=None):
+    # 0.4.11：桩签名统一改 **kw 兜底。此前显式列举 delegation_ctx/first_round_images，
+    # 真实 run_tool_loop 新增 knowledge_ctx 后即 TypeError——桩不该跟签名逐一同步。
+    def loop_with_tools(model, msgs, spec, root, **kw):
         async def _gen():
             yield {"event": "tool_call", "data": {"id": "c1", "name": "list_dir", "args": {}}}
             yield {"event": "tool_result", "data": {"id": "c1", "name": "list_dir", "ok": True, "summary": "2 个条目"}}
@@ -89,8 +90,7 @@ def main():
     check("② 不存在项目 exists=False", r3.json().get("exists") is False)
 
     # ── ③ 客户端断开 → status=interrupted（异步驱动；同步 TestClient 会阻塞在挂起循环）──
-    def hanging_loop(model, msgs, spec, root, authorizer=None, max_rounds=5, context_limit=0,
-                     delegation_ctx=None, first_round_images=None):
+    def hanging_loop(model, msgs, spec, root, **kw):
         async def _gen():
             yield {"event": "tool_call", "data": {"id": "c9", "name": "read_file", "args": {"path": "a"}}}
             await asyncio.Event().wait()
@@ -116,8 +116,7 @@ def main():
           st3 and len(st3.get("steps", [])) == 1 and st3["steps"][0].get("status") == "running", str(st3.get("steps")) if st3 else "")
 
     # ── ④ 错误路径 → status=error ──
-    def error_loop(model, msgs, spec, root, authorizer=None, max_rounds=5, context_limit=0,
-                   delegation_ctx=None, first_round_images=None):
+    def error_loop(model, msgs, spec, root, **kw):
         async def _gen():
             yield {"event": "error", "data": {"detail": "模拟熔断"}}
         return _gen()

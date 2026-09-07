@@ -49,6 +49,9 @@ from sidecar.tools import execute as execute_tool
 
 MAX_ROUNDS_DEFAULT = 200        # tool loop 轮次上限（默认值；实际由 config max_tool_rounds 覆盖，范围 1-1000）
 CONSECUTIVE_FAIL_LIMIT = 2      # 连续 N 轮工具全部失败 → 熔断（协议常量）
+COMPUTER_USE_MAX_STRIKES = 2    # 0.4.11：同一 Computer Use 动作连续失败 N 次 → 熔断该工具
+                                # （真机事故：失败后模型无限重发，每次重试都弹确认窗，
+                                #   用户连点十几二十个仍停不下来。截屏不计入——它只读无弹窗）
 SEARCH_CIRCUIT_STOP = 1        # TS-105：web_search 返回 circuit_open=True → 立即停止（熔断器已确认重试无意义；任务单写 2 但实际时序导致第 1 次 False 第 2 次 True，strikes 永远到不了 2，故改为 1）
 SUMMARY_MAX_CHARS = 200         # tool_result 摘要截断长度（协议常量）
 HEARTBEAT_INTERVAL = 15.0       # SSE 空闲心跳间隔（M5 正式做，M1-2 占位）
@@ -931,6 +934,11 @@ async def run_tool_loop(
     tokens_used = 0
     consecutive_fail_rounds = 0
     search_circuit_strikes = 0  # TS-105：web_search 熔断计数（连续 circuit_open 次数）
+    # 0.4.11：Computer Use 连败熔断计数（工具名 → 连续失败次数）。
+    # 真机事故（2026-09-07）：动作失败后模型反复重发同一动作，每次重试都触发
+    # 每步确认弹窗 → 用户连点十几二十个确认仍停不下来。连败 COMPUTER_USE_MAX_STRIKES
+    # 次即熔断该工具，直接报错终止而非继续弹窗。
+    computer_use_strikes: dict[str, int] = {}
     tool_calls_log: list[dict[str, Any]] = []
     # 2026-08-28 问题2：搜索去重缓存 —— 记录本会话已执行成功的搜索关键词（归一化），
     # 模型用相同/已成功的关键词再搜时直接拦截并引导作答，避免空转重复搜索。
@@ -1183,66 +1191,94 @@ async def run_tool_loop(
                         "当前会话未启用 Computer Use（工具不应出现在列表中）。"
                         "请如实告知用户：需在 设置 → Computer Use 开启总开关后才能操作电脑。")}
                 else:
-                    try:
-                        from sidecar.computer_use import (take_screenshot, mouse_click,
-                                                          keyboard_type, keyboard_hotkey,
-                                                          check_whitelist)
-                        import sidecar.config as _cfg_cu
-                        _cfg_c = _cfg_cu.get_config()
-                        _wl = _cfg_c.get("computer_use_app_whitelist") or []
-                        _confirm_each = bool(_cfg_c.get("computer_use_confirm_each", True))
-                    except Exception as e:
-                        result = {"ok": False, "error": f"computer_use 模块加载失败：{e}"}
-                        _wl = None
-                    if _wl is not None:
-                        # 防线4：白名单校验（截屏也校验——避免在不允许的应用上窥屏）
-                        _wl_r = check_whitelist(_wl if isinstance(_wl, list) else [])
-                        if not _wl_r.get("ok"):
-                            result = {"ok": False, "error": f"app_not_allowed: {_wl_r.get('reason')}"}
-                        elif tc["name"] == "screen_view":
-                            result = await asyncio.to_thread(take_screenshot)
-                        else:
-                            # 防线3：每步确认（副作用动作）
-                            _cu_authorizer = computer_use_ctx.get("authorizer")
-                            _desc = {"mouse_click": "点击屏幕",
-                                     "keyboard_type": "输入文本",
-                                     "keyboard_hotkey": "按下按键"}[tc["name"]]
-                            _detail = json.dumps(_args_u, ensure_ascii=False)[:400]
-                            _allowed = True
-                            if _confirm_each:
-                                if _cu_authorizer is None:
-                                    result = {"ok": False, "error": (
-                                        f"computer_use_denied: 「{_desc}」需用户逐步确认，"
-                                        "但当前无授权通道，已拒绝执行（不擅自操作你的电脑）。")}
-                                    _allowed = False
-                                else:
-                                    _ok_u = await _cu_authorizer(
-                                        f"computer_use:{tc['name']}", _detail, "computer_use",
-                                        {"kind": "computer_use", "tool": tc["name"],
-                                         "desc": _desc, "args": _args_u,
-                                         "app": _wl_r.get("app") or ""})
-                                    _allowed = (_ok_u.get("allowed") if isinstance(_ok_u, dict)
-                                                else bool(_ok_u))
-                                    if not _allowed:
+                    # 0.4.11 连败熔断：⛔ 必须在【白名单 / 权限 / 确认弹窗】之前判断，
+                    # 否则被熔断的那一次仍会弹窗，用户还得白点一下。
+                    # 真机事故（2026-09-07）：动作失败后模型反复重发同一动作，
+                    # 每次重试都触发每步确认弹窗 → 用户连点十几二十个仍停不下来。
+                    _cu_strikes = computer_use_strikes.get(tc["name"], 0)
+                    if _cu_strikes >= COMPUTER_USE_MAX_STRIKES:
+                        result = {"ok": False, "error": (
+                            f"computer_use_circuit_open: 「{tc['name']}」已连续失败 "
+                            f"{_cu_strikes} 次，本轮已熔断该动作，不再重试、也不再弹确认窗。\n"
+                            "⛔ 不要换参数重试同一动作，也不要改用其他 Computer Use 动作绕过。"
+                            "请如实告知用户：该动作连续失败、需人工介入排查"
+                            "（最常见根因是辅助功能/屏幕录制权限未授予【侧车二进制】——"
+                            "让用户到 设置 → Computer Use 点「检测权限」查看确切路径与逐步指引）。")}
+                        computer_use_strikes[tc["name"]] = _cu_strikes + 1
+                    else:
+                        try:
+                            from sidecar.computer_use import (take_screenshot, mouse_click,
+                                                              keyboard_type, keyboard_hotkey,
+                                                              check_whitelist, check_permission_for)
+                            import sidecar.config as _cfg_cu
+                            _cfg_c = _cfg_cu.get_config()
+                            _wl = _cfg_c.get("computer_use_app_whitelist") or []
+                            _confirm_each = bool(_cfg_c.get("computer_use_confirm_each", True))
+                        except Exception as e:
+                            result = {"ok": False, "error": f"computer_use 模块加载失败：{e}"}
+                            _wl = None
+                        if _wl is not None:
+                            # 防线4：白名单校验（截屏也校验——避免在不允许的应用上窥屏）
+                            _wl_r = check_whitelist(_wl if isinstance(_wl, list) else [])
+                            if not _wl_r.get("ok"):
+                                result = {"ok": False, "error": f"app_not_allowed: {_wl_r.get('reason')}"}
+                            # 0.4.11 防线1 前置：⛔ 权限检查必须在【确认弹窗之前】。
+                            # 此前顺序是 弹窗 → 用户点「允许执行」→ 执行时才查权限 → 失败，
+                            # 于是用户批准了一个注定失败的动作（真机事故：二十次点击全白费），
+                            # 还给模型"用户同意了、再试一次"的错觉 → 无限重发 + 弹窗风暴。
+                            elif not (_cu_perm := check_permission_for(tc["name"])).get("ok"):
+                                result = {"ok": False,
+                                          "error": _cu_perm.get("error") or "权限未授予"}
+                            elif tc["name"] == "screen_view":
+                                result = await asyncio.to_thread(take_screenshot)
+                            else:
+                                # 防线3：每步确认（副作用动作）
+                                _cu_authorizer = computer_use_ctx.get("authorizer")
+                                _desc = {"mouse_click": "点击屏幕",
+                                         "keyboard_type": "输入文本",
+                                         "keyboard_hotkey": "按下按键"}[tc["name"]]
+                                _detail = json.dumps(_args_u, ensure_ascii=False)[:400]
+                                _allowed = True
+                                if _confirm_each:
+                                    if _cu_authorizer is None:
                                         result = {"ok": False, "error": (
-                                            f"denied_by_user: 用户拒绝了本次「{_desc}」操作。"
-                                            "不要再重试该操作，请如实告知用户已取消，并询问下一步。")}
-                            if _allowed:
-                                if tc["name"] == "mouse_click":
-                                    result = await asyncio.to_thread(
-                                        mouse_click, _args_u.get("x"), _args_u.get("y"),
-                                        str(_args_u.get("button") or "left"),
-                                        _args_u.get("clicks") or 1)
-                                elif tc["name"] == "keyboard_type":
-                                    result = await asyncio.to_thread(
-                                        keyboard_type, str(_args_u.get("text") or ""))
-                                else:
-                                    result = await asyncio.to_thread(
-                                        keyboard_hotkey, str(_args_u.get("keys") or ""))
-                                # 操作后提示模型重新截屏核对（界面已变，别凭记忆继续）
-                                if result.get("ok"):
-                                    result["hint"] = ("操作后界面可能已变化，"
-                                                      "继续下一步前请先 screen_view 重新截屏核对结果。")
+                                            f"computer_use_denied: 「{_desc}」需用户逐步确认，"
+                                            "但当前无授权通道，已拒绝执行（不擅自操作你的电脑）。")}
+                                        _allowed = False
+                                    else:
+                                        _ok_u = await _cu_authorizer(
+                                            f"computer_use:{tc['name']}", _detail, "computer_use",
+                                            {"kind": "computer_use", "tool": tc["name"],
+                                             "desc": _desc, "args": _args_u,
+                                             "app": _wl_r.get("app") or ""})
+                                        _allowed = (_ok_u.get("allowed") if isinstance(_ok_u, dict)
+                                                    else bool(_ok_u))
+                                        if not _allowed:
+                                            result = {"ok": False, "error": (
+                                                f"denied_by_user: 用户拒绝了本次「{_desc}」操作。"
+                                                "不要再重试该操作，请如实告知用户已取消，并询问下一步。")}
+                                if _allowed:
+                                    if tc["name"] == "mouse_click":
+                                        result = await asyncio.to_thread(
+                                            mouse_click, _args_u.get("x"), _args_u.get("y"),
+                                            str(_args_u.get("button") or "left"),
+                                            _args_u.get("clicks") or 1)
+                                    elif tc["name"] == "keyboard_type":
+                                        result = await asyncio.to_thread(
+                                            keyboard_type, str(_args_u.get("text") or ""))
+                                    else:
+                                        result = await asyncio.to_thread(
+                                            keyboard_hotkey, str(_args_u.get("keys") or ""))
+                                    # 操作后提示模型重新截屏核对（界面已变，别凭记忆继续）
+                                    if result.get("ok"):
+                                        result["hint"] = ("操作后界面可能已变化，"
+                                                          "继续下一步前请先 screen_view 重新截屏核对结果。")
+                        # 0.4.11 熔断结算：成功即清零（连败要求"连续"）；失败累加。
+                        # 用户主动拒绝也计入——连拒两次说明该动作不该继续，停止骚扰用户。
+                        if result.get("ok"):
+                            computer_use_strikes[tc["name"]] = 0
+                        else:
+                            computer_use_strikes[tc["name"]] = _cu_strikes + 1
 
             # ---- 0.4.9（3.47.1）：archive_work_unit 路由（单元归档）----
             # 不走 registry.execute：归档是"搬移本会话消息"，需要 project_id/session_id，

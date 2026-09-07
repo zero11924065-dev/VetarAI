@@ -217,6 +217,59 @@ async def main():
     n = await NoopAuthorizer()("delete_path", "/etc/passwd", "delete")
     check("NoopAuthorizer 敏感操作恒 False（安全优先）", n is False)
 
+    # ---------- 8. 0.4.11 路径标点笔误自检 + 越界提示 ----------
+    # 真机事故（第六十四章）：模型把沙盒根实例化进路径时按中文习惯补了个句号，
+    # create_dir 忠实执行 → 桌面凭空多出空壳文件夹 → 委派识图 images_not_found
+    # → list_dir not_a_dir，一个标点引发连锁失败。
+    case_root = base / "11、赵兴柱诉刘禄九"          # 带顿号的真实案件目录名
+    case_root.mkdir()
+    ghost = base / "11、赵兴柱诉刘禄九。"             # 仅差一个句号的幽灵路径
+
+    r = await execute("create_dir", {"path": str(ghost / "识别文本")}, str(case_root))
+    check("句号笔误 → path_typo_rejected 拒绝",
+          r.get("ok") is False and "path_typo_rejected" in err_of(r), str(r)[:220])
+    check("⛔ 幽灵目录绝未被创建（此前会凭空建出）", not ghost.exists(), str(ghost))
+    check("报错给出正确路径建议（让模型自行纠正）",
+          str(case_root / "识别文本") in err_of(r), err_of(r)[:260])
+    check("报错写明禁止增删标点的纪律", "禁止增删任何标点" in err_of(r), err_of(r)[:260])
+
+    # 顿号/空格/引号等其他标点笔误同样拦截
+    for ch in ("、", " ", "　", "，"):
+        g2 = base / f"11、赵兴柱诉刘禄九{ch}"
+        r2 = await execute("create_dir", {"path": str(g2 / "x")}, str(case_root))
+        check(f"标点笔误「{ch!r}」同样被拦且未建目录",
+              r2.get("ok") is False and "path_typo_rejected" in err_of(r2) and not g2.exists(),
+              str(r2)[:200])
+
+    # 工作目录内的正常路径必须放行
+    r = await execute("create_dir", {"path": "识别文本"}, str(case_root))
+    check("工作目录内正常路径 → 放行", r.get("ok") is True, str(r)[:200])
+
+    # 真实越界（非笔误）：按方案 B 放行，但附 advisory 提示
+    oob = base / "合法外部目录"
+    r = await execute("create_dir", {"path": str(oob)}, str(case_root))
+    check("真实越界 → 放行（方案 B：非敏感越界不拦）", r.get("ok") is True, str(r)[:200])
+    check("真实越界 → 附 advisory 提示（给模型被提醒的机会）",
+          "工作目录之外" in str(r.get("advisory", "")), str(r)[:260])
+    check("advisory 在 schema 校验之后挂载（未触发 schema_violation）",
+          Path(r.get("path", "")).resolve() == oob.resolve(), str(r)[:200])
+
+    # ⛔ 已存在的同名异标点目录绝不干预（不得把用户从真实目录引开）
+    real_variant = base / "11、赵兴柱诉刘禄九."
+    real_variant.mkdir()
+    r = await execute("create_dir", {"path": str(real_variant / "sub")}, str(case_root))
+    check("已存在的异标点目录 → 不判为笔误、正常放行", r.get("ok") is True, str(r)[:220])
+
+    from sidecar.tools.registry import punctuation_near_miss
+    check("punctuation_near_miss 对已存在目录返回 None",
+          punctuation_near_miss(real_variant / "sub", str(case_root)) is None)
+    # ⚠️ 必须用 resolve() 后的路径比对：macOS 下 /var 是 /private/var 的符号链接，
+    #    而 execute()/punctuation_near_miss() 内部一律 resolve，直接比字符串会假失败。
+    check("punctuation_near_miss 对幽灵路径返回正确建议",
+          Path(punctuation_near_miss(ghost / "识别文本", str(case_root)) or "").resolve()
+          == (case_root / "识别文本").resolve(),
+          str(punctuation_near_miss(ghost / "识别文本", str(case_root))))
+
     # ---------- 清理 ----------
     shutil.rmtree(base, ignore_errors=True)
     check("测试临时目录已清理", not base.exists())

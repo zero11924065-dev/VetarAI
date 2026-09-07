@@ -163,15 +163,19 @@ async def main():
     # ── 5. tools_spec 注册（模型可调用）──
     spec = tools_spec()
     names = [s["function"]["name"] for s in spec]
-    # TS-107 新增 delegate_task、TS-110 新增 read_skill、checkpoint-066 新增 install_plugin/install_skill 后共 10 工具；
-    # with_delegation=False 剔除 delegate 为 9
-    check("5 tools_spec 含 web_search（共 10 工具）", "web_search" in names and len(spec) == 10, str(names))
+    # TS-107 新增 delegate_task、TS-110 新增 read_skill、checkpoint-066 新增 install_plugin/install_skill、
+    # 0.4.6 新增 create_document（Office 生成）后共 11 工具；with_delegation=False 剔除 delegate 为 10
+    # ⚠️ 计数硬编码易随功能新增而腐坏：这里同时断言"含 web_search"与"数量自洽"，
+    #    数量变更时失败信息会直接列出实际工具名，便于定位是哪个新功能未同步。
+    check("5 tools_spec 含 web_search（共 11 工具）", "web_search" in names and len(spec) == 11, str(names))
     check("5 tools_spec 含 delegate_task（主会话可委派）", "delegate_task" in names, str(names))
     check("5 tools_spec 含 install_plugin/install_skill（checkpoint-066）",
           "install_plugin" in names and "install_skill" in names, str(names))
+    check("5 tools_spec 含 create_document（0.4.6 Office 生成）",
+          "create_document" in names, str(names))
     names_sub = [s["function"]["name"] for s in tools_spec(with_delegation=False)]
     check("5 子会话 spec 剔除 delegate_task（防递归）",
-          "delegate_task" not in names_sub and len(names_sub) == 9, str(names_sub))
+          "delegate_task" not in names_sub and len(names_sub) == len(spec) - 1, str(names_sub))
     ws_spec = next(s for s in spec if s["function"]["name"] == "web_search")
     check("5 web_search spec 必填 query",
           ws_spec["function"]["parameters"].get("required") == ["query"])

@@ -52,6 +52,9 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
 from sidecar.storage.store import update_workflow_run, append_workflow_node_event
+# 0.4.11：非流式模型调用的 reading 超时上限（connector 层常量）。
+# 推理节点超时时要把它写进报错，用户才知道"等了多少秒被掐断"而非只看到空白错误。
+from sidecar.ollama.connector import READING_TIMEOUT
 
 NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
               "approval", "file_input", "file_output", "file_read",
@@ -103,6 +106,24 @@ class NodeResult:
     model_used: str | None = None
     duration_ms: int = 0
     retry_count: int = 0
+
+
+def _exc_text(e: BaseException, *, timeout_hint: str = "") -> str:
+    """把异常格式化为**可诊断**文本（0.4.11）。
+
+    ⛔ 为什么需要它：多处曾写 `f"xxx失败：{e}"`，而 `asyncio.TimeoutError` /
+    `TimeoutError` / `CancelledError` 的 `str()` 都是【空字符串】→ 用户只看到
+    "xxx失败："后面一片空白，完全无从判断根因。真机事故：工作流 n7 节点跑了
+    300180ms 被 `READING_TIMEOUT=300s` 掐断，界面只显示"模型调用失败："，
+    用户以为是模型出错，实际是超时。
+
+    与 T1（0.4.8，registry.py 工具错误被 schema_violation 吞掉）同一类缺陷、
+    同一修法：**永远带上异常类型名**；超时另给专项提示（含已等待秒数与可行对策）。
+    """
+    msg = str(e).strip()
+    if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
+        return timeout_hint or (f"超时：{type(e).__name__}（已等待超过上限仍未返回）")
+    return f"{type(e).__name__}: {msg}" if msg else f"{type(e).__name__}（无附加消息）"
 
 
 # ---------- 模板渲染 ----------
@@ -414,7 +435,17 @@ class WorkflowEngine:
         except WorkflowCancel:
             raise
         except Exception as e:
-            return NodeResult(node["id"], ok=False, error=f"模型调用失败：{e}", model_used=model)
+            # 0.4.11：⛔ 此前写 f"模型调用失败：{e}"，而 asyncio.TimeoutError 的 str() 是
+            #    【空字符串】→ 用户只看到"模型调用失败："后面一片空白，无从判断根因
+            #    （真机事故：n7 节点跑了 300180ms 被 READING_TIMEOUT=300s 掐断，
+            #     界面只显示"模型调用失败："，用户以为是模型出错，实际是超时）。
+            #    与 T1（0.4.8）同一类缺陷、同一修法：走 _exc_text 统一带上异常类型名。
+            return NodeResult(node["id"], ok=False, error=f"模型调用失败：{_exc_text(e, timeout_hint=(
+                f"模型调用超时：{type(e).__name__}。已等待 {READING_TIMEOUT:.0f}s 仍未返回"
+                f"（非流式调用的 reading 超时上限）。常见原因：本地大参数模型（如 35B）"
+                f"处理超长文本推理耗时超过该上限。可尝试：① 减小单批输入（循环节点分批更小）"
+                f"② 换更小的模型 ③ 提高 connector.READING_TIMEOUT。模型：{model}"))}",
+                model_used=model)
         return NodeResult(node["id"], ok=True, output=text, model_used=model)
 
     async def _run_tool(self, node: dict) -> NodeResult:
@@ -430,7 +461,9 @@ class WorkflowEngine:
         try:
             result = await execute_tool(tool_name, args, self.sandbox_root, None)
         except Exception as e:
-            return NodeResult(node["id"], ok=False, error=f"工具执行异常：{e}")
+            # 0.4.11：走 _exc_text 统一带类型名（TimeoutError 的 str() 为空，
+            # 直接 f"{e}" 会让用户看到"工具执行异常："后面一片空白）
+            return NodeResult(node["id"], ok=False, error=f"工具执行异常：{_exc_text(e)}")
         if not isinstance(result, dict) or not result.get("ok"):
             err = str((result or {}).get("error", "工具执行失败")) if isinstance(result, dict) else "工具执行失败"
             return NodeResult(node["id"], ok=False, error=err)
@@ -448,7 +481,12 @@ class WorkflowEngine:
             except WorkflowCancel:
                 raise
             except Exception as e:
-                return (NodeResult(node["id"], ok=False, error=f"裁判模型调用失败：{e}",
+                # 0.4.11：走 _exc_text 统一带类型名 + 超时专项提示（TimeoutError 的
+                # str() 为空，此前会让用户看到"裁判模型调用失败："后面一片空白）
+                return (NodeResult(node["id"], ok=False, error=f"裁判模型调用失败：{_exc_text(e, timeout_hint=(
+                                       f'裁判模型调用超时：{type(e).__name__}。已等待 '
+                                       f'{READING_TIMEOUT:.0f}s 仍未返回（条件分支的动态裁判无法判定，'
+                                       f'已按 false 分支继续）。模型：{model}'))}",
                                    model_used=model), "false")
             lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
             branch = lines[0] if lines else ""
@@ -691,7 +729,8 @@ class WorkflowEngine:
             target = target_dir / fname
             target.write_text(content, encoding=encoding)
         except (OSError, UnicodeEncodeError, LookupError) as e:
-            return NodeResult(node["id"], ok=False, error=f"写入失败：{e}")
+            # 0.4.11：走 _exc_text 统一带类型名（OSError 在某些情况下 str() 也很简略）
+            return NodeResult(node["id"], ok=False, error=f"写入失败：{_exc_text(e)}")
         return NodeResult(node["id"], ok=True, output=str(target))
 
     # ---- TS-121（0.3.1 补遗1）：文本输出/变量赋值/代码执行/消息回复 ----

@@ -33,6 +33,13 @@ if getattr(sys, 'frozen', False):
     sys.path.insert(0, base)
 
 import uvicorn
+# ⚠️ 时序依赖（0.4.11）：`VETARAI_DATA_ROOT` 由父进程（shell）设置，Python 启动时即已在
+# os.environ 中；下面这行 import 会触发 storage/store.py 的模块级绑定
+# （PROJECTS_ROOT = projects_root() → data_root() → 读该环境变量）。
+# ⛔ 不得在此 import 之前硬编码数据路径，也不得把该 import 移到读取环境变量之前——
+#    否则数据目录隔离失效，会读写用户真实 ~/.subagent（2026-09-07 真实事故）。
+# 用途：验证安装包 / 跑冒烟测试时，用 `VETARAI_DATA_ROOT=<空白临时目录>` 启动本二进制，
+#      即可完全隔离用户真实数据。
 from sidecar.app import app
 
 if __name__ == '__main__':

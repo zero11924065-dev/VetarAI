@@ -23,6 +23,7 @@ elsewhere in the codebase.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -115,7 +116,29 @@ def _expand(raw: str) -> Path:
 
 
 def data_root() -> Path:
-    """Resolve data_root (~ expanded) — root of all SubAgent data."""
+    """Resolve data_root (~ expanded) — root of all SubAgent data.
+
+    优先级（0.4.11 修复）：**VETARAI_DATA_ROOT 环境变量 > config.json > DEFAULT_CONFIG**。
+
+    ⛔ 此前本函数【完全不读环境变量】，而三处测试却设置了 `VETARAI_DATA_ROOT`
+    （test_computer_use.py:67 / test_app_modules.py:62 / test_checkpoint093.py:60），
+    该环境变量是**装饰**、无人消费。后果（本项目反复发生的事故）：
+      ① 测试隔离只能靠 monkeypatch `get_config_path` + 钉死 `PROJECTS_ROOT`/`_GDB`，
+         漏一处就把测试数据写进用户真实 ~/.subagent（checkpoint-093 曾污染 6 项 config、
+         装入 2 个技能、多出 2 个项目）；
+      ② **冻结二进制没有任何办法用空白数据目录运行**——启动即读写用户真实数据。
+         2026-09-07 实测：验证 0.4.11 安装包时启动冻结侧车（仅改端口），
+         它把探针工作流写进了用户真实 _global.db。
+    本函数是 config.json 路径（get_config_path）、projects 根（projects_root）、
+    storage 层 `PROJECTS_ROOT`/`_GDB`（导入时求值）的**唯一源头**，故在此处加环境变量
+    优先级即可贯通全链。
+
+    ⚠️ 因 storage/store.py 在【模块导入时】就绑定 PROJECTS_ROOT/_GDB，
+    环境变量必须在 import sidecar.app 之前设置（launcher_prod.py 已照此处理）。
+    """
+    env_raw = os.environ.get("VETARAI_DATA_ROOT", "").strip()
+    if env_raw:
+        return _expand(env_raw)
     with _LOCK:
         raw = _MEM.get("data_root")
     if raw is None:

@@ -44,8 +44,9 @@ def main():
     appmod.get_config = lambda: {"network_switch": "off"}
 
     def fake_loop(events):
-        async def loop(model, msgs, spec, root, authorizer=None, max_rounds=5, context_limit=0,
-                       delegation_ctx=None, first_round_images=None):
+        # 0.4.11：桩签名改 **kw 兜底。此前显式列举 delegation_ctx/first_round_images 等，
+        # 真实 run_tool_loop 新增 knowledge_ctx 后即 TypeError 崩溃——桩不该跟签名逐一同步。
+        async def loop(model, msgs, spec, root, **kw):
             for e in events:
                 yield e
         return loop
@@ -112,8 +113,7 @@ def main():
     # ── S2 中途取消（注入 CancelledError，与客户端断开同路径）→ 截断落盘 ──
     sid2 = store.create_session(pid, aid)
 
-    async def cancel_loop(model, msgs, spec, root, authorizer=None, max_rounds=5, context_limit=0,
-                          delegation_ctx=None, first_round_images=None):
+    async def cancel_loop(model, msgs, spec, root, **kw):
         yield {"event": "token", "data": {"delta": "前半段内容"}}
         raise asyncio.CancelledError()
 

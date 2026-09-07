@@ -375,9 +375,13 @@ async def main():
 
     # 19. M2 溢出预警：未勾自动压缩 → yield compact_required 且不再请求模型
     # 关键：第 1 轮必须返回工具调用（不 done），这样第 2 轮开始前才能触发预警
-    import sidecar.config.store as _cfg
-    orig_cfg_mem = dict(_cfg._MEM) if _cfg._MEM else {}
-    _cfg._MEM = {**(_cfg._MEM or {}), "allow_auto_compact": False}
+    # ⛔ 0.4.11 隔离修复：此前用 `_cfg._MEM` 打补丁【无效】——get_config() 每次都从磁盘
+    #    重新合并（_load_from_disk），_MEM 只在写盘时用。导致用户真实 config 里的
+    #    allow_auto_compact:True 泄漏进测试 → 走 compact_auto 分支 → 19a 假失败。
+    #    必须 patch get_config 函数对象本身（与下方用例 20 同一正确做法）。
+    import sidecar.config as _cfgmod
+    orig_get_cfg = _cfgmod.get_config
+    _cfgmod.get_config = lambda: {"allow_auto_compact": False}
     try:
         evs = await collect([
             ([], [("list_dir", {})]),   # 第 1 轮：工具调用（不 done）
@@ -388,7 +392,7 @@ async def main():
         if cr:
             check("19b compact_required 含 used/limit", cr["data"].get("used", 0) > 0 and cr["data"].get("limit") == 10, str(cr))
     finally:
-        _cfg._MEM = orig_cfg_mem
+        _cfgmod.get_config = orig_get_cfg
 
     # 20. M2 自动压缩：allow_auto_compact=true → yield compact_auto 后继续
     # 直接 patch 模块属性（get_config 是函数对象，patch _MEM 无效）
@@ -411,9 +415,11 @@ async def main():
               f"events={len(evs)} done={done is not None}")
     finally:
         _cfgmod.get_config = orig_get_cfg
-        _cfg._MEM = orig_cfg_mem
 
     # 21. M2 est_rounds_left：增量 100/轮、距上限剩 20 → est=0
+    # ⛔ 0.4.11 隔离修复：此用例期望 compact_required（自动压缩关分支），但此前【完全没做
+    #    配置隔离】→ 用户真实 config 的 allow_auto_compact:True 泄漏进来 → 走 compact_auto
+    #    → 找不到 compact_required → 21 假失败。补 get_config patch（与 19/20 同一做法）。
     class IncrConn:
         """每轮 prompt_eval_count 递增 100：100, 200, 300...（不 done，返回工具调用）"""
         def __init__(self): self.calls = 0
@@ -421,19 +427,24 @@ async def main():
             self.calls += 1
             yield {"tool_calls": [{"id": f"t{self.calls}", "function": {"name": "list_dir", "arguments": "{}"}}]}
             yield {"done": True, "counts": {"prompt_eval_count": self.calls * 100, "eval_count": 1}}
-    evs2 = []
-    async for ev in run_tool_loop("m", [{"role": "user", "content": "hi"}], tools_spec(),
-                                  str(sandbox), max_rounds=10, context_limit=320,
-                                  connector=IncrConn()):
-        evs2.append(ev)
-    # 第 4 轮开始前：last_pe=300, 300/320=0.94 ≥ 0.9 → 触发
-    # history=[100,200,300] deltas=[100,100] avg=100, remaining=20 → est=0
-    cr = next((e for e in evs2 if e["event"] == "compact_required"), None)
-    check("21 溢出预警触发（300/320=94%）", cr is not None, str(evs2)[-300:])
-    if cr:
-        check("21 est_rounds_left=0（remaining 20 / avg_delta 100）",
-              cr["data"].get("est_rounds_left") == 0,
-              f"est={cr['data'].get('est_rounds_left')}")
+    orig_get_cfg2 = _cfgmod.get_config
+    _cfgmod.get_config = lambda: {"allow_auto_compact": False}
+    try:
+        evs2 = []
+        async for ev in run_tool_loop("m", [{"role": "user", "content": "hi"}], tools_spec(),
+                                      str(sandbox), max_rounds=10, context_limit=320,
+                                      connector=IncrConn()):
+            evs2.append(ev)
+        # 第 4 轮开始前：last_pe=300, 300/320=0.94 ≥ 0.9 → 触发
+        # history=[100,200,300] deltas=[100,100] avg=100, remaining=20 → est=0
+        cr = next((e for e in evs2 if e["event"] == "compact_required"), None)
+        check("21 溢出预警触发（300/320=94%）", cr is not None, str(evs2)[-300:])
+        if cr:
+            check("21 est_rounds_left=0（remaining 20 / avg_delta 100）",
+                  cr["data"].get("est_rounds_left") == 0,
+                  f"est={cr['data'].get('est_rounds_left')}")
+    finally:
+        _cfgmod.get_config = orig_get_cfg2
 
     # 清理
     shutil.rmtree(base, ignore_errors=True)

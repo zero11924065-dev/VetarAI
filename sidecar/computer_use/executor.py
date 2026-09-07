@@ -135,6 +135,13 @@ def _cg():
         # 事件源：用 CGEventSourceCreate 拿到独立源，比 NULL 更贴近真实设备语义
         cg.CGEventSourceCreate.restype = c_void_p
         cg.CGEventSourceCreate.argtypes = [c_int64]
+        # 0.4.11：屏幕录制权限探测（只读权限状态位，不读取任何屏幕内容）。
+        # 缺此权限时 screencapture **不报错**且仍输出全分辨率，但只拍到桌面壁纸、
+        # 所有应用窗口被系统遮蔽 → 视觉模型看到空桌面 → 找不到任何按钮 →
+        # 功能完全不可用而探测却显示权限齐全（静默失效）。
+        # ⚠️ 故不能用"截图尺寸正常"推断权限正常，必须单独探测。
+        cg.CGPreflightScreenCaptureAccess.restype = c_bool
+        cg.CGPreflightScreenCaptureAccess.argtypes = []
 
         cg._cf = cf          # 挂在句柄上便于统一 CFRelease
         _CG = cg
@@ -152,10 +159,41 @@ def c_uint64_flags():
 
 def _cg_error(action: str) -> dict[str, Any]:
     """CoreGraphics 不可用时的统一可读报错（防线1：不静默失败）。"""
+    _audit(action, {"ok": False, "blocked_by": "coregraphics_unavailable",
+                    "reason": _CG_ERR or "未知原因"})
     return {"ok": False, "error": (
         f"{action}_unavailable: 无法调用 CoreGraphics（{_CG_ERR or '未知原因'}）。"
         "Computer Use 一期仅支持 macOS，且需要系统框架可用；"
         "请确认运行在 macOS 上，或到 设置 → Computer Use 点「检测权限」查看详情。")}
+
+
+def _ax_denied(action: str, verb: str, detail: dict | None = None) -> dict[str, Any]:
+    """防线1 拦截：辅助功能权限未授予时统一报错 + 落审计日志（0.4.11 修复）。
+
+    ⛔ 此前该拦截在三处动作函数里各自 return，且 return 早于 `_audit()` →
+       失败动作**完全不落日志**，实测 actions.jsonl 里 40 条全是 screenshot、
+       0 条失败记录，排障只能靠用户截图还原现场（2026-09-07 真机事故）。
+    ⛔ 此前文案让用户「勾选 VetarAI」，但 macOS 按【二进制文件】授权，
+       发事件的是侧车而非 Electron 主程序 → 照做无效。现改为给出确切路径。
+    """
+    _audit(action, {"ok": False, "blocked_by": "accessibility_denied",
+                    **(detail or {})})
+    exe = ""
+    try:
+        exe = _process_identity().get("exe") or ""
+    except Exception:
+        pass
+    guide = (f"    {exe}\n" if exe else "")
+    return {"ok": False, "error": (
+        f"accessibility_denied: 辅助功能权限未授予，{verb}会被系统静默丢弃"
+        "（看似执行成功实则无效）。\n"
+        "⚠️ macOS 按【二进制文件】授权，发出事件的是侧车进程而非 VetarAI 主程序，"
+        "只在列表里勾选 VetarAI 无效。请把下面这个文件本身加入名单：\n"
+        f"{guide}"
+        "操作：系统设置 → 隐私与安全性 → 辅助功能 → 点「+」→ 按 Cmd+Shift+G 粘贴上述路径 "
+        "→ 添加并勾选 → 完全退出 VetarAI（Cmd+Q）后重开（权限在进程启动时读取，"
+        "运行中修改名单不生效）。\n"
+        "不要再重试本动作，请如实告知用户需先完成授权。")}
 
 
 def _process_identity() -> dict[str, Any]:
@@ -211,6 +249,61 @@ def _ax_trusted() -> bool | None:
         return bool(app.AXIsProcessTrusted())
     except Exception:
         return None
+
+
+def _screen_capture_access() -> bool | None:
+    """屏幕录制权限（CGPreflightScreenCaptureAccess）。读不到时返回 None。
+
+    ⚠️ 0.4.11 新增（此前只探测辅助功能一项）：缺此权限时 screencapture
+    **不报错**、仍输出全分辨率，但只拍到桌面壁纸、所有应用窗口被系统遮蔽
+    → 视觉模型看到空桌面 → 找不到任何按钮 → 功能完全不可用而探测显示权限齐全。
+    与"辅助功能缺失"同属静默失效，故必须单独探测。
+    ⚠️ 该 API 只读权限状态位，**不读取任何屏幕内容**，探测本身无隐私副作用。
+    """
+    try:
+        cg = _cg()
+        if cg is None or not hasattr(cg, "CGPreflightScreenCaptureAccess"):
+            return None
+        return bool(cg.CGPreflightScreenCaptureAccess())
+    except Exception:
+        return None
+
+
+def check_permission_for(tool_name: str) -> dict[str, Any]:
+    """轻量权限预检（0.4.11）：只读权限状态位，**不截图、不发送任何事件**。
+
+    ⚠️ 为何需要它：`check_capabilities()` 会真截一张图（~0.26s + 内存开销），
+    不适合在每步动作的确认弹窗之前调用。而弹窗前必须知道权限是否齐备——
+    否则会出现真机事故那种情况：**用户点了「允许执行」，动作却注定失败**
+    （权限检查在弹窗之后才做），二十次点击全白费，还给了模型"用户同意了、
+    再试一次"的错觉，导致无限重发 + 弹窗风暴。
+
+    返回 {ok: bool, error: str}。ok=False 时 error 已含完整授权指引，可直接回给模型。
+    """
+    if tool_name == "screen_view":
+        # 截屏只需屏幕录制权限（不需要辅助功能）
+        scr = _screen_capture_access()
+        if scr is False:
+            exe = ""
+            try:
+                exe = _process_identity().get("exe") or ""
+            except Exception:
+                pass
+            return {"ok": False, "error": (
+                "screen_capture_denied: 屏幕录制权限未授予，截屏不会报错但只会拍到桌面壁纸"
+                "（所有应用窗口被系统遮蔽），你将看不到任何界面元素。\n"
+                + (f"请把下面这个文件加入名单：\n    {exe}\n" if exe else "")
+                + "操作：系统设置 → 隐私与安全性 → 屏幕录制 → 「+」→ Cmd+Shift+G 粘贴上述路径 "
+                  "→ 添加并勾选 → 完全退出 VetarAI（Cmd+Q）后重开。\n"
+                "不要再重试截屏，请如实告知用户需先完成授权。")}
+        return {"ok": True, "error": ""}
+
+    # 点击/输入/按键：需辅助功能权限（缺它时 CGEventPost 被系统静默丢弃）
+    if _ax_trusted() is False:
+        return _ax_denied(tool_name, {
+            "mouse_click": "点击", "keyboard_type": "输入",
+            "keyboard_hotkey": "按键"}.get(tool_name, "操作"))
+    return {"ok": True, "error": ""}
 
 
 def _to_utf16_units(text: str) -> list[int]:
@@ -320,9 +413,32 @@ def check_capabilities() -> dict[str, Any]:
     elif ax is None:
         out["problems"].append(
             "无法探测辅助功能权限（AXIsProcessTrusted 不可用）；若点击/输入无效，"
-            "请到 系统设置 → 隐私与安全性 → 辅助功能 勾选 VetarAI。")
+            "请到 系统设置 → 隐私与安全性 → 辅助功能，把【侧车二进制】加入名单"
+            "（勾 VetarAI 主程序无效，确切路径见上方 process_exe）。")
 
-    # 屏幕录制权限：截一张图看是否非空（截图本身无副作用）
+    # 0.4.11：屏幕录制权限探测（第二项必需权限，此前完全未探测）。
+    # ⚠️ 不能用下方"截图成功/尺寸正常"推断此权限正常——缺权限时 screencapture
+    #    仍返回全分辨率图，只是内容被系统遮蔽成壁纸（静默失效）。
+    scr = _screen_capture_access()
+    out["facts"]["screen_capture_access"] = scr
+    if scr is False:
+        out["ok"] = False
+        _exe2 = ident.get("exe") or "侧车二进制"
+        out["problems"].append(
+            "屏幕录制权限未授予——截屏不会报错，但只能拍到桌面壁纸，"
+            "所有应用窗口内容被系统遮蔽 → 视觉模型看到空桌面、找不到任何按钮，"
+            "Computer Use 实际不可用。\n"
+            "请把下面这个文件加入名单（同样按【二进制文件】授权，勾 VetarAI 主程序无效）：\n"
+            f"    {_exe2}\n"
+            "操作：系统设置 → 隐私与安全性 → 屏幕录制 → 点「+」→ Cmd+Shift+G 粘贴上述路径 "
+            "→ 添加并勾选 → 完全退出 VetarAI（Cmd+Q）后重开。")
+    elif scr is None:
+        out["problems"].append(
+            "无法探测屏幕录制权限（CGPreflightScreenCaptureAccess 不可用）；"
+            "若 Agent 反馈「只看到桌面壁纸/找不到窗口」，请到 "
+            "系统设置 → 隐私与安全性 → 屏幕录制 加入侧车二进制。")
+
+    # 截屏能力自检（截图本身无副作用）
     shot = take_screenshot()
     if not shot.get("ok"):
         out["ok"] = False
@@ -331,7 +447,11 @@ def check_capabilities() -> dict[str, Any]:
         out["facts"]["screen_points"] = f"{shot['width_points']}x{shot['height_points']}"
         out["facts"]["screenshot_px"] = f"{shot['width_px']}x{shot['height_px']}"
         out["facts"]["retina_scale"] = shot["scale"]
-        # 辅助功能权限：System Events 能枚举前台进程名即视为已授予（只读）
+    # 读取前台应用名（白名单校验需要）。
+    # ⛔ 0.4.11：此处原用 System Events 探测结果再输出一条"辅助功能未授予，勾选 VetarAI"
+    #    的 problems —— 与上方 accessibility_trusted 判据**相互矛盾**（System Events 走它
+    #    自己的权限，侧车不可信时它仍可能成功），正是用户看到"✓已授予"却又"存在阻塞"的
+    #    根源之一。现仅取 frontmost_app 供白名单用，**权限结论一律以 accessibility_trusted 为准**。
     try:
         r = subprocess.run(
             ["osascript", "-e",
@@ -340,15 +460,8 @@ def check_capabilities() -> dict[str, Any]:
         front = (r.stdout or "").strip()
         if front and "execution error" not in (r.stderr or ""):
             out["facts"]["frontmost_app"] = front
-            out["facts"]["accessibility"] = True
-        else:
-            out["facts"]["accessibility"] = False
-            out["problems"].append(
-                "辅助功能权限未授予（点击/输入会静默无效）。请到 "
-                "系统设置 → 隐私与安全性 → 辅助功能，勾选 VetarAI 后重试。")
-    except Exception as e:
-        out["facts"]["accessibility"] = False
-        out["problems"].append(f"辅助功能权限探测失败：{type(e).__name__}: {e}")
+    except Exception:
+        pass  # 读不到前台应用不影响权限结论；白名单校验会自行按"读不到"保守处理
 
     return out
 
@@ -543,10 +656,11 @@ def mouse_click(x: float, y: float, button: str = "left", clicks: int = 1) -> di
         return _cg_error("click")
     # 防线1：无辅助功能权限时 CGEventPost 会被系统静默丢弃（看似成功实则无效），
     # 提前拦截并给出授权路径，避免用户白等还查不出原因。
+    # 0.4.11：改走 _ax_denied —— 拦截也落审计日志（此前失败完全不写 actions.jsonl），
+    # 且指引改为给出【侧车二进制确切路径】（勾 VetarAI 主程序无效）。
     if _ax_trusted() is False:
-        return {"ok": False, "error": (
-            "accessibility_denied: 辅助功能权限未授予，点击会被系统静默丢弃。"
-            "请到 系统设置 → 隐私与安全性 → 辅助功能 勾选 VetarAI 后重试。")}
+        return _ax_denied("click", "点击", {"x": round(px, 1), "y": round(py, 1),
+                                            "button": btn, "clicks": n})
 
     down_t = _K_CG_EVENT_LEFT_MOUSE_DOWN if btn == "left" else _K_CG_EVENT_RIGHT_MOUSE_DOWN
     up_t = _K_CG_EVENT_LEFT_MOUSE_UP if btn == "left" else _K_CG_EVENT_RIGHT_MOUSE_UP
@@ -615,9 +729,7 @@ def keyboard_type(text: str) -> dict[str, Any]:
     if cg is None:
         return _cg_error("type")
     if _ax_trusted() is False:
-        return {"ok": False, "error": (
-            "accessibility_denied: 辅助功能权限未授予，输入会被系统静默丢弃。"
-            "请到 系统设置 → 隐私与安全性 → 辅助功能 勾选 VetarAI 后重试。")}
+        return _ax_denied("type", "输入", {"chars": len(text), "preview": text[:40]})
 
     # ⛔ 必须手动拆 UTF-16 代理对：Python ord() 给完整码点，而 UniChar 是 UTF-16。
     # 码点 >0xFFFF（emoji、数学符号）不拆则目标应用收到非法字符。
@@ -732,9 +844,7 @@ def keyboard_hotkey(keys: str) -> dict[str, Any]:
     if cg is None:
         return _cg_error("hotkey")
     if _ax_trusted() is False:
-        return {"ok": False, "error": (
-            "accessibility_denied: 辅助功能权限未授予，按键会被系统静默丢弃。"
-            "请到 系统设置 → 隐私与安全性 → 辅助功能 勾选 VetarAI 后重试。")}
+        return _ax_denied("hotkey", "按键", {"keys": keys})
 
     # ⭐ 真实硬件按键序列：修饰键也要【真的按下再抬起】，不能只设 flags 位。
     # 只设 flags 而不发修饰键的 keyDown 时，部分应用的内部修饰键状态与事件不同步，

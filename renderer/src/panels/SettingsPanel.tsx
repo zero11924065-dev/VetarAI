@@ -166,11 +166,19 @@ function ComputerUseSection({ cfg, save }: { cfg: any; save: (patch: Record<stri
                   {cap.facts.screenshot_px && <div>截屏分辨率：{cap.facts.screenshot_px} px</div>}
                   {cap.facts.retina_scale && <div>Retina 缩放：{cap.facts.retina_scale}x（点击坐标已自动换算）</div>}
                   {/* ⚠️ 判据必须是 accessibility_trusted（AXIsProcessTrusted，问的是"本进程"）。
-                      不可用 accessibility（System Events 查询前台应用成功与否）——那走的是
-                      System Events 自己的权限，本进程无权限时它照样成功，会误显示"已授予"。 */}
+                      不可用 System Events 查询前台应用成功与否来判权限——那走的是
+                      System Events 自己的权限，本进程无权限时它照样成功，会误显示"已授予"。
+                      0.4.11：后端已彻底移除该误导性字段，此处仅保留 frontmost_app 供白名单用。 */}
                   <div>辅助功能权限（本进程 AXIsProcessTrusted）：
                     {cap.facts.accessibility_trusted === true ? '✓ 已授予'
                       : cap.facts.accessibility_trusted === false ? '✗ 未授予（点击/输入会被系统静默丢弃）'
+                      : '？ 无法探测'}
+                  </div>
+                  {/* 0.4.11 新增：屏幕录制是第二项必需权限，此前完全未探测。
+                      缺它时截屏不报错但只拍到壁纸，Agent 看空桌面找不到按钮。 */}
+                  <div>屏幕录制权限（CGPreflightScreenCaptureAccess）：
+                    {cap.facts.screen_capture_access === true ? '✓ 已授予'
+                      : cap.facts.screen_capture_access === false ? '✗ 未授予（截屏只会拍到桌面壁纸，Agent 看不到窗口）'
                       : '？ 无法探测'}
                   </div>
                   <div>CoreGraphics 接口：{cap.facts.coregraphics || '未探测'}</div>

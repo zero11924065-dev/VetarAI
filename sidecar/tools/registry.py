@@ -78,6 +78,50 @@ def resolve_sandboxed_path(rel: str, sandbox_root: str) -> Path | None:
                 resolved = _alt.resolve()
     return resolved
 
+
+# 0.4.11（第六十四章）：路径标点笔误自检。
+# 真机事故：模型把沙盒根实例化进路径时，按中文行文习惯在结尾补了个句号
+# （`…/赵兴柱诉刘禄九` → `…/赵兴柱诉刘禄九。`），create_dir 忠实执行 →
+# 在桌面上凭空建出一个空壳文件夹，随后委派识图全部 images_not_found、
+# list_dir 报 not_a_dir，一个标点引发连锁失败。
+# 标点集合覆盖中英文常见句读与引号括号（模型笔误高发字符）。
+_PUNCT_CHARS = set("。，、；：！？.,;:!?·…—-–~～\"'“”‘’（）()【】[]{}<>《》 　\t")
+
+
+def _strip_punct(s: str) -> str:
+    return "".join(ch for ch in s if ch not in _PUNCT_CHARS)
+
+
+def punctuation_near_miss(resolved: Path, sandbox_root: str | Path) -> str | None:
+    """目标路径若与沙盒根【仅差标点】，返回正确路径建议字符串，否则 None。
+
+    ⛔ 只在"那个带标点的祖先目录**不存在**"时才命中——若它真实存在，说明是用户
+       自己建的同名异标点目录，绝不干预（不得把用户从真实目录上引开）。
+    ⛔ 不自动改写路径，只返回建议由调用方拒绝并告知模型——静默改写有写错位置的风险，
+       而拒绝+建议能让模型自行纠正（真机事故中模型第 7 步自己就改对了，
+       它缺的只是"被提醒的机会"）。
+    """
+    try:
+        rp = Path(sandbox_root).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+    root_key = _strip_punct(rp.name)
+    if not root_key:
+        return None
+    try:
+        target = Path(resolved)
+    except (OSError, RuntimeError):
+        return None
+    for anc in list(target.parents) + [target]:
+        if anc == rp or anc.exists():
+            continue                      # 已存在的目录不干预
+        if anc.name != rp.name and _strip_punct(anc.name) == root_key:
+            try:
+                return str(rp.joinpath(*target.relative_to(anc).parts))
+            except (ValueError, OSError):
+                return None
+    return None
+
 # ---------- RETURN_SCHEMA 声明 ----------
 LIST_DIR_RETURN = {
     "required": ["ok", "entries"],
@@ -326,6 +370,23 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
         if resolved is None:
             return {"ok": False, "error": f"bad_path: {rel}"}
 
+    # 0.4.11（第六十四章）：路径标点笔误硬拦——仅对【创建类】动作。
+    # 真机事故：模型给沙盒根补了个句号，create_dir 忠实执行 → 桌面凭空多出空壳文件夹，
+    # 后续委派识图 images_not_found、list_dir not_a_dir，一个标点引发连锁失败。
+    # ⛔ 只拦"带标点的祖先目录不存在"的情况（幽灵路径）；真实存在的同名异标点目录绝不干预。
+    # ⛔ 不静默改写路径，只拒绝 + 给出正确建议，让模型自行纠正（真机中模型第 7 步自己就改对了）。
+    _oob_advisory = ""
+    if action in ("write", "mkdir"):
+        _suggestion = punctuation_near_miss(resolved, sandbox_root)
+        if _suggestion:
+            return {"ok": False, "error": (
+                f"path_typo_rejected: 目标路径与当前项目工作目录【仅差标点符号】，"
+                f"疑似路径笔误，已拒绝创建（否则会凭空多出一个目录，并导致后续步骤连锁失败）。\n"
+                f"  你给的：{resolved}\n"
+                f"  应为：  {_suggestion}\n"
+                f"⛔ 路径中的项目目录名必须【原样】使用，禁止增删任何标点（句号/顿号/引号/空格等）。\n"
+                f"请改用上面的正确路径重试。")}
+
     # 敏感判定（用户 2026-08-29 方案 B 定稿，M3 前置安全加固 S1）：
     # 仅【系统敏感位置】的 删除/写入/建目录 需要用户确认；
     # 非敏感越界（~/Desktop、其他项目目录）全部放行；读取任何位置都不拦截。
@@ -338,6 +399,16 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
         allowed = await authorizer(tool_name, str(resolved), action)
         if allowed is False:
             return {"ok": False, "error": "denied_by_user"}
+    elif action in ("write", "mkdir"):
+        # 0.4.11：越界【提示】而非拦截——方案 B 明确允许非敏感越界（如 ~/Desktop），
+        # 故不改变放行行为；只在成功后附一句提醒，给模型"被提醒的机会"自行纠正。
+        try:
+            resolved.relative_to(root)
+        except (ValueError, OSError):
+            _oob_advisory = (
+                f"⚠️ 该路径在项目工作目录之外（工作目录：{root}）。"
+                f"若本意是操作本项目文件，请改用工作目录内的相对路径；"
+                f"若确需写到外部位置，可忽略本提示。")
 
     # 执行（无沙盒拦截；路径校验已在上面完成）
     try:
@@ -356,6 +427,9 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
     problems = _validate(result, TOOLS[tool_name]["return_schema"])
     if problems:
         return {"ok": False, "error": f"schema_violation: {', '.join(problems)}"}
+    # 0.4.11：越界提示在校验【之后】挂载——避免额外键触发 required 校验失败。
+    if _oob_advisory and isinstance(result, dict):
+        result["advisory"] = _oob_advisory
     return result
 
 

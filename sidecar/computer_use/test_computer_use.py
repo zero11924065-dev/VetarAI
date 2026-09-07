@@ -288,12 +288,18 @@ class _StubExec:
 
     def __init__(self):
         self.calls = []
+        # 0.4.11：权限预检桩。⛔ 必须桩掉——否则 check_permission_for 会走真实的
+        # AXIsProcessTrusted()/CGPreflightScreenCaptureAccess()，而测试进程继承了宿主
+        # （终端/助理）的权限恒为 True，于是"权限前置拦截"这条新路径**从未被覆盖**，
+        # 既有 108 项全绿属假绿（不是测试通过，是根本没测到）。
+        self.perm_ok = True
+        self.perm_probe_calls: list[str] = []
 
     def install(self):
         import sidecar.computer_use as cu
         self._orig = {n: getattr(cu, n) for n in
                       ("take_screenshot", "mouse_click", "keyboard_type", "keyboard_hotkey",
-                       "check_whitelist")}
+                       "check_whitelist", "check_permission_for")}
         cu.take_screenshot = lambda: {"ok": True, "_kind": "image", "image_base64": "x" * 20,
                                       "mime": "image/jpeg", "coord_factor": 1.1, "content": "截屏桩"}
         cu.mouse_click = lambda x, y, button="left", clicks=1: (
@@ -303,6 +309,25 @@ class _StubExec:
             self.calls.append(("type", text)) or {"ok": True, "action": "type", "content": "桩：已输入"})
         cu.keyboard_hotkey = lambda keys: (
             self.calls.append(("hotkey", keys)) or {"ok": True, "action": "hotkey", "content": "桩：已按键"})
+        cu.check_permission_for = self._perm_probe
+        return self
+
+    def _perm_probe(self, tool_name: str):
+        """权限预检桩：记录被问到的工具名，按 self.perm_ok 决定放行与否。"""
+        self.perm_probe_calls.append(tool_name)
+        if self.perm_ok:
+            return {"ok": True, "error": ""}
+        return {"ok": False, "error": (
+            f"accessibility_denied: 辅助功能权限未授予，{tool_name} 会被系统静默丢弃"
+            "（桩：用于验证权限前置拦截）。请把侧车二进制加入名单后重启应用。")}
+
+    def deny_permission(self):
+        """模拟权限未授予，用于验证「弹窗前拦截」与「连败熔断」。"""
+        self.perm_ok = False
+        return self
+
+    def allow_permission(self):
+        self.perm_ok = True
         return self
 
     def whitelist(self, ok: bool, reason: str = "", app: str = "Finder"):
@@ -567,6 +592,176 @@ def test_g_pure_logic():
               g2[0] > 0 and g2[1] > 0, str(g2))
 
 
+# ── H 组（0.4.11）：权限前置拦截 + 连败熔断（治真机弹窗风暴）─────────────
+def test_h_permission_preflight_and_circuit():
+    """0.4.11 两项修复：
+    ① 权限检查**前置到确认弹窗之前**——权限缺失时直接报错，绝不弹窗，
+       不再让用户批准一个注定失败的动作（真机事故：用户连点十几二十个确认全白费）。
+    ② 同一动作连败 COMPUTER_USE_MAX_STRIKES 次即熔断——治弹窗风暴。
+
+    ⚠️ 用例时序刻意复刻真机事故：**截屏成功**使整轮熔断 consecutive_fail_rounds
+    不断归零 → 循环可跑满 200 轮，弹窗风暴停不下来。动作级熔断按工具名分别计数，
+    不受截屏成功影响，正好补上这个洞。
+    """
+    isolate_all("cu_h_")
+    import sidecar.config as cfg
+    import sidecar.computer_use as cu
+    from sidecar.agent_engine.loop import COMPUTER_USE_MAX_STRIKES
+
+    stub = _StubExec().install().whitelist(True, app="Finder")
+    asked: list[dict] = []
+    perm_asked: list[str] = []
+
+    async def authz_yes(tool, path, action, extra=None):
+        asked.append({"tool": tool, "extra": extra})
+        return {"allowed": True}
+
+    def perm_probe(tool_name):
+        """只拒 mouse_click 的权限预检（截屏放行），复刻真机：截屏成功、点击全败。"""
+        perm_asked.append(tool_name)
+        if tool_name == "mouse_click":
+            return {"ok": False, "error": "accessibility_denied: 辅助功能权限未授予（桩）"}
+        return {"ok": True, "error": ""}
+
+    try:
+        cu.check_permission_for = perm_probe
+        _cfg = {"computer_use_confirm_each": True, "computer_use_app_whitelist": ["Finder"]}
+
+        # H1~H4：权限缺失 → 直接报错，且【绝不弹确认窗】
+        stub.calls.clear(); asked.clear(); perm_asked.clear()
+        trs = _run([{"name": "mouse_click", "args": {"x": 10, "y": 10}}],
+                   ctx={"authorizer": authz_yes}, authorizer=authz_yes, cfg_patch=dict(_cfg))
+        err = str((trs[0]["data"] if trs else {}).get("error", ""))
+        check("H1 权限缺失→accessibility_denied 直接报错", "accessibility_denied" in err, err[:200])
+        check("H2 ⛔权限缺失时绝不弹确认窗（此前用户白点20次）", asked == [], str(asked)[:200])
+        check("H3 权限预检确被调用（前置检查生效）", perm_asked == ["mouse_click"], str(perm_asked))
+        check("H4 权限缺失时执行器绝未被调用", stub.calls == [], str(stub.calls))
+
+        # H5~H11：连败熔断（click 败 → 截屏成 → click 败 → click 被熔断）
+        stub.calls.clear(); asked.clear(); perm_asked.clear()
+        trs = _run([
+            {"name": "mouse_click", "args": {"x": 1, "y": 1}},   # 失败 → strike 1
+            {"name": "screen_view", "args": {}},                  # 成功 → 整轮熔断归零
+            {"name": "mouse_click", "args": {"x": 2, "y": 2}},   # 失败 → strike 2
+            {"name": "mouse_click", "args": {"x": 3, "y": 3}},   # 达到阈值 → 熔断拦截
+        ], ctx={"authorizer": authz_yes}, authorizer=authz_yes, cfg_patch=dict(_cfg))
+        errs = [str((t["data"] or {}).get("error", "")) for t in trs]
+        check("H5 前两次点击按权限报错（尚未熔断）",
+              len(errs) >= 3 and "accessibility_denied" in errs[0] and "accessibility_denied" in errs[2],
+              str(errs)[:280])
+        check("H6 截屏成功（复刻真机：整轮熔断被不断归零）",
+              len(trs) >= 2 and (trs[1]["data"] or {}).get("ok") is True, str(trs[1])[:180])
+        check("H7 第三次同动作→computer_use_circuit_open 熔断",
+              len(errs) >= 4 and "computer_use_circuit_open" in errs[3], str(errs[3:])[:280])
+        check("H8 ⛔熔断时绝不弹确认窗（弹窗风暴止于此）", asked == [], str(asked)[:200])
+        check("H9 熔断报错禁止换参数重试/改用其他动作绕过",
+              len(errs) >= 4 and "不要换参数重试" in errs[3], str(errs[3:])[:280])
+        check("H10 熔断报错引导用户去检测权限（给出根因出口）",
+              len(errs) >= 4 and "检测权限" in errs[3], str(errs[3:])[:280])
+        check("H11 熔断阈值常量=2（连败两次即停）", COMPUTER_USE_MAX_STRIKES == 2,
+              str(COMPUTER_USE_MAX_STRIKES))
+        check("H12 全程执行器绝未被调用（无任何真实点击）", stub.calls == [], str(stub.calls))
+    finally:
+        stub.restore()
+        cfg.reload_config({"computer_use_confirm_each": True, "computer_use_app_whitelist": []})
+
+
+# ── I 组（0.4.11）：防线拦截的失败也必须落审计日志 ────────────────────────
+def test_i_denied_writes_audit_log():
+    """0.4.11：防线1 拦截的失败动作必须写 actions.jsonl。
+
+    真机事故：日志 40 条**全是 screenshot、0 条失败记录**（拦截 return 早于 _audit），
+    排障只能靠用户截图还原现场。
+    """
+    tmp = isolate_all("cu_i_")
+    from sidecar.computer_use import executor as ex
+
+    log = tmp / "computer_use" / "actions.jsonl"
+    orig_ax, orig_scr = ex._ax_trusted, ex._screen_capture_access
+    try:
+        ex._ax_trusted = lambda: False            # 模拟侧车未被信任
+        ex._screen_capture_access = lambda: True
+
+        r1 = ex.mouse_click(100, 200)
+        r2 = ex.keyboard_type("测试文本")
+        r3 = ex.keyboard_hotkey("cmd+c")
+        for tag, r in (("I1 点击", r1), ("I2 输入", r2), ("I3 按键", r3)):
+            check(f"{tag}被防线1拦截", r.get("ok") is False
+                  and "accessibility_denied" in str(r.get("error")), str(r)[:180])
+
+        lines = ([json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x.strip()]
+                 if log.exists() else [])
+        acts = [r.get("action") for r in lines]
+        check("I4 ⛔三个失败动作全部落盘（此前0条失败记录）",
+              acts.count("click") == 1 and acts.count("type") == 1 and acts.count("hotkey") == 1,
+              str(acts))
+        blocked = [r for r in lines if r.get("blocked_by") == "accessibility_denied"]
+        check("I5 失败记录标注 blocked_by=accessibility_denied", len(blocked) == 3, str(len(blocked)))
+        check("I6 记录含动作参数（可回溯现场）",
+              any(r.get("x") == 100 and r.get("y") == 200 for r in blocked)
+              and any(r.get("keys") == "cmd+c" for r in blocked)
+              and any("测试文本" in str(r.get("preview", "")) for r in blocked),
+              str(blocked)[:320])
+
+        e1 = str(r1.get("error"))
+        exe = ex._process_identity().get("exe") or ""
+        check("I7 报错给出【确切二进制路径】而非笼统指引",
+              bool(exe) and exe in e1 and "Cmd+Shift+G" in e1, f"exe={exe} | {e1[:180]}")
+        check("I7b 报错不再误导用户「勾选 VetarAI 主程序」（那样无效）",
+              "勾选 VetarAI 后重试" not in e1, e1[:200])
+        check("I8 报错明确禁止重试（防模型无限重发）", "不要再重试" in e1, e1[:200])
+        check("I9 报错说明必须重启应用才生效（运行中改名单无效）",
+              "Cmd+Q" in e1 or "重启" in e1, e1[:200])
+    finally:
+        ex._ax_trusted, ex._screen_capture_access = orig_ax, orig_scr
+
+
+# ── J 组（0.4.11）：轻量权限预检的分派与"无副作用"契约 ────────────────────
+def test_j_permission_preflight_dispatch():
+    """0.4.11：check_permission_for 的分派——截屏查屏幕录制、点击/输入查辅助功能，
+    且**绝不截图、绝不发送事件**（否则每步动作前调用会产生真实副作用）。
+
+    ⚠️ 不用 check_capabilities() 做前置检查的原因：它会真截一张图（~0.26s + 内存），
+    不适合在每步动作的弹窗之前调用。
+    """
+    isolate_all("cu_j_")
+    from sidecar.computer_use import executor as ex
+
+    shot_calls: list[int] = []
+    orig = (ex._ax_trusted, ex._screen_capture_access, ex.take_screenshot)
+    try:
+        ex.take_screenshot = lambda *a, **k: (shot_calls.append(1) or {"ok": True})
+
+        # J1~J3：截屏只依赖屏幕录制权限（不需要辅助功能）
+        ex._ax_trusted = lambda: False
+        ex._screen_capture_access = lambda: True
+        r = ex.check_permission_for("screen_view")
+        check("J1 截屏只查屏幕录制→辅助功能缺失也放行", r["ok"] is True, str(r)[:180])
+
+        ex._screen_capture_access = lambda: False
+        r = ex.check_permission_for("screen_view")
+        check("J2 屏幕录制缺失→screen_capture_denied",
+              r["ok"] is False and "screen_capture_denied" in str(r["error"]), str(r)[:200])
+        check("J3 截屏被拒时点明后果（只拍到壁纸→找不到按钮）",
+              "壁纸" in str(r["error"]), str(r)[:220])
+
+        # J4~J5：点击/输入/按键依赖辅助功能权限
+        ex._screen_capture_access = lambda: True
+        for tool in ("mouse_click", "keyboard_type", "keyboard_hotkey"):
+            r = ex.check_permission_for(tool)
+            check(f"J4 {tool} 辅助功能缺失→拦截",
+                  r["ok"] is False and "accessibility_denied" in str(r["error"]), str(r)[:180])
+        ex._ax_trusted = lambda: True
+        for tool in ("mouse_click", "keyboard_type", "keyboard_hotkey"):
+            r = ex.check_permission_for(tool)
+            check(f"J5 {tool} 两项权限齐备→放行", r["ok"] is True, str(r)[:180])
+
+        check("J6 ⛔预检全程不截图（无副作用，故可在每步动作前调用）",
+              shot_calls == [], f"截图被调用 {len(shot_calls)} 次")
+    finally:
+        ex._ax_trusted, ex._screen_capture_access, ex.take_screenshot = orig
+
+
 def main():
     print("=" * 70)
     print("0.4.9（3.48.1）Computer Use 一期 MVP 专项回归")
@@ -579,6 +774,10 @@ def main():
     test_e_whitelist_logic()
     test_e_capabilities()
     test_g_pure_logic()
+    # 0.4.11：真机事故三项修复的专项覆盖
+    test_h_permission_preflight_and_circuit()
+    test_i_denied_writes_audit_log()
+    test_j_permission_preflight_dispatch()
     print("\n" + "=" * 70)
     print(f"===== SUMMARY: PASS={PASS} FAIL={FAIL} =====")
     if FAILURES:
