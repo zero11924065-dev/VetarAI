@@ -22,6 +22,8 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import React from 'react';
 import { KnowledgePanel } from '../panels/KnowledgePanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // TS-110 M4：知识/记忆/技能管理面板测试（三标签渲染 + 列表加载 + 开关/保存控件）
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -40,8 +42,7 @@ beforeEach(() => {
 
 describe('KnowledgePanel 知识记忆技能面板', () => {
   it('三标签渲染，默认知识库标签', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async () =>
-      ({ ok: true, status: 200, json: async () => [] })) as any);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonRes([]));
     const { unmount } = render(<KnowledgePanel projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByText('知识库')).toBeTruthy();
@@ -54,15 +55,16 @@ describe('KnowledgePanel 知识记忆技能面板', () => {
   });
 
   it('知识库列表加载 + 启用状态徽标 + 操作按钮', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl: typeof fetch = async (url) => {
       if (String(url).includes('/knowledge')) {
-        return { ok: true, status: 200, json: async () => [
+        return jsonRes([
           { name: '规范.md', size: 10, enabled: true },
           { name: '_草稿.md', size: 5, enabled: false },
-        ]};
+        ]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
     const { unmount } = render(<KnowledgePanel projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByText('规范.md')).toBeTruthy();
@@ -75,8 +77,7 @@ describe('KnowledgePanel 知识记忆技能面板', () => {
   });
 
   it('记忆标签：全局/项目两个编辑区 + 保存按钮', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async () =>
-      ({ ok: true, status: 200, json: async () => ({ content: '' }) })) as any);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonRes({ content: '' }));
     const { unmount } = render(<KnowledgePanel projectId="p1" />);
     // 切到记忆标签
     // 切到记忆标签：用 getByRole 精确定位按钮
@@ -95,14 +96,15 @@ describe('KnowledgePanel 知识记忆技能面板', () => {
   });
 
   it('技能标签：列表 + 启用开关 + 安装/新建入口', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl2: typeof fetch = async (url) => {
       if (String(url).includes('/skills')) {
-        return { ok: true, status: 200, json: async () => [
+        return jsonRes([
           { name: '周报助手', dir_name: '周报助手', description: '生成周报', enabled: true },
-        ]};
+        ]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
     const { unmount } = render(<KnowledgePanel projectId="p1" />);
     const skTab = await screen.findByText('技能');
     await act(async () => { fireEvent.click(skTab); });

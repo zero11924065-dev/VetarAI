@@ -22,6 +22,8 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import React from 'react';
 import { ProjectPanel } from '../panels/ProjectPanel';
 
+import { jsonRes, sseRes } from './helpers/fetchMock';
+
 // TS-111 M5 前端专项：模型降级卡片 / 项目改名行内编辑
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -41,19 +43,21 @@ beforeEach(() => {
 describe('M5 项目改名入口（ProjectPanel）', () => {
   it('✏️ 点击出行内编辑框 + 保存触发 PUT + 取消还原', async () => {
     const puts: any[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+    const impl: typeof fetch = async (url, init?) => {
       const u = String(url);
       if (init?.method === 'PUT') {
-        puts.push({ url: u, body: JSON.parse(init.body) });
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        // 动作二暴露的真实脱节：init.body 类型是 BodyInit（可能 undefined/null），非 string
+        puts.push({ url: u, body: JSON.parse(String(init.body ?? '{}')) });
+        return jsonRes({ ok: true });
       }
       if (u.includes('/projects')) {
-        return { ok: true, status: 200, json: async () => [
+        return jsonRes([
           { id: 'p1', name: '旧名字', working_dir: '/tmp/wd' },
-        ]};
+        ]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     const { unmount } = render(<ProjectPanel onSelect={() => {}} />);
 
@@ -82,10 +86,11 @@ describe('M5 项目改名入口（ProjectPanel）', () => {
 
   it('空名字不请求（点保存直接取消编辑态）', async () => {
     const puts: any[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
-      if (init?.method === 'PUT') { puts.push(init); return { ok: true, status: 200, json: async () => ({}) }; }
-      return { ok: true, status: 200, json: async () => [{ id: 'p1', name: '名字', working_dir: '/w' }] };
-    }) as any);
+    const impl: typeof fetch = async (url, init?) => {
+      if (init?.method === 'PUT') { puts.push(init); return jsonRes({}); }
+      return jsonRes([{ id: 'p1', name: '名字', working_dir: '/w' }]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     const { unmount } = render(<ProjectPanel onSelect={() => {}} />);
     await waitFor(() => { expect((document.querySelector('[data-tip="重命名"]') as HTMLElement)).toBeTruthy(); }, { timeout: 3000 });
@@ -104,31 +109,28 @@ describe('M5 项目改名入口（ProjectPanel）', () => {
 
 describe('M5 模型降级卡片（ChatPanel 错误块）', () => {
   // 降级卡片渲染条件 = 错误文案命中模型缺失正则；通过 SSE 注入 error 事件验证
+  // 第 0 批（0.4.14）动作二：迁移到 helper 的 sseRes（返回原生 Response）
   function mockSSEBody(events: string[]) {
-    const text = events.join('');
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) { controller.enqueue(encoder.encode(text)); controller.close(); },
-    });
-    return { ok: true, status: 200, body: stream, text: async () => text };
+    return sseRes(events);
   }
   const ev = (t: string, d: object) => `event: ${t}\ndata: ${JSON.stringify(d)}\n\n`;
 
   it('模型不存在错误 → 降级卡片（切换下拉 + 重新拉取）；普通错误 → 无卡片', async () => {
     // 场景1：模型不存在
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl2: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x', model_name: 'ghost' }] };
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'ghost' }, { name: 'qwen3.8' }] };
-      if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [{ id: 's1', title: '会话1', message_count: 0 }] };
-      if (u.includes('/context/limit')) return { ok: true, status: 200, json: async () => ({ context_length: 0, source: 'error' }) };
-      if (u.includes('/config')) return { ok: true, status: 200, json: async () => ({ reconnect_max_attempts: 3 }) };
-      if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [] };
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x', model_name: 'ghost' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'ghost' }, { name: 'qwen3.8' }]);
+      if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话1', message_count: 0 }]);
+      if (u.includes('/context/limit')) return jsonRes({ context_length: 0, source: 'error' });
+      if (u.includes('/config')) return jsonRes({ reconnect_max_attempts: 3 });
+      if (u.includes('/messages')) return jsonRes([]);
       if (u.includes('/chat/stream')) {
         return mockSSEBody([ev('error', { detail: '模型 ghost 不存在 (does not exist)' })]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
 
     const { ChatPanel } = await import('../panels/ChatPanel');
     const r1 = render(<ChatPanel projectId="p1" agentId="a1" />);
@@ -163,14 +165,14 @@ describe('M5 模型降级卡片（ChatPanel 错误块）', () => {
 
 describe('M5 长加载提示（H19：思考事件不得清除计时器）', () => {
   it('只有思考事件、正文未达 → ≥8s 显示等待提示；正文到达 → 消失', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl2: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x', model_name: 'm' }] };
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'm' }] };
-      if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [{ id: 's1', title: '会话1', message_count: 0 }] };
-      if (u.includes('/context/limit')) return { ok: true, status: 200, json: async () => ({ context_length: 0, source: 'error' }) };
-      if (u.includes('/config')) return { ok: true, status: 200, json: async () => ({ reconnect_max_attempts: 3 }) };
-      if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [] };
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x', model_name: 'm' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'm' }]);
+      if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话1', message_count: 0 }]);
+      if (u.includes('/context/limit')) return jsonRes({ context_length: 0, source: 'error' });
+      if (u.includes('/config')) return jsonRes({ reconnect_max_attempts: 3 });
+      if (u.includes('/messages')) return jsonRes([]);
       if (u.includes('/chat/stream')) {
         // 只吐 thinking 事件且流保持打开（模拟思考阶段长时间无正文）
         const text = 'event: thinking\ndata: {"delta":"嗯"}\n\n';
@@ -178,10 +180,13 @@ describe('M5 长加载提示（H19：思考事件不得清除计时器）', () =
         const stream = new ReadableStream({
           start(controller) { controller.enqueue(encoder.encode(text)); /* 不 close */ },
         });
-        return { ok: true, status: 200, body: stream, text: async () => text };
+        // 该 stream 故意**不 close**（模拟思考阶段长时间无正文），是本用例特有时序，
+        // helper 通用构造器不适用 → 保留 stream，只把手写假 response 换成原生 Response。
+        return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
 
     const { ChatPanel } = await import('../panels/ChatPanel');
     const r = render(<ChatPanel projectId="p1" agentId="a1" />);

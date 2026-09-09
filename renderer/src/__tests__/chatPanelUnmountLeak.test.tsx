@@ -22,6 +22,8 @@ import { render, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes, sseRes } from './helpers/fetchMock';
+
 /**
  * 0.4.12 附带修复回归：组件卸载后不得再"幽灵写入"消息缓存。
  *
@@ -93,7 +95,10 @@ function controllableStream() {
       ctl.close = () => { try { controller.close(); } catch { /* 已关闭 */ } };
     },
   });
-  return { res: { ok: true, status: 200, body, text: async () => '' }, ctl };
+  // 第 0 批（0.4.14）动作二：可控 stream 是本测试特有的（要手动决定何时发 done），
+  // helper 的通用构造器不适用；故保留 stream，只把手写假 response 换成**原生 Response**，
+  // 使 impl: typeof fetch 的类型约束成立（旧写法缺 headers/statusText 等成员，靠 as any 掩盖）。
+  return { res: new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }), ctl };
 }
 
 /** ⛔ 必须 act + 原生 setter，理由见 chatPanelB3Wrap.test.tsx 的 sendText 注释。 */
@@ -131,17 +136,18 @@ describe('卸载后不得幽灵写入消息缓存', () => {
   it('① done 在卸载之后到达 → 卸载后写入次数必须为 0', async () => {
     (globalThis as any).localStorage.setItem(CACHE_KEY, JSON.stringify({ s1: [] }));
     const { res, ctl } = controllableStream();
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x' }] };
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-      if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+      if (u.includes('/sessions?')) return jsonRes([
         { id: 's1', title: '会话1', message_count: 1 },
-      ]};
-      if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [] };
+      ]);
+      if (u.includes('/messages')) return jsonRes([]);
       if (u.includes('/ollama/chat/stream')) return res;
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     const { unmount } = render(<ChatPanel projectId="p1" agentId="a1" />);
     await waitFor(() => expect(document.querySelector('textarea')).toBeTruthy(), { timeout: 3000 });
@@ -168,27 +174,26 @@ describe('卸载后不得幽灵写入消息缓存', () => {
     const encoder = new TextEncoder();
     const fastBody = ev('token', { delta: '快速回答' }) + ev('done', { content: '快速回答', tool_calls: [] });
     let releaseMessages: (() => void) | null = null;
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x' }] };
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-      if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+      if (u.includes('/sessions?')) return jsonRes([
         { id: 's1', title: '会话1', message_count: 1 },
-      ]};
+      ]);
       if (u.includes('/messages')) {
         // ⛔ 挂起这个 fetch，直到测试放行——保证它在卸载之后才 resolve
         await new Promise<void>(r => { releaseMessages = r; });
-        return { ok: true, status: 200, json: async () => [
+        return jsonRes([
           { id: 99, role: 'assistant', content: 'DB 侧定稿内容' },
-        ]};
+        ]);
       }
       if (u.includes('/ollama/chat/stream')) {
-        return { ok: true, status: 200,
-          body: new ReadableStream({ start(c) { c.enqueue(encoder.encode(fastBody)); c.close(); } }),
-          text: async () => fastBody };
+        return sseRes([fastBody]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     const { unmount } = render(<ChatPanel projectId="p1" agentId="a1" />);
     await waitFor(() => expect(document.querySelector('textarea')).toBeTruthy(), { timeout: 3000 });
@@ -212,21 +217,20 @@ describe('卸载后不得幽灵写入消息缓存', () => {
     (globalThis as any).localStorage.setItem(CACHE_KEY, JSON.stringify({ s1: [] }));
     const encoder = new TextEncoder();
     const body = ev('token', { delta: '正常回答' }) + ev('done', { content: '正常回答', tool_calls: [] });
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl2: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x' }] };
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-      if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+      if (u.includes('/sessions?')) return jsonRes([
         { id: 's1', title: '会话1', message_count: 1 },
-      ]};
-      if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [] };
+      ]);
+      if (u.includes('/messages')) return jsonRes([]);
       if (u.includes('/ollama/chat/stream')) {
-        return { ok: true, status: 200,
-          body: new ReadableStream({ start(c) { c.enqueue(encoder.encode(body)); c.close(); } }),
-          text: async () => body };
+        return sseRes([body]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
 
     const { unmount } = render(<ChatPanel projectId="p1" agentId="a1" />);
     await waitFor(() => expect(document.querySelector('textarea')).toBeTruthy(), { timeout: 3000 });

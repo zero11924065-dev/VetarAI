@@ -22,6 +22,8 @@ import { render, waitFor } from '@testing-library/react';
 import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // checkpoint-059：僵尸气泡清理回归。
 // 场景：缓存里残留"进行中"的空内容 assistant 气泡（流式写穿冻结的快照），
 // 后端其实已完成（DB 有最终回复）。加载合并后：DB 的最终回复在屏，僵尸气泡不出现，
@@ -47,14 +49,15 @@ function mountWithDbAndZombieCache(zombie: any) {
   localStorage.setItem('subagent_messages_v4', JSON.stringify({
     s1: [...DB_MSGS, zombie],
   }));
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+  const impl: typeof fetch = async (url) => {
     const u = String(url);
-    if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '行政主管', role: 'x' }] };
-    if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.6:35b' }] };
-    if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [{ id: 's1', title: '会话 1', message_count: 2 }] };
-    if (u.includes('/sessions/s1/messages')) return { ok: true, status: 200, json: async () => DB_MSGS };
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '行政主管', role: 'x' }]);
+    if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.6:35b' }]);
+    if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话 1', message_count: 2 }]);
+    if (u.includes('/sessions/s1/messages')) return jsonRes(DB_MSGS);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
   return render(<ChatPanel projectId="p1" agentId="a1" />);
 }
 

@@ -46,38 +46,32 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
   };
 }
 
-const ev = (t: string, d: object) => `event: ${t}\ndata: ${JSON.stringify(d)}\n\n`;
+// 第 0 批（0.4.14）动作二：迁移到类型化 fetch mock。
+// ⛔ 旧写法手写 ReadableStream + 假 response 对象再 `as any` 收尾，tsc 完全不检查这个桩；
+// 现改用 helper 的原生 Response 构造器 + `typeof fetch` 类型标注，脱节在编译期暴露。
+import { sseRes, jsonRes, tokenEvent, doneEvent } from './helpers/fetchMock';
 
-/** 构造一个最小 SSE 流：吐一个 token 再 done，让发送流程正常收尾。 */
+/** 最小 SSE 流：吐一个 token 再 done（载荷字段与后端 loop.py 权威结构一致）。 */
 function mockStreamBody() {
-  const text = ev('token', { delta: 'ok' }) + ev('done', { content: 'ok', tool_calls: [] });
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    },
-  });
-  return { ok: true, status: 200, body: stream, text: async () => text, headers: new Headers() };
+  return sseRes([tokenEvent('ok'), doneEvent('ok')]);
 }
 
 /** 拦截所有 fetch，返回已选中 s1 会话的初始状态；把发送载荷记进 sent。 */
 function installFetchMock(sent: any[]) {
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+  const impl: typeof fetch = async (url, init) => {
     const u = String(url);
-    if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x' }] };
-    if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-    if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
-      { id: 's1', title: '会话1', message_count: 1 },
-    ]};
-    if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [] };
+    if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x' }]);
+    if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+    if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话1', message_count: 1 }]);
+    if (u.includes('/messages')) return jsonRes([]);
     if (u.includes('/ollama/chat/stream')) {
       // 捕获真实发给后端的载荷——B1 的关键断言对象
       try { sent.push(JSON.parse(String(init?.body ?? '{}'))); } catch { /* 忽略非法 body */ }
       return mockStreamBody();
     }
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 function getTextarea(): HTMLTextAreaElement {

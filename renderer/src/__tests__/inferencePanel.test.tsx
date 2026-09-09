@@ -24,6 +24,8 @@ import { InferencePanel } from '../panels/InferencePanel';
 import { ProjectPanel } from '../panels/ProjectPanel';
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // TS-112 M6：推理面板（后端切换/测试连接/模型列表）+ 视觉引导卡片 + B8 删除项目确认
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -42,16 +44,17 @@ beforeEach(() => {
 
 // 按 URL 片段分发 mock 响应；未命中走兜底
 function mockFetch(handlers: Record<string, unknown>) {
-  return vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, opts: any) => {
+  const impl: typeof fetch = async (url, opts) => {
     const u = String(url);
     for (const [k, v] of Object.entries(handlers)) {
       if (u.includes(k)) {
-        return { ok: true, status: 200, json: async () => v };
+        return jsonRes(v);
       }
     }
     void opts;
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    return jsonRes([]);
+  };
+return vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 describe('TS-112 M6 推理面板', () => {
@@ -127,15 +130,16 @@ describe('TS-112 M6 推理面板', () => {
   it('点击"测试连接"有可见反馈（检测中…），完成后显示在线状态', async () => {
     let resolveFetch: (v: unknown) => void = () => {};
     const gate = new Promise(r => { resolveFetch = r as (v: unknown) => void; });
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl2: typeof fetch = async (url) => {
       const u = String(url);
       if (u.includes('/inference/status')) {
         await gate;  // 挂起，模拟探测耗时
-        return { ok: true, status: 200, json: async () => ({ backend: 'ollama', base_url: '', online: true, detail: '', capabilities: { tools: true, vision: true, pull: true, delete: true } }) };
+        return jsonRes({ backend: 'ollama', base_url: '', online: true, detail: '', capabilities: { tools: true, vision: true, pull: true, delete: true } });
       }
-      if (u.includes('/inference/models')) return { ok: true, status: 200, json: async () => [] };
-      return { ok: true, status: 200, json: async () => ({ inference_backend: 'ollama' }) };
-    }) as any);
+      if (u.includes('/inference/models')) return jsonRes([]);
+      return jsonRes({ inference_backend: 'ollama' });
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
     const { unmount } = render(<InferencePanel />);
     const btn = await screen.findByText('测试连接');
     await act(async () => { btn.click(); });
@@ -149,14 +153,15 @@ describe('TS-112 M6 推理面板', () => {
 
   it('B8：删除项目先弹 confirm——文案含"工作目录文件不受影响"；取消不发 DELETE，确认才发', async () => {
     const deleteCalls: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, opts: any) => {
+    const impl3: typeof fetch = async (url, opts) => {
       const u = String(url);
       if (opts?.method === 'DELETE') deleteCalls.push(u);
       if (u.includes('/projects')) {
-        return { ok: true, status: 200, json: async () => [{ id: 'p1', name: '测试项目', working_dir: '/tmp/wd' }] };
+        return jsonRes([{ id: 'p1', name: '测试项目', working_dir: '/tmp/wd' }]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl3);
 
     const { unmount } = render(<ProjectPanel onSelect={() => {}} />);
     await waitFor(() => { expect(screen.getByText(/测试项目/)).toBeTruthy(); }, { timeout: 3000 });

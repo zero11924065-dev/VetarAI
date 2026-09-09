@@ -22,6 +22,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { IndependentAgentsPanel } from '../panels/IndependentAgentsPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // checkpoint-061 回归：删除当前选中的独立 Agent 后，面板必须调用 onAgentDeleted
 // （App 据此清空选中态与保活面板，杜绝"幽灵聊天面板"继续向已删除的 ia- 命名空间发消息）。
 if (typeof (globalThis as any).localStorage === 'undefined') {
@@ -46,17 +48,18 @@ const AGENTS = [{ id: 'ag1', name: '独立助手', model_name: 'glm-z1-9b' }];
 beforeEach(() => { vi.restoreAllMocks(); });
 
 function mountFetch(deleted: { v: boolean }) {
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, opts: any) => {
+  const impl: typeof fetch = async (url, opts) => {
     const u = String(url);
     if (opts && opts.method === 'DELETE' && u.includes('/independent-agents/ag1')) {
       deleted.v = true;
-      return { ok: true, status: 200, json: async () => ({ deleted: true }) };
+      return jsonRes({ deleted: true });
     }
     if (u.includes('/independent-agents')) {
-      return { ok: true, status: 200, json: async () => (deleted.v ? [] : AGENTS) };
+      return jsonRes((deleted.v ? [] : AGENTS));
     }
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 describe('checkpoint-061 删除选中独立 Agent → onAgentDeleted 回调', () => {

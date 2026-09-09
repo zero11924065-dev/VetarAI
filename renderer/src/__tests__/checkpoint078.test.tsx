@@ -28,11 +28,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import React from 'react';
-import { layoutWorkflow, layoutSize, NODE_W, NODE_H } from '../lib/workflowLayout';
+import { layoutWorkflow, layoutSize, NODE_W, NODE_H, type WfDefinition } from '../lib/workflowLayout';
 import { ModuleNav } from '../panels/ModuleNav';
 import { WorkflowCanvas } from '../panels/WorkflowCanvas';
 
-const linear = {
+const linear: WfDefinition = {
   nodes: [
     { id: 'start', type: 'start', label: '开始' },
     { id: 'n1', type: 'inference', label: '识别', model: 'glm-ocr:latest' },
@@ -42,7 +42,7 @@ const linear = {
   params: {},
 };
 
-const branched = {
+const branched: WfDefinition = {
   nodes: [
     { id: 'start', type: 'start' },
     { id: 'cond', type: 'condition', label: '判断' },
@@ -140,7 +140,7 @@ describe('一级模块导航（TS-119）', () => {
 
 describe('工作流画布（TS-119）', () => {
   it('渲染全部节点卡片与连线', () => {
-    const { container } = render(<WorkflowCanvas definition={linear as any} />);
+    const { container } = render(<WorkflowCanvas definition={linear} />);
     const rects = container.querySelectorAll('rect');
     // 每个节点 2 个 rect（主体 + 左侧色条）→ 3 节点 = 6
     expect(rects.length).toBe(6);
@@ -151,21 +151,21 @@ describe('工作流画布（TS-119）', () => {
   });
 
   it('条件边渲染 when 标签', () => {
-    const { container } = render(<WorkflowCanvas definition={branched as any} />);
+    const { container } = render(<WorkflowCanvas definition={branched} />);
     expect(container.textContent).toContain('true');
     expect(container.textContent).toContain('false');
   });
 
   it('点击节点触发 onSelectNode', () => {
     const onSelect = vi.fn();
-    render(<WorkflowCanvas definition={linear as any} onSelectNode={onSelect} />);
+    render(<WorkflowCanvas definition={linear} onSelectNode={onSelect} />);
     fireEvent.click(screen.getByText('识别'));
     expect(onSelect).toHaveBeenCalledWith('n1');
   });
 
   it('运行时态：running 节点高亮环', () => {
     const { container } = render(
-      <WorkflowCanvas definition={linear as any} nodeStatus={{ n1: 'running' }} />);
+      <WorkflowCanvas definition={linear} nodeStatus={{ n1: 'running' }} />);
     // 运行中节点边框加粗为主色（stroke-width=2）
     const highlighted = Array.from(container.querySelectorAll('rect'))
       .filter(r => r.getAttribute('stroke-width') === '2');

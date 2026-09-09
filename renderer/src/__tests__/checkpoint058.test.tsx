@@ -22,6 +22,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { IndependentAgentsPanel, INDEP_NS_PREFIX } from '../panels/IndependentAgentsPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // checkpoint-058：独立 Agent（与项目平级的一等公民）。
 // 核心场景：① 展开后列出独立 Agent + 创建表单；② 创建成功后自动选中
 // （onSelect(agentId)，父级映射 ia-<id> 命名空间）；③ 点击已有 Agent 触发选中；
@@ -41,13 +43,14 @@ beforeEach(() => { vi.restoreAllMocks(); });
 const INDEP = [{ id: 'ag1', name: '独立助手', model_name: 'glm-z1-9b' }, { id: 'ag2', name: '独立二号' }];
 
 function mockFetch(agents: any[] = INDEP) {
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+  const impl: typeof fetch = async (url) => {
     const u = String(url);
     if (u.includes('/independent-agents')) {
-      return { ok: true, status: 200, json: async () => agents };
+      return jsonRes(agents);
     }
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 describe('checkpoint-058 独立 Agent 面板', () => {
@@ -78,16 +81,22 @@ describe('checkpoint-058 独立 Agent 面板', () => {
 
   it('创建：提交后调 POST /independent-agents 并自动选中新 Agent', async () => {
     let created: any[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, opts: any) => {
+    const impl2: typeof fetch = async (url, opts) => {
       const u = String(url);
       if (opts && opts.method === 'POST' && u.includes('/independent-agents')) {
-        const body = JSON.parse(opts.body);
+        // 第 0 批（0.4.14）动作二**抓到的真实签名脱节**：`opts.body` 的类型是 BodyInit
+        // （string | undefined | null | FormData | Blob ...），并非想当然的 string。
+        // 旧桩因 `opts: any` 让 JSON.parse(opts.body) 蒙混过关；impl 钉成 typeof fetch 后
+        // tsc 如实报 TS2345。生产代码此处确实传 JSON 字符串，故运行时行为不变，
+        // 但必须显式收窄——这正是"桩与真实签名脱节"该被编译期抓住的样子。
+        const body = JSON.parse(String(opts.body ?? '{}'));
         created.push(body);
-        return { ok: true, status: 200, json: async () => ({ agent_id: 'new-id-1' }) };
+        return jsonRes({ agent_id: 'new-id-1' });
       }
-      if (u.includes('/independent-agents')) return { ok: true, status: 200, json: async () => [] };
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      if (u.includes('/independent-agents')) return jsonRes([]);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
 
     const onSelect = vi.fn();
     const { unmount } = render(<IndependentAgentsPanel selectedAgentId={null} onSelect={onSelect} />);
@@ -127,22 +136,23 @@ describe('checkpoint-058 独立 Agent 面板', () => {
   it('checkpoint-058b：创建表单提交模型与角色设定；列表项可编辑角色设定', async () => {
     const created: any[] = [];
     const updated: { id: string; body: any }[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, opts: any) => {
+    const impl: typeof fetch = async (url, opts) => {
       const u = String(url);
       if (opts && opts.method === 'POST' && u.includes('/independent-agents')) {
-        created.push(JSON.parse(opts.body));
-        return { ok: true, status: 200, json: async () => ({ agent_id: 'n1' }) };
+        created.push(JSON.parse(String(opts.body ?? '{}')));
+        return jsonRes({ agent_id: 'n1' });
       }
       if (opts && opts.method === 'PUT' && u.includes('/independent-agents/')) {
-        updated.push({ id: u.split('/').pop()!, body: JSON.parse(opts.body) });
-        return { ok: true, status: 200, json: async () => ({ updated: true }) };
+        updated.push({ id: u.split('/').pop()!, body: JSON.parse(String(opts.body ?? '{}')) });
+        return jsonRes({ updated: true });
       }
       if (u.includes('/independent-agents')) {
-        return { ok: true, status: 200, json: async () => (updated.length ? INDEP : [{ id: 'ag1', name: '独立助手', model_name: 'glm-z1-9b' }]) };
+        return jsonRes((updated.length ? INDEP : [{ id: 'ag1', name: '独立助手', model_name: 'glm-z1-9b' }]));
       }
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'glm-z1-9b' }, { name: 'qwen3.6:35b' }] };
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'glm-z1-9b' }, { name: 'qwen3.6:35b' }]);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     const { unmount } = render(<IndependentAgentsPanel selectedAgentId={null} onSelect={() => {}} />);
     await waitFor(() => { expect(screen.getByText('独立 Agent')).toBeTruthy(); }, { timeout: 3000 });

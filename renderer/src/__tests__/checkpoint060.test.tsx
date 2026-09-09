@@ -27,6 +27,8 @@ import React from 'react';
 // 完整摘要/错误进展开区。注意：ellipsis 是视觉截断，DOM 文本仍存在，故用样式断言而非文本存在性。
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
     _d: {} as Record<string, string>,
@@ -61,14 +63,15 @@ async function expandToolGroup() {
 }
 
 function mount() {
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+  const impl: typeof fetch = async (url) => {
     const u = String(url);
-    if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '行政主管', role: 'x' }] };
-    if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.6:35b' }] };
-    if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [{ id: 's1', title: '会话 1', message_count: 2 }] };
-    if (u.includes('/sessions/s1/messages')) return { ok: true, status: 200, json: async () => DB_MSGS };
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '行政主管', role: 'x' }]);
+    if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.6:35b' }]);
+    if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话 1', message_count: 2 }]);
+    if (u.includes('/sessions/s1/messages')) return jsonRes(DB_MSGS);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
   return render(<ChatPanel projectId="p1" agentId="a1" />);
 }
 

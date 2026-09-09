@@ -7,7 +7,14 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "typecheck": "npm --prefix renderer run typecheck",
+    "test:renderer": "npm --prefix renderer run test",
+    "test:backend": ".venv/bin/python scripts/run_backend_tests.py --fast",
+    "test:backend:full": ".venv/bin/python scripts/run_backend_tests.py",
+    "test": "npm run typecheck && npm run test:renderer && npm run test:backend",
+    "test:full": "npm run typecheck && npm run test:renderer && npm run test:backend:full",
+    "migrate:stubs": ".venv/bin/python scripts/migrate_fetch_stubs.py"
   },
   "dependencies": {
     "electron": "^33.0.0"

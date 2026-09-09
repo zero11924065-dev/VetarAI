@@ -23,6 +23,8 @@ import React from 'react';
 import { RoundtablePanel } from '../panels/RoundtablePanel';
 import { RoundtableView } from '../panels/RoundtableView';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // TS-109 M3-3 + 改进（右侧大屏）：左栏面板（创建区+列表）与右侧大屏（主持人显示+按状态按钮）
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -47,12 +49,13 @@ const RT_WAITING = {
 const RT_CONFIRM_AI = { ...RT_WAITING, id: 'rt2', status: 'confirm_end', moderator: 'ai', moderator_agent_id: 'a1' };
 
 function mockPanelFetch(rts: any[]) {
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+  const impl: typeof fetch = async (url) => {
     const u = String(url);
-    if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => AGENTS };
-    if (u.includes('/roundtables')) return { ok: true, status: 200, json: async () => rts };
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    if (u.includes('/agents/')) return jsonRes(AGENTS);
+    if (u.includes('/roundtables')) return jsonRes(rts);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 beforeEach(() => {
@@ -97,11 +100,12 @@ describe('RoundtablePanel 左栏面板（创建+列表）', () => {
 
 describe('RoundtableView 右侧大屏', () => {
   function mockViewFetch(detail: any) {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+    const impl2: typeof fetch = async (url, init?) => {
       const u = String(url);
-      if (init?.method === 'POST') return { ok: true, status: 200, json: async () => detail };
-      return { ok: true, status: 200, json: async () => detail };
-    }) as any);
+      if (init?.method === 'POST') return jsonRes(detail);
+      return jsonRes(detail);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
   }
 
   it('用户主持显示 + waiting_user 双按钮 + 发言气泡', async () => {

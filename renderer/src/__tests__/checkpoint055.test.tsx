@@ -22,6 +22,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // checkpoint-055 回归：切回主 Agent 丢消息修复。
 // 用户场景：主 Agent 派任务后去子 Agent 查看，切回主 Agent 只见第一条打招呼，
 // 自己发的内容与任务汇报全丢。根因：① user 消息从不写缓存；② "缓存优先"用残缺
@@ -49,18 +51,19 @@ beforeEach(() => {
 });
 
 function mountWithDb() {
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+  const impl: typeof fetch = async (url) => {
     const u = String(url);
-    if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '行政主管', role: 'x' }] };
-    if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.6:35b' }] };
-    if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
+    if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '行政主管', role: 'x' }]);
+    if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.6:35b' }]);
+    if (u.includes('/sessions?')) return jsonRes([
       { id: 's1', title: '会话 1', message_count: 4 },
       { id: 's2', title: '委派任务', message_count: 2 },
-    ]};
-    if (u.includes('/sessions/s1/messages')) return { ok: true, status: 200, json: async () => DB_S1 };
-    if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [] };
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    ]);
+    if (u.includes('/sessions/s1/messages')) return jsonRes(DB_S1);
+    if (u.includes('/messages')) return jsonRes([]);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
   return render(<ChatPanel projectId="p1" agentId="a1" />);
 }
 
@@ -112,7 +115,7 @@ describe('checkpoint-055 切回丢消息修复', () => {
       expect((cache['s1'] || []).length).toBe(4);
     }, { timeout: 3000 });
     const cache = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}');
-    const roles = (cache['s1'] as any[]).map(m => m.role);
+    const roles = (cache['s1'] || []).map((m: { role: string }) => m.role);
     expect(roles).toEqual(['user', 'assistant', 'user', 'assistant']);
     unmount();
   }, 8000);

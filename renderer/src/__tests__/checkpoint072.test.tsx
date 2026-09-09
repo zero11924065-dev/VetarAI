@@ -23,6 +23,8 @@ import React from 'react';
 import { emit, on, __resetEventsForTest } from '../events';
 import { AgentPanel } from '../panels/AgentPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // TS-115（3.30）：事件总线 + AgentPanel 修改模型后 emit
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -73,18 +75,19 @@ describe('AgentPanel 修改模型后 emit agent:updated（TS-115 3.30）', () =>
     const calls: string[] = [];
     const emitted: any[] = [];
     on('agent:updated', (d) => emitted.push(d));
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+    const impl: typeof fetch = async (url, init?) => {
       const u = String(url);
       calls.push(`${init?.method || 'GET'} ${u}`);
       if (u.includes('/agents/p1/a1') && init?.method === 'PUT') {
-        return { ok: true, status: 200, json: async () => ({}) };
+        return jsonRes({});
       }
       if (u.includes('/agents/p1')) {
-        return { ok: true, status: 200, json: async () => AGENTS };
+        return jsonRes(AGENTS);
       }
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => MODELS };
-      return { ok: true, status: 200, json: async () => ({}) };
-    }) as any);
+      if (u.includes('/ollama/models')) return jsonRes(MODELS);
+      return jsonRes({});
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     render(<AgentPanel projectId="p1" selectedAgentId="a1" onSelectAgent={() => {}} />);
     await waitFor(() => {

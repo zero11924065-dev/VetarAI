@@ -22,6 +22,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { ProjectPanel } from '../panels/ProjectPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // localStorage 兜底（模块顶层 getApiBase 会在导入时执行）
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -44,11 +46,12 @@ describe('B03 回归：非 Electron 环境创建项目走内联输入（2026-08-
     const promptSpy = vi.spyOn(window, 'prompt').mockImplementation(() => {
       throw new Error('prompt() should never be called');
     });
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/projects')) return { ok: true, status: 200, json: async () => [] };
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      if (u.includes('/projects')) return jsonRes([]);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     render(<ProjectPanel onSelect={() => {}} />);
     await act(async () => { screen.getByText(/新建项目/).click(); });
@@ -61,9 +64,7 @@ describe('B03 回归：非 Electron 环境创建项目走内联输入（2026-08-
   });
 
   it('内联输入留空点取消 → 收起输入框', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async () => ({
-      ok: true, status: 200, json: async () => [],
-    })) as any);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonRes([]));
 
     render(<ProjectPanel onSelect={() => {}} />);
     await act(async () => { screen.getByText(/新建项目/).click(); });

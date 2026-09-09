@@ -22,6 +22,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes, sseRes } from './helpers/fetchMock';
+
 // 必须在 ChatPanel 模块求值前提供 localStorage（const API = getApiBase() 在导入时执行）
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -34,20 +36,11 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
 }
 
 // mock SSE 响应体（ReadableStream），模拟后端 /api/ollama/chat/stream
+// 第 0 批（0.4.14）动作二：改用 helper 的原生 Response 构造器。
+// 旧手写对象缺 headers/redirected/statusText/type 等 Response 成员，靠 `as any` 掩盖；
+// impl 钉成 typeof fetch 后 tsc 如实报错（TS2322），故迁移到 sseRes（返回真实 Response）。
 function mockSSEBody(events: string[]) {
-  const text = events.join('');
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    },
-  });
-  return {
-    ok: true, status: 200,
-    body: stream,
-    text: async () => text,
-  };
+  return sseRes(events);
 }
 
 const ev = (t: string, d: object) => `event: ${t}\ndata: ${JSON.stringify(d)}\n\n`;
@@ -70,15 +63,16 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
       ev('done', { content: '目录里有 2 个文件', tool_calls: [] }),
     ]);
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok:true, status:200, json: async()=>[ { id:'a1', name:'测试Agent', role:'工程师' } ] };
-      if (u.includes('/ollama/models')) return { ok:true, status:200, json: async()=>[{name:'qwen3.8'}] };
-      if (u.includes('/sessions?')) return { ok:true, status:200, json: async()=>[{ id:'s1', title:'会话1', message_count:0 }] };
-      if (u.includes('/sessions/s1/messages') || (u.includes('/sessions/') && u.includes('/messages'))) return { ok:true, status:200, json: async()=>[] };
+      if (u.includes('/agents/')) return jsonRes([ { id:'a1', name:'测试Agent', role:'工程师' } ]);
+      if (u.includes('/ollama/models')) return jsonRes([{name:'qwen3.8'}]);
+      if (u.includes('/sessions?')) return jsonRes([{ id:'s1', title:'会话1', message_count:0 }]);
+      if (u.includes('/sessions/s1/messages') || (u.includes('/sessions/') && u.includes('/messages'))) return jsonRes([]);
       if (u.includes('/chat/stream')) return sse;
-      return { ok:true, status:200, json: async()=>[] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     const { unmount } = render(<ChatPanel projectId="p1" agentId="a1" />);
 
@@ -157,19 +151,20 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
 });
 
 describe('B02/B05/B07（TS-101）串话防护 + 缓存同步', () => {
-  function setupFetch(sseBody: any) {
-    return vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+  function setupFetch(sseBody: Response) {
+    const impl2: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok:true, status:200, json: async()=>[ { id:'a1', name:'测试Agent', role:'工程师' } ] };
-      if (u.includes('/ollama/models')) return { ok:true, status:200, json: async()=>[{name:'qwen3.8'}] };
-      if (u.includes('/sessions?')) return { ok:true, status:200, json: async()=>[
+      if (u.includes('/agents/')) return jsonRes([ { id:'a1', name:'测试Agent', role:'工程师' } ]);
+      if (u.includes('/ollama/models')) return jsonRes([{name:'qwen3.8'}]);
+      if (u.includes('/sessions?')) return jsonRes([
         { id:'s1', title:'会话A', message_count:0 },
         { id:'s2', title:'会话B', message_count:0 },
-      ] };
-      if (u.includes('/messages')) return { ok:true, status:200, json: async()=>[] };
+      ]);
+      if (u.includes('/messages')) return jsonRes([]);
       if (u.includes('/chat/stream')) return sseBody;
-      return { ok:true, status:200, json: async()=>[] };
-    }) as any);
+      return jsonRes([]);
+    };
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
   }
 
   it('流式中切换会话：旧流 token 不串入新会话；done 后原会话缓存有完整内容', async () => {
@@ -186,7 +181,10 @@ describe('B02/B05/B07（TS-101）串话防护 + 缓存同步', () => {
         controller.close();
       },
     });
-    const sseBody = { ok: true, status: 200, body: stream };
+    // 第 0 批（0.4.14）动作二：该 stream 用 gate(Promise) 控节奏（先吐 token → 等测试切会话 →
+    // 再吐 done），是本用例特有的时序构造，helper 通用构造器不适用；故保留 stream，
+    // 只把手写假 response 换成**原生 Response**，让 typeof fetch 约束成立。
+    const sseBody = new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
     setupFetch(sseBody);
     localStorage.clear();
 

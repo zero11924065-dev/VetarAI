@@ -22,6 +22,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes, sseRes } from './helpers/fetchMock';
+
 // H16 回归：切换会话时进行中的流式内容不丢。
 // checkpoint-055 新策略：DB 为权威源 + 本地未落盘气泡（local_* id / DB 缺失 id）合并保留——
 // 既修"残缺缓存屏蔽 DB 历史"（切回丢消息），又保证进行中的流式内容不被旧历史覆盖。
@@ -35,16 +37,9 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
   };
 }
 
+// 第 0 批（0.4.14）动作二：标准 SSE 形态 → 直接用 helper 的 sseRes（返回原生 Response）
 function mockSSEBody(events: string[]) {
-  const text = events.join('');
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    },
-  });
-  return { ok: true, status: 200, body: stream, text: async () => text };
+  return sseRes(events);
 }
 
 const ev = (t: string, d: object) => `event: ${t}\ndata: ${JSON.stringify(d)}\n\n`;
@@ -63,21 +58,22 @@ describe('H16 切换会话缓存优先（防覆盖进行中流式内容）', () 
     }));
 
     let messagesApiCalled = 0;
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x' }] };
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-      if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+      if (u.includes('/sessions?')) return jsonRes([
         { id: 's1', title: '会话1', message_count: 1 },
         { id: 's2', title: '会话2', message_count: 1 },
-      ]};
+      ]);
       if (u.includes('/messages')) {
         messagesApiCalled += 1;
         // 后端旧数据（委派未落盘）——若被加载会覆盖进行中的流式内容
-        return { ok: true, status: 200, json: async () => [{ id: 'old', role: 'user', content: '旧数据' }] };
+        return jsonRes([{ id: 'old', role: 'user', content: '旧数据' }]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     const { unmount } = render(<ChatPanel projectId="p1" agentId="a1" />);
 
@@ -110,20 +106,21 @@ describe('H16 切换会话缓存优先（防覆盖进行中流式内容）', () 
     localStorage.setItem('subagent_messages_v4', JSON.stringify({}));
 
     let messagesApiCalled = 0;
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl2: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x' }] };
-      if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-      if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+      if (u.includes('/sessions?')) return jsonRes([
         { id: 's1', title: '会话1', message_count: 1 },
         { id: 's2', title: '会话2', message_count: 2 },
-      ]};
+      ]);
       if (u.includes('/messages')) {
         messagesApiCalled += 1;
-        return { ok: true, status: 200, json: async () => [{ id: 'h1', role: 'user', content: '历史消息' }] };
+        return jsonRes([{ id: 'h1', role: 'user', content: '历史消息' }]);
       }
-      return { ok: true, status: 200, json: async () => [] };
-    }) as any);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
 
     const { unmount } = render(<ChatPanel projectId="p1" agentId="a1" />);
     await waitFor(() => { expect(document.querySelector('select')).toBeTruthy(); }, { timeout: 3000 });

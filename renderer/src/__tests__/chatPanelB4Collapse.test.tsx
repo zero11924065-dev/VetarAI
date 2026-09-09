@@ -45,33 +45,28 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
   };
 }
 
-const ev = (t: string, d: object) => `event: ${t}\ndata: ${JSON.stringify(d)}\n\n`;
+// 第 0 批（0.4.14）动作二：迁移到类型化 fetch mock —— helper 返回原生 Response，
+// 去掉 `as any`，使桩与真实签名的分歧在 tsc 阶段暴露（而非运行时静默假绿）。
+// 本地 ev 改用 helper 的 sseEvent 别名导入（本文件有 18 处调用，别名可让调用点零改动），
+// 消除各测试文件重复实现的 SSE 行构造逻辑。
+import { sseRes, jsonRes, sseEvent as ev } from './helpers/fetchMock';
 
 /** 构造 SSE 流：tool_call → tool_result(ok/error) → token → done。 */
 function mockStreamBody(events: string[]) {
-  const text = events.join('');
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    },
-  });
-  return { ok: true, status: 200, body: stream, text: async () => text };
+  return sseRes(events);
 }
 
-function installFetchMock(sseBody: ReturnType<typeof mockStreamBody>) {
-  vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+function installFetchMock(sseBody: Response) {
+  const impl: typeof fetch = async (url) => {
     const u = String(url);
-    if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试', role: 'x' }] };
-    if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-    if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [
-      { id: 's1', title: '会话1', message_count: 1 },
-    ]};
-    if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [] };
+    if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x' }]);
+    if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+    if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话1', message_count: 1 }]);
+    if (u.includes('/messages')) return jsonRes([]);
     if (u.includes('/ollama/chat/stream')) return sseBody;
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    return jsonRes([]);
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 /**

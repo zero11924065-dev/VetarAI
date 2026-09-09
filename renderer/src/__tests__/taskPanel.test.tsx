@@ -22,6 +22,8 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import React from 'react';
 import { TaskPanel } from '../panels/TaskPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // TS-108 M3-2：任务状态面板测试（四种状态徽标 + 失败任务重试按钮 + 重试请求）
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -47,11 +49,12 @@ beforeEach(() => {
 
 describe('TaskPanel 任务状态面板', () => {
   it('渲染四种状态徽标 + 失败任务有重试按钮 + 摘要展示', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+    const impl: typeof fetch = async (url, init?) => {
       const u = String(url);
-      if (u.includes('/tasks')) return { ok: true, status: 200, json: async () => TASKS };
-      return { ok: true, status: 200, json: async () => ({}) };
-    }) as any);
+      if (u.includes('/tasks')) return jsonRes(TASKS);
+      return jsonRes({});
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 
     render(<TaskPanel projectId="p1" />);
 
@@ -74,15 +77,16 @@ describe('TaskPanel 任务状态面板', () => {
 
   it('点击重试发起 POST 请求并刷新列表', async () => {
     const calls: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+    const impl2: typeof fetch = async (url, init?) => {
       const u = String(url);
       calls.push(`${init?.method || 'GET'} ${u}`);
       if (init?.method === 'POST' && u.includes('/retry')) {
-        return { ok: true, status: 200, json: async () => ({ new_task_id: 't5', result: { ok: true } }) };
+        return jsonRes({ new_task_id: 't5', result: { ok: true } });
       }
-      if (u.includes('/tasks')) return { ok: true, status: 200, json: async () => TASKS };
-      return { ok: true, status: 200, json: async () => ({}) };
-    }) as any);
+      if (u.includes('/tasks')) return jsonRes(TASKS);
+      return jsonRes({});
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl2);
 
     render(<TaskPanel projectId="p1" />);
 
@@ -104,8 +108,7 @@ describe('TaskPanel 任务状态面板', () => {
   });
 
   it('空列表显示占位文案', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async () =>
-      ({ ok: true, status: 200, json: async () => [] })) as any);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonRes([]));
 
     render(<TaskPanel projectId="p1" />);
     await waitFor(() => {
@@ -123,11 +126,12 @@ describe('TaskPanel 停止按钮（TS-114 3.25）', () => {
   ];
 
   it('running 任务显示停止按钮（failed/done 不显示）', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+    const impl3: typeof fetch = async (url) => {
       const u = String(url);
-      if (u.includes('/tasks')) return { ok: true, status: 200, json: async () => TASKS_WITH_RUNNING };
-      return { ok: true, status: 200, json: async () => ({}) };
-    }) as any);
+      if (u.includes('/tasks')) return jsonRes(TASKS_WITH_RUNNING);
+      return jsonRes({});
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl3);
 
     render(<TaskPanel projectId="p1" />);
     await waitFor(() => {
@@ -143,18 +147,19 @@ describe('TaskPanel 停止按钮（TS-114 3.25）', () => {
   it('点击停止 → POST /tasks/{id}/stop → 刷新任务列表', async () => {
     const calls: string[] = [];
     let listCalls = 0;
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+    const impl4: typeof fetch = async (url, init?) => {
       const u = String(url);
       calls.push(`${init?.method || 'GET'} ${u}`);
       if (u.includes('/stop')) {
-        return { ok: true, status: 200, json: async () => ({ ok: true, detail: '已请求停止' }) };
+        return jsonRes({ ok: true, detail: '已请求停止' });
       }
       if (u.includes('/tasks')) {
         listCalls += 1;
-        return { ok: true, status: 200, json: async () => TASKS_WITH_RUNNING };
+        return jsonRes(TASKS_WITH_RUNNING);
       }
-      return { ok: true, status: 200, json: async () => ({}) };
-    }) as any);
+      return jsonRes({});
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl4);
 
     render(<TaskPanel projectId="p1" />);
     await waitFor(() => {
@@ -169,16 +174,17 @@ describe('TaskPanel 停止按钮（TS-114 3.25）', () => {
   });
 
   it('停止端点 400（任务已结束）→ 显示停止失败提示', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, init?: any) => {
+    const impl5: typeof fetch = async (url, init?) => {
       const u = String(url);
       if (u.includes('/stop')) {
-        return { ok: false, status: 400, json: async () => ({ detail: '任务已结束（done），无需停止' }) };
+        return jsonRes({ detail: '任务已结束（done），无需停止' }, 400);
       }
       if (u.includes('/tasks')) {
-        return { ok: true, status: 200, json: async () => TASKS_WITH_RUNNING };
+        return jsonRes(TASKS_WITH_RUNNING);
       }
-      return { ok: true, status: 200, json: async () => ({}) };
-    }) as any);
+      return jsonRes({});
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl5);
 
     render(<TaskPanel projectId="p1" />);
     await waitFor(() => {

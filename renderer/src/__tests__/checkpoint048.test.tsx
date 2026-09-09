@@ -22,6 +22,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
+import { jsonRes } from './helpers/fetchMock';
+
 // checkpoint-048：会话总结按钮 + 上传格式扩容测试
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -39,22 +41,23 @@ beforeEach(() => {
 });
 
 function mockBase() {
-  return vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any, opts: any) => {
+  const impl: typeof fetch = async (url, opts) => {
     const u = String(url);
-    if (u.includes('/agents/')) return { ok: true, status: 200, json: async () => [{ id: 'a1', name: '测试Agent', role: '工程师' }] };
-    if (u.includes('/ollama/models')) return { ok: true, status: 200, json: async () => [{ name: 'qwen3.8' }] };
-    if (u.includes('/sessions?')) return { ok: true, status: 200, json: async () => [{ id: 's1', title: '会话1', message_count: 2 }] };
-    if (u.includes('/messages')) return { ok: true, status: 200, json: async () => [{ id: 1, role: 'user', content: '你好' }] };
+    if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试Agent', role: '工程师' }]);
+    if (u.includes('/ollama/models')) return jsonRes([{ name: 'qwen3.8' }]);
+    if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话1', message_count: 2 }]);
+    if (u.includes('/messages')) return jsonRes([{ id: 1, role: 'user', content: '你好' }]);
     if (u.includes('/summarize')) {
       if (opts?.method === 'POST') {
-        return { ok: true, status: 200, json: async () => ({ ok: true, summary: '总结内容', saved_file: '/tmp/x/sum.md' }) };
+        return jsonRes({ ok: true, summary: '总结内容', saved_file: '/tmp/x/sum.md' });
       }
     }
     if (u.includes('/attachments/parse')) {
-      return { ok: true, status: 200, json: async () => ({ name: 'a.pdf', kind: 'pdf', text: '解析文本', truncated: false }) };
+      return jsonRes({ name: 'a.pdf', kind: 'pdf', text: '解析文本', truncated: false });
     }
-    return { ok: true, status: 200, json: async () => [] };
-  }) as any);
+    return jsonRes([]);
+  };
+return vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 describe('checkpoint-048 会话总结与上传扩容', () => {
