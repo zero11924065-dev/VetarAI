@@ -1394,6 +1394,19 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       } else if (ev.event === 'compact_required') {
         setCompactWarning({ used: d.used, limit: d.limit, est: d.est_rounds_left });
         setSending(false);
+      } else if (ev.event === 'cancelled') {
+        // C2（0.4.16）：后端确认已停止（stop 端点置位 → gen() 硬取消在飞请求后发此事件）。
+        // ⛔ 语义与前端 AbortError 路径**完全一致**（都是用户主动停止），故复用同一处理：
+        // 保留已生成内容 + stopped + manualStopped（C6：只有手动停止才显示"已手动停止"文案）。
+        // 为什么必须显式处理：前端事件白名单原本**没有 cancelled**，后端发了会被静默忽略 →
+        // 若竞态下 cancelled 先于 AbortError 到达（或后端因其他路径取消），消息会既无"已手动停止"
+        // 标签也无光标，看起来像"卡住"。不依赖"abort 一定先到"这种脆弱时序。
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+        closeThinkingPhase();
+        const c = accContent; accContent = '';
+        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, manualStopped: true, thinking: false }));
+        setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
+        setSending(false);
       }
       // done → 最终 content 以 done 为准（覆盖已累加，保证完整）
       if (ev.event === 'done') {
@@ -1563,8 +1576,24 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     }
   }
 
-  // 停止生成（AbortController 真断流）
+  // 停止生成（C2 / 0.4.16：前端 abort + **通知后端真停**）
+  //
+  // ⛔ 此前只有 `abortRef.current?.abort()` —— 它仅关掉 SSE 连接，**后端毫不知情**，
+  // 会把剩余轮次与 token 全部跑完（本地大模型上可达数分钟）。用户看到的"停止"
+  // 只是前端不再显示而已，机器还在烧算力。这是 C2 的第一处断裂。
+  //
+  // 顺序：**先发停止请求（不 await），再 abort**。
+  //   - stop 是独立 HTTP 请求，不依赖 SSE 连接，所以 abort 不会打断它；
+  //   - 不 await 是为了 UI 立即响应（abort 同步生效），不让用户等一个往返；
+  //   - 失败只记日志不弹错：即使后端没收到，abort 也已让前端脱离该流，
+  //     且后端在流结束时（finally）会自行注销，不会留下残留标志。
   function handleStop() {
+    // 活流归属会话优先（流开始时登记、结束时清除），兜底用当前会话
+    const sid = activeStreamSidRef.current || currentSessionIdRef.current;
+    if (sid) {
+      fetch(`${API}/chat/${encodeURIComponent(sid)}/stop`, { method: 'POST' })
+        .catch(e => console.error('chat stop failed:', e));
+    }
     abortRef.current?.abort();
   }
 

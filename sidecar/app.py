@@ -28,6 +28,8 @@ import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 from sidecar.ollama.connector import get_ollama_connector, OllamaAPIError
 from sidecar.agent_engine.loop import run_tool_loop, build_system_prompt, tools_spec
+# 第 3 批（0.4.16）C2：聊天取消标志注册表（补上 loop.cancel_check 缺失的共享状态）
+from sidecar.agent_engine import cancel as _cancel
 from sidecar.network.guard import NetworkGuardError
 from sidecar.config import get_config, reload_config, get_config_path
 from sidecar.storage.store import (
@@ -1142,13 +1144,38 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                               # 0.4.9（3.48.1）：Computer Use 上下文（只需 authorizer 做每步确认）
                               computer_use_ctx=({"authorizer": _sse_authorizer}
                                                 if (_tools_enabled and _computer_use_on) else None),
-                              first_round_images=req.images).__aiter__()
+                              first_round_images=req.images,
+                              # ⛔ C2（0.4.16）核心接线：loop.py 的 cancel_check 参数
+                              # 与每轮开始前的取消检查（loop.py:957）**早已存在**，
+                              # 但此处从未传过 → 对聊天路径是死代码，只服务委派（TS-114）。
+                              # 传入后：用户点停止 → stop 端点置标志 → 下一轮边界 yield
+                              # {"event":"cancelled"} 并干净退出，不再空跑剩余轮次。
+                              # 仅在 tools_enabled（有 session_id 语境）时才有意义，
+                              # 但即使为空 session_id 也安全（is_chat_cancelled 对空串恒 False）。
+                              cancel_check=_cancel.make_cancel_check(req.session_id)).__aiter__()
         # M2 打回修复（2026-08-29）：compact_auto 服务端闭环。
         # loop 发 compact_auto 只是"通知该压缩了"，真正压缩在此处执行。
         # 同一次请求内最多自动压缩 1 次（防 compact_session 成功但 prompt_eval 仍高导致二次触发死循环）。
         _auto_compact_done = False
         _auto_compact_failed = False
         next_task = None
+        # C2（0.4.16）：注册本流，拿到取消 Event。放进下面的 asyncio.wait 集合，
+        # 用户点停止时 gen() **立即被唤醒**并硬取消 next_task —— 这才能中断
+        # prefill 期间的在飞请求（客户端 abort 时服务端不写字节就察觉不到断连，
+        # 而 cancel_check 只在轮次边界生效，prefill 期间够不着）。
+        # ⛔ 不复用心跳 timer 来轮询：心跳基础值 15s 且会动态放大到 60s，
+        # 用它做取消检查等于"点停止后最多等一分钟"，那不叫停止。
+        _cancel_event = _cancel.register_stream(req.session_id)
+        # ⛔ waiter task 必须在**循环外创建一次**并复用，两个原因：
+        #   1. `asyncio.wait()` 在 Python 3.11+ **禁止传协程**（实测 3.14.7 抛
+        #      TypeError: Passing coroutines is forbidden）→ 必须传 task；
+        #   2. 若在 while 内每轮 `_cancel_event.wait()` 新建，未被触发的那些会被
+        #      asyncio.wait 包成 task 后**遗弃泄漏**（循环几十轮就泄漏几十个），
+        #      而既有代码对 timer / auth_watchers 每轮都显式 cancel，不能破这个纪律。
+        # Event.wait() 被 set 后 task 完成且**可重复 await**（已完成 task 再 await 立即返回），
+        # 故单个 task 可安全复用于每一轮的 wait_set。
+        _cancel_waiter: asyncio.Task | None = (
+            asyncio.ensure_future(_cancel_event.wait()) if _cancel_event is not None else None)
         try:
             while True:
                 if next_task is None:
@@ -1157,6 +1184,11 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                 # M1-1 越界授权（2026-08-28）：同时监听待处理的授权请求，
                 # 有新请求时立即发出 auth_request SSE 事件给前端弹窗
                 wait_set = {next_task, timer}
+                # C2（0.4.16）：取消 waiter 一并监听 → 点停止**立即**唤醒（不等心跳）
+                # waiter 未完成才加入 wait_set；若已置位则由下方取消分支处理，
+                # 不再重复加入（否则 asyncio.wait 会立即返回、造成忙轮询空转）
+                if _cancel_waiter is not None and not _cancel_waiter.done():
+                    wait_set.add(_cancel_waiter)
                 auth_watchers: dict[str, asyncio.Task] = {}
                 for rid, entry in list(_auth_pending.items()):
                     if not entry["event"].is_set():
@@ -1183,6 +1215,27 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                             # 0.4.9 任务152：联网安装确认的附加信息（来源/类型/是否需切全量联网）
                             "extra": entry.get("extra") or {},
                         })
+                # C2（0.4.16）：用户点了停止 → **硬取消在飞的请求**并收尾。
+                # ⛔ 必须在 next_task 分支之前判断：wait 是被 waiter 唤醒的，
+                # 此时 next_task 尚未完成（模型可能还在 prefill，一个字节都没吐）。
+                # 只靠 loop 的 cancel_check 不够——它只在**轮次边界**检查，
+                # prefill 期间够不着；而客户端 abort 后服务端不写字节就察觉不到断连。
+                if _cancel_waiter is not None and _cancel_waiter.done():
+                    if not next_task.done():
+                        next_task.cancel()
+                        # 吃掉取消结果，确保底层 httpx 连接真正释放（同 TS-103 B04 纪律）
+                        try:
+                            await next_task
+                        except BaseException:
+                            pass
+                    next_task = None
+                    # 已生成内容照常落库（与客户端断连路径一致，不丢用户已看到的部分）
+                    _persist_assistant(truncated=True)
+                    if _exec_state.get("status") == "running":
+                        _flush_exec_state(status="interrupted", detail="用户已停止生成")
+                    # 通知前端：这是**用户主动停止**，不是错误（前端据此显示"已手动停止"）
+                    yield _sse_format("cancelled", {"detail": "已停止生成"})
+                    break
                 if next_task in done:
                     try:
                         ev = next_task.result()
@@ -1282,6 +1335,17 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
             _flush_exec_state(status="error", detail=f"内部错误: {e}")
             yield _sse_format("error", {"detail": f"内部错误: {e}"})
         finally:
+            # ⛔ C2（0.4.16）：清理取消标志。**必须放 finally**——流可能从 done / error /
+            # cancelled / 客户端断连（CancelledError）/ 迭代器关闭（GeneratorExit）任一路径退出。
+            # 不清理的后果比"内存增长"严重得多：残留标志会让该会话**下一次发送刚进循环就被取消**，
+            # 表现为"停止按钮永久生效"，用户再无法正常对话。
+            # unregister 会连 Event 一起丢弃 → 下次发送注册的是全新未置位 Event，
+            # 结构上杜绝残留（残留会让该会话下次发送刚进循环就被取消 = 停止按钮永久生效）
+            if req.session_id:
+                _cancel.unregister_stream(req.session_id)
+            # waiter task 同样要回收（与 timer / auth_watchers 的每轮 cancel 纪律一致）
+            if _cancel_waiter is not None and not _cancel_waiter.done():
+                _cancel_waiter.cancel()
             if next_task is not None and not next_task.done():
                 next_task.cancel()
                 # TS-103 B04：cancel 后必须 await 吃掉取消结果，确保底层流/连接真正释放，
@@ -1306,6 +1370,30 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/chat/{session_id}/stop")
+async def api_chat_stop(session_id: str):
+    """C2（0.4.16）：停止聊天流式生成。
+
+    ⛔ 此前聊天是**唯一没有 stop 端点**的链路（workflow / task / roundtable 三条都有），
+    而前端 `handleStop()` 只做 `abortRef.current?.abort()` —— 仅关掉 SSE 连接，
+    **完全没通知后端**。后果：后端对"客户端不听了"毫不知情，把剩余轮次与 token
+    全部跑完（本地大模型上可达数分钟），用户看到的"停止"只是前端不再显示而已。
+
+    工作方式：置取消标志 → `run_tool_loop` 的 `cancel_check` 在**下一轮边界**读到 →
+    yield {"event":"cancelled"} 并干净退出。
+    ⚠️ 因此停止**不是瞬时的**：若模型正在生成本轮回复，需等本轮结束才停
+    （轮内中断需 connector 层配合，见 C5）。返回体如实说明这一点，不谎称"已立即停止"。
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=422, detail="session_id 不能为空")
+    newly = _cancel.request_chat_cancel(sid)
+    if not newly:
+        # 该会话本无活流（或已置位）——如实告知，不谎称停止成功
+        return {"ok": False, "detail": "该会话当前没有进行中的生成，无需停止"}
+    return {"ok": True, "detail": "已请求停止：将在本轮模型输出结束、下一轮开始前中止"}
 
 
 @app.get("/api/projects/{project_id}/state")

@@ -65,23 +65,51 @@ NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
 # 人工审批等待注册表：run_id → {"event": asyncio.Event, "approved": bool, "comment": str}
 _APPROVALS: dict[str, dict[str, Any]] = {}
 
-# 运行取消标志：run_id → True
-_CANCEL_FLAGS: dict[str, bool] = {}
+# C5（0.4.16）：运行取消**事件**：run_id → Event。
+# ⛔ Event 是「已取消」的**唯一真相源**。曾同时维护 bool 字典 `_CANCEL_FLAGS` 与
+# Event 字典两个真相源，并在懒建时写了一段"补置 bool 标志"的同步代码——
+# 但 `request_workflow_cancel` 必定同时 set Event，故那段补置**永不独立触发**（死代码），
+# 变异测试也证实删除它无任何断言失败。两个表示同一状态的容器本身就是 bug 温床
+# （可能不同步），故合并为单一 Event：
+#   * 轮询方用 `is_workflow_cancelled()` 读 `Event.is_set()`（bool 语义不变，调用方零改动）
+#   * 等待方用 `cancel_event().wait()` → 点停止**立即**唤醒，无轮询延迟
+_CANCEL_EVENTS: dict[str, asyncio.Event] = {}
 
 # 审批等待期间的 SSE 心跳间隔（秒）
 APPROVAL_HEARTBEAT_S = 15.0
 
 
+def cancel_event(run_id: str) -> asyncio.Event:
+    """取（或懒建）该 run 的取消事件。
+
+    ⛔ 懒建而非在 request 时创建：`request_workflow_cancel` 可能在引擎开始等待之前
+    就被调用（用户手快），此时也必须能正确记录"已取消"。故两边都走这个函数，谁先到谁创建。
+    Event 在 Python 3.10+ 构造时不绑定 loop（await 时才取运行中的 loop），
+    故在非 async 上下文（如 FastAPI 端点线程）创建也是安全的。
+    """
+    ev = _CANCEL_EVENTS.get(run_id)
+    if ev is None:
+        ev = asyncio.Event()
+        _CANCEL_EVENTS[run_id] = ev
+    return ev
+
+
 def request_workflow_cancel(run_id: str) -> None:
-    _CANCEL_FLAGS[run_id] = True
+    """请求取消。置位 Event → 正在 await 的等待方**立即**醒来（不等轮询）。"""
+    cancel_event(run_id).set()
 
 
 def clear_workflow_cancel(run_id: str) -> None:
-    _CANCEL_FLAGS.pop(run_id, None)
+    # ⛔ 必须把 Event **整个丢弃**而非 clear()：残留已置位的 Event 会让该 run_id 的
+    # 下一次运行一开始就被取消（与 C2 聊天侧"停止按钮永久生效"是同一类缺陷）。
+    # pop 掉后，下次 cancel_event() 懒建的是全新未置位 Event，结构上杜绝残留。
+    _CANCEL_EVENTS.pop(run_id, None)
 
 
 def is_workflow_cancelled(run_id: str) -> bool:
-    return bool(_CANCEL_FLAGS.get(run_id))
+    """轮询式查询（bool 语义与改造前一致，既有调用方零改动）。"""
+    ev = _CANCEL_EVENTS.get(run_id)
+    return bool(ev is not None and ev.is_set())
 
 
 def resolve_workflow_approval(run_id: str, approved: bool, comment: str = "") -> bool:
@@ -391,18 +419,37 @@ class WorkflowEngine:
         """0.2.3：可中断的模型调用。
 
         旧实现直接 await 一次 HTTP 调用——模型加载/推理动辄数分钟，期间
-        取消标志无人检查，用户点"停止"毫无反应（只能手动杀模型）。现改为
-        后台任务 + 每 2 秒轮询取消标志，命中即取消底层请求并抛 WorkflowCancel。
+        取消标志无人检查，用户点"停止"毫无反应（只能手动杀模型）。
+
+        演进：
+          * 0.2.3 改为后台任务 + **每 2 秒轮询**取消标志（解决了"毫无反应"，
+            但引入了最多 2 秒的停止延迟）；
+          * C5（0.4.16）改为后台任务 + **await 取消 Event**：点停止立即唤醒并
+            cancel 底层 task，实测延迟 0.000s。Event 由 `cancel_event(run_id)` 懒建，
+            `request_workflow_cancel` 置位。
         """
         task = asyncio.create_task(
             self.connector.chat(model, [{"role": "user", "content": user_content}],
                                 images=images if images else None))
+        # C5（0.4.16）：⛔ 原实现 `asyncio.wait({task}, timeout=2.0)` 每 2 秒才轮询一次
+        # 取消标志 → 用户点停止最坏要**等 2 秒**才生效（模型还在烧算力）。
+        # 改为同时 await 取消 Event：点停止**立即**唤醒，无轮询延迟。
+        # ⚠️ waiter task 必须在循环外创建一次并复用（与 app.py C2 同一教训）：
+        #    ① asyncio.wait() 在 Python 3.11+ **禁止传协程**（实测 3.14.7 抛 TypeError）
+        #    ② 循环内每轮新建会遗弃泄漏未被触发的 task
+        #    ③ Event.wait() 置位后 task 完成且可重复 await，故单个 task 可安全复用
+        cancel_waiter = asyncio.ensure_future(cancel_event(self.run_id).wait())
         try:
             while True:
-                done, _ = await asyncio.wait({task}, timeout=2.0)
+                if cancel_waiter.done():
+                    # 已请求取消（可能上一轮已唤醒）→ 立即中止，不再等模型
+                    self._check_cancel()
+                done, _ = await asyncio.wait({task, cancel_waiter},
+                                             return_when=asyncio.FIRST_COMPLETED)
                 if task in done:
                     return task.result()
-                self._check_cancel()  # 命中取消 → 抛 WorkflowCancel（见下方清理）
+                # 被取消事件唤醒 → 抛 WorkflowCancel（走下方清理：cancel task + 卸载模型）
+                self._check_cancel()
         except WorkflowCancel:
             task.cancel()
             try:
@@ -410,6 +457,14 @@ class WorkflowEngine:
             except BaseException:
                 pass
             raise
+        finally:
+            # 回收 waiter（与 timer/auth_watchers 的 cancel 纪律一致，不留悬挂协程）
+            if not cancel_waiter.done():
+                cancel_waiter.cancel()
+                try:
+                    await cancel_waiter
+                except BaseException:
+                    pass
 
     async def _run_inference(self, node: dict) -> NodeResult:
         """纯推理节点：无工具、无系统提示词，直接一问一答。"""
