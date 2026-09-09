@@ -30,7 +30,9 @@ interface Config {
   data_root: string;
   default_model: string;
   plugin_repos: string[];
-  egress_allowlist: string[];
+  // B11（0.4.13）：「需代理」名单，取代原 egress_allowlist（白名单）。
+  // 仅标准（auto）模式生效：命中→拒绝直连并提示切全量；全量模式命中仍走代理放行。
+  egress_proxy_required: string[];
   sidecar_host: string;
   sidecar_port: number;
   vite_port: number;
@@ -371,7 +373,7 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [newRepo, setNewRepo] = useState('');
-  const [newAllow, setNewAllow] = useState('');
+  const [newProxyReq, setNewProxyReq] = useState('');
   // checkpoint-053：默认模型下拉选择——拉取当前推理后端可用模型列表
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -438,24 +440,27 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
     if (!cfg) return;
     save({ plugin_repos: (cfg.plugin_repos || []).filter(x => x !== url) });
   }
-  async function addAllow() {
-    if (!cfg || !newAllow.trim()) return;
+  // B11（0.4.13）：手动把域名加入「需代理」名单（原 addAllow，白名单制已废）。
+  // 名单也可由后端自动写入（标准模式下境外站连续直连失败触发熔断时），
+  // 故这里的提示要说明"标准模式下将拒绝直连"，而不是"放行"。
+  async function addProxyReq() {
+    if (!cfg || !newProxyReq.trim()) return;
     setMsg(null); setErr(null);
-    const v = newAllow.trim();
+    const v = newProxyReq.trim();
     try {
       const r = await fetch(`${api}/config`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ egress_allowlist: [...(cfg.egress_allowlist || []), v] }),
+        body: JSON.stringify({ egress_proxy_required: [...(cfg.egress_proxy_required || []), v] }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-      setCfg(data); setNewAllow('');
-      setMsg('已加入放行名单');
-    } catch (e: any) { setErr('加入放行名单失败: ' + e.message); }
+      setCfg(data); setNewProxyReq('');
+      setMsg('已加入「需代理」名单：标准模式下将不再尝试直连该域名');
+    } catch (e: any) { setErr('加入「需代理」名单失败: ' + e.message); }
   }
-  function removeAllow(v: string) {
+  function removeProxyReq(v: string) {
     if (!cfg) return;
-    save({ egress_allowlist: (cfg.egress_allowlist || []).filter(x => x !== v) });
+    save({ egress_proxy_required: (cfg.egress_proxy_required || []).filter(x => x !== v) });
   }
 
   return (
@@ -726,35 +731,41 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
             </label>
             <div style={hintStyle}>开启后，Agent 要从外部仓库（如 GitHub）下载安装插件或技能时，会先弹窗告知下载来源与类型，你同意才联网；当前为标准联网模式时还会一并询问是否切换到全量联网。强烈建议保持开启——曾发生子 Agent 擅自联网拉取、弹出账号密码窗并装入两个无关插件的事故。</div>
 
-            <label style={formLabel}>放行名单（境内/白名单，支持 *.xxx 通配）</label>
-            {(cfg.egress_allowlist || []).map((a, i) => (
+            <label style={formLabel}>需代理名单（仅标准模式生效，支持 *.xxx 通配）</label>
+            {(cfg.egress_proxy_required || []).map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ flex: 1, fontSize: 13, color: colors.textPrimary, fontFamily: fonts.mono }}>{a}</span>
                 <button
                   className="ui-btn ui-btn-ghost ui-ico-danger"
-                  onClick={() => removeAllow(a)}
+                  onClick={() => removeProxyReq(a)}
                   style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textTertiary, padding: 2 }}
                 >
                   <Icon name="x" size={14} />
                 </button>
               </div>
             ))}
-            {(cfg.egress_allowlist || []).length === 0 && (
+            {(cfg.egress_proxy_required || []).length === 0 && (
               <div style={{ ...typo.micro, marginBottom: 4 }}>（空）</div>
             )}
             <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-              <input className="ui-input" style={{ ...inpStyle, flex: 1 }} value={newAllow} placeholder="如 baidu.com 或 *.qq.com"
-                onChange={e => setNewAllow(e.target.value)} />
+              <input className="ui-input" style={{ ...inpStyle, flex: 1 }} value={newProxyReq} placeholder="如 openai.com 或 *.github.com"
+                onChange={e => setNewProxyReq(e.target.value)} />
               <button
                 className="ui-btn ui-btn-secondary"
-                onClick={addAllow}
+                onClick={addProxyReq}
                 style={{ ...btnSecondary, height: 22, padding: '0 8px', fontSize: 12, whiteSpace: 'nowrap' }}
               >
                 添加
               </button>
             </div>
             <div style={hintStyle}>
-              OFF 状态下，仅白名单（本地/内网/.cn/名单内）可直连，其余需开启网络开关
+              {/* B11（0.4.13）：原提示「OFF 状态下，仅白名单（本地/内网/.cn/名单内）可直连，
+                  其余需开启网络开关」与实现严重脱节——OFF 态早已不存在（只剩 auto/proxy），
+                  且白名单制已被「需代理」名单制取代，语义完全相反（旧=允许直连，新=拒绝直连）。 */}
+              名单内的域名在<b>标准模式</b>下不再尝试直连（直接提示切换到全量），避免反复空等超时；
+              切到<b>全量模式</b>后名单不生效，这些域名照常经代理访问。
+              境内网站（.cn/内网/localhost）始终直连，无需也不应加入名单。
+              标准模式下某个境外站连续访问失败时，会自动记入本名单。
             </div>
           </div>
 

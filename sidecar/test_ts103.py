@@ -36,7 +36,9 @@ FAKE_CFG_BASE = {
     "ollama_base_url": "http://localhost:11434",
     "network_switch": "off",
     "proxy_http_port": 21081,
-    "egress_allowlist": [],
+    # B11（0.4.13）：白名单制 → 「需代理」名单制，字段随之更名。
+    # ⛔ 桩必须与真实配置同步——桩里留旧键等于在测一个不存在的键。
+    "egress_proxy_required": [],
     "sidecar_host": "127.0.0.1",
 }
 
@@ -51,6 +53,14 @@ async def main():
     # ── B17/网络重构：三态模式 + 熔断器判定（2026-08-28 融合方案）──
     import sidecar.network.guard as guard
     guard.guard_reset_circuit()
+
+    # B11（0.4.13）隔离：guard_report_failure 现在会在熔断时调 reload_config **写磁盘**
+    # config.json（把域名持久化进「需代理」名单）。本文件只桩了 get_config、没桩写入路径，
+    # 若不钉死 get_config_path，跑测试会污染用户真实 ~/.subagent/config.json。
+    # 实测已发生过一次（写入 google.com 并把 egress_allowlist 键序挪到末尾，已逐字节还原）。
+    import sidecar.config.store as _cs
+    _TMP_CFG_DIR = Path(tempfile.mkdtemp(prefix="ts103_cfg_"))
+    _cs.get_config_path = lambda: _TMP_CFG_DIR / "config.json"
 
     # auto 模式（旧 off 迁移）：境外域名未熔断 → 放行直连尝试
     _patch_cfg({"network_switch": "auto"})

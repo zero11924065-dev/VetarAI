@@ -34,17 +34,23 @@ This is the single choke point. Do NOT open raw sockets / httpx clients
 bypassing it.  The guard only controls *Agent* egress; it never touches
 the user's own browsing.
 
-网络模式（network_switch 三态，2026-08-28 融合方案）：
-  * auto（默认）：本地/境内/放行名单直连；境外域名【放行直连尝试】，
-    由调用方实测；失败经 guard_report_failure 计入熔断，连续失败达阈值后
-    该域名后续请求秒拒（防无代理时空转/死循环——本项目的立项红线）。
-  * proxy：境外域名走配置代理（用户已启动代理软件时使用）。
+网络模式（network_switch 两态；B11 / 0.4.13 起改为「需代理」名单制）：
+  * auto（标准，默认）：本地/境内直连；境外域名【放行直连尝试】，由调用方实测；
+    失败经 guard_report_failure 计入熔断，连续失败达阈值 → 秒拒（防无代理空转/死循环，
+    本项目的立项红线）**并把该域名持久化写入 egress_proxy_required**；
+    此后标准模式下命中名单直接拒绝并提示切「全量」。
+  * proxy（全量）：境外域名一律走配置代理（用户已启动代理软件时使用）；
+    「需代理」名单**不拦截**（名单只针对标准模式），但真不可达的站点仍受熔断保护。
   * off / on：遗留值，读时自动迁移为 auto / proxy（配置层处理）。
 
 熔断器（进程级内存，sidecar 重启清零）：
   * 连续失败 CIRCUIT_THRESHOLD 次 → 熔断，CIRCUIT_WINDOW 秒内秒拒；
   * 窗口过期自动恢复重试；成功一次即清零。
   * 调用方职责：请求失败 → guard_report_failure(host)；成功 → guard_report_success(host)。
+  * ⚠️ 熔断是**内存态**、名单是**持久态**：窗口过期后熔断放行，但若已入名单仍会被拦
+    （这正是名单的价值——不必每 300 秒重新试错一遍）。
+  * ⚠️ 切换 network_switch 会重置熔断器（见 config.store.reload_config）：熔断历史属
+    "直连路径"，对"走代理路径"无参考价值；不重置会让切到全量后仍被秒拒，切换失去意义。
 
 Design rules (硬性):
   * NO hardcoded hostnames / ports / paths — everything reads from
@@ -128,16 +134,55 @@ def guard_circuit_open(host: str) -> bool:
 
 
 def guard_report_failure(host: str) -> None:
-    """调用方报告出站失败：累计失败次数，达阈值即熔断。"""
+    """调用方报告出站失败：累计失败次数，达阈值即熔断。
+
+    B11（0.4.13）：熔断触发的那一刻，把该域名持久化写入「需代理」名单
+    （egress_proxy_required），此后标准（auto）模式直接拒绝直连并提示切全量，
+    不必每次都等熔断窗口。
+
+    ⛔ 三条硬性约束（每条都对应一个真实陷阱）：
+      ① **不得在持有 _circuit_lock 时写 config**——guard_request 的锁顺序是
+         _LOCK(config) → _circuit_lock，若此处反向 _circuit_lock → _LOCK 会造成
+         锁顺序反转死锁。故先在锁内算出结果、**释放锁后**再写。
+      ② **境内/本地域名不入名单**——本函数由调用方直接调用、不经 guard_request，
+         可能传入 .cn 域名；境内站走代理没有意义，写进去只会污染名单
+         （is_local_or_cn 判定）。
+      ③ **仅 auto（标准）模式下的失败才入名单**——proxy 模式下已经在走代理，
+         失败说明该站"真不可达"，不代表"需代理"，写进去是错误结论。
+    写入失败一律静默跳过：这是优化（提前拒绝），不该让调用方的请求流程崩溃。
+    """
     key = _circuit_key(host)
     if not key:
         return
+    newly_tripped = False
     with _circuit_lock:
         entry = _circuit.get(key) or {"fails": 0.0, "until": 0.0}
         entry["fails"] = entry.get("fails", 0) + 1
         if entry["fails"] >= CIRCUIT_THRESHOLD:
+            already = entry.get("until", 0) > 0 and time.monotonic() < entry["until"]
             entry["until"] = time.monotonic() + CIRCUIT_WINDOW
+            # 只在"本次刚跨入熔断"时入名单一次，避免每次失败都写盘
+            newly_tripped = not already
         _circuit[key] = entry
+    # ── 锁已释放，以下才碰 config（约束①）──
+    if not newly_tripped:
+        return
+    try:
+        if is_local_or_cn(key):          # 约束②：境内/本地不入名单
+            return
+        cfg = _cfg()
+        if _normalize_switch(cfg.get("network_switch")) != "auto":  # 约束③
+            return
+        cur = list(cfg.get("egress_proxy_required") or [])
+        if any(_domain_match(key, [e]) for e in cur):
+            return                       # 已被现有条目覆盖（含通配），无需重复写
+        cur.append(key)
+        # 延迟导入避免模块级循环（config 的 reload_config 也会反向导入本模块）
+        from sidecar.config import reload_config
+        reload_config({"egress_proxy_required": cur})
+    except Exception as e:
+        # 名单写入是优化项，失败不得影响调用方的降级/重试流程
+        print(f"[guard] WARN: 写入「需代理」名单失败（{key}）: {e}", flush=True)
 
 
 def guard_report_success(host: str) -> None:
@@ -197,11 +242,13 @@ def is_local_or_cn(host: str) -> bool:
     return _host_is_cn(h)
 
 
-def _allowlist_match(host: str, entries: list[str]) -> bool:
-    """host 是否命中 egress_allowlist（精确匹配、*.xxx 通配、或裸域名匹配子域名）。
+def _domain_match(host: str, entries: list[str]) -> bool:
+    """host 是否命中域名名单（精确匹配、*.xxx 通配、或裸域名匹配子域名）。
 
-    2026-08-28 问题1修复：用户加 "so.com" 应同时放行 www.so.com / m.so.com 等子域名，
-    否则搜索工具实际请求 www.so.com 时被拒，与用户预期不符。
+    2026-08-28 问题1修复：用户加 "so.com" 应同时覆盖 www.so.com / m.so.com 等子域名。
+    B11（0.4.13）：原 `_allowlist_match`，随白名单→「需代理」名单改造更名。
+    匹配算法未变——它判定的是"host 是否落在这些域名条目内"，与名单语义（放行/拦截）无关，
+    语义由调用方（guard_request 的分支）决定，故可直接复用。
     """
     h = (host or "").lower().strip(".")
     if not h:
@@ -233,39 +280,60 @@ def guard_request(host: str) -> tuple[dict[str, str] | None, str | None]:
         reason:  a Chinese refusal message when the request must be BLOCKED;
                  else None (= allowed).
 
-    Behavior（2026-08-28 三态融合方案）:
-        local/CN/allowlist          -> (None, None)           # direct
-        proxy + non-local           -> (proxy, None)          # via configured proxy
-        auto  + non-local (未熔断)   -> (None, None)           # 直连尝试（由调用方实测）
-        auto  + non-local (已熔断)   -> (None, "<refusal>")    # 秒拒，防无代理空转
-        proxy 模式未配代理端口        -> (None, "<refusal>")
+    Behavior（B11 / 0.4.13：白名单制 → 「需代理」名单制）:
+        local/CN                          -> (None, None)        # 直连（境内/本地始终可达）
+        proxy（全量）+ 已熔断             -> (None, "<refusal>") # 真不可达，停止空转
+        proxy（全量）+ 其余境外           -> (proxy, None)       # 一律走代理，名单不拦截
+        proxy 模式未配代理端口            -> (None, "<refusal>")
+        auto（标准）+ 命中「需代理」名单  -> (None, "<refusal>") # 已知需代理，直接拒并提示切全量
+        auto（标准）+ 已熔断              -> (None, "<refusal>") # 秒拒，防无代理空转
+        auto（标准）+ 其余境外            -> (None, None)        # 直连尝试（由调用方实测）
+
+    ⛔ 名单**只在 auto 分支检查**：全量模式下命中名单仍走代理放行（用户拍板），
+      否则名单会反过来破坏全量模式；但全量模式仍受熔断保护——某些站点是真无法访问。
+    ⛔ auto 分支顺序为「名单 → 熔断」：名单是跨重启的持久记忆（熔断窗口只有 300s，
+      过期后名单仍拦住），且能给出"该切全量"的明确指引；熔断兜住尚未入名单的新站点。
     """
     cfg = _cfg()
     mode = _normalize_switch(cfg.get("network_switch"))
-    allowlist = cfg.get("egress_allowlist") or []
 
     # 1) 本地段 / 内网 / localhost / 配置 host / 境内 .cn → 放行（直连）
     if is_local_or_cn(host):
         return None, None
-    # 2) 命中 egress_allowlist（精确或 *.xxx 通配）→ 放行，直连（不走代理）
-    if _allowlist_match(host, allowlist):
-        return None, None
-    # 3) proxy 模式：境外域名走配置代理
+
+    # 2) proxy（全量）模式：境外域名一律走配置代理；「需代理」名单不拦截
     if mode == "proxy":
+        # 真不可达的站点仍受熔断保护（用户拍板：全量下"也要注意熔断"）。
+        # 注意切换网络模式会重置熔断器（store.reload_config），故刚切过来必有干净起点。
+        if guard_circuit_open(host):
+            return None, (
+                f"境外域名 {host} 在全量模式下仍连续 {CIRCUIT_THRESHOLD} 次访问失败，"
+                f"已暂停自动重试以避免空转（{int(CIRCUIT_WINDOW)} 秒后可再试）。"
+                f"该站点可能确实无法访问，或代理软件未正常运行。"
+            )
         proxy_port = int(cfg.get("proxy_http_port", 0))
         if not proxy_port:
             return None, (
-                f"域名 {host} 不在放行名单内，且网络模式为「走代理」但未配置代理端口"
+                f"域名 {host} 需经代理访问，但网络模式为「全量」却未配置代理端口"
                 f"（proxy_http_port），无法访问。"
             )
         proxy_base = f"http://127.0.0.1:{proxy_port}"
         return {"http": proxy_base, "https": proxy_base}, None
-    # 4) auto 模式：检查熔断器——未熔断放行直连尝试；已熔断秒拒（防死循环红线）
+
+    # 3) auto（标准）模式：先查「需代理」名单，再查熔断
+    proxy_required = cfg.get("egress_proxy_required") or []
+    if _domain_match(host, proxy_required):
+        return None, (
+            f"域名 {host} 在「需代理」名单内，标准模式下无法直连。"
+            f"如需访问，请先启动代理软件，再把网络模式切为「全量」；"
+            f"或在 设置→网络 中把它移出「需代理」名单。"
+        )
     if guard_circuit_open(host):
         return None, (
             f"境外域名 {host} 近期连续 {CIRCUIT_THRESHOLD} 次访问失败（可能未开代理），"
-            f"已暂停自动重试以避免空转（{int(CIRCUIT_WINDOW)} 秒后可再试）。"
-            f"如需访问境外网站，请先启动代理软件，再把网络模式切为「走代理」。"
+            f"已暂停自动重试以避免空转（{int(CIRCUIT_WINDOW)} 秒后可再试），"
+            f"并已记入「需代理」名单。如需访问境外网站，请先启动代理软件，"
+            f"再把网络模式切为「全量」。"
         )
     return None, None
 

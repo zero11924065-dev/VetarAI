@@ -39,15 +39,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "data_root": "~/.subagent",
     "default_model": "qwen3.8",
     "plugin_repos": [],
-    "egress_allowlist": [],
+    # B11（0.4.13）：「需代理」名单——仅 auto（标准）模式生效。
+    # 语义：名单内域名在标准模式下**拒绝直连**并提示切换全量；全量模式下命中名单
+    # 仍走代理放行（名单不影响全量）。
+    # 来源：① 自动——标准模式下境外域名连续直连失败触发熔断时写入（见 guard.py）
+    #       ② 手动——用户在设置页添加。
+    # ⛔ 取代原 egress_allowlist（白名单）：旧白名单在 auto 下已无语义（境内/本地段本就
+    # 直连，境外未熔断也直连尝试），且"OFF 状态仅白名单可直连"的文案对应的 OFF 态早已不存在。
+    "egress_proxy_required": [],
     # 本地服务（应用自身端口也可配置）
     "sidecar_host": "127.0.0.1",
     "sidecar_port": 8765,
     "vite_port": 5173,
-    # 网络模式（2026-08-28 融合方案：开关→三态）
-    # auto（默认）：境内/名单直连；境外放行直连尝试，连续失败自动熔断（防无代理空转）
-    # proxy：境外走配置代理（用户已启动代理软件时使用）
+    # 网络模式（2026-08-28 融合方案：开关→三态；B11 起与 egress_proxy_required 协同）
+    # auto（标准，默认）：境内/本地段直连；境外域名直连尝试，连续失败自动熔断（防无代理空转），
+    #                    熔断的域名写入「需代理」名单，此后标准模式直接拒绝并提示切全量
+    # proxy（全量）：境外域名一律走配置代理（用户已启动代理软件时使用）；
+    #               「需代理」名单在本模式下**不拦截**，但真不可达的站点仍受熔断保护
     # 遗留值 on/off 读取时自动迁移为 proxy/auto
+    # ⚠️ 切换本键会重置熔断器（熔断历史属"直连路径"，对"走代理路径"无参考价值；
+    #    不重置会导致 auto 下熔断的站点切到全量后仍被秒拒，切换失去意义）
     "network_switch": "auto",
     # 联网搜索端点（TS-104 R01；零硬编码：工具只读本键，不写死地址）
     # 2026-08-28 融合方案：搜索工具多源自动降级（按网络模式决定优先顺序）
@@ -195,10 +206,13 @@ def _save(cfg: dict[str, Any]) -> None:
 
 import re as _re
 
-def _valid_allowlist_entry(e: str) -> bool:
-    """合法放行名单项：普通域名（baidu.com）或 *.xxx 通配（*.qq.com）。
+def _valid_domain_entry(e: str) -> bool:
+    """合法域名名单项：普通域名（baidu.com）或 *.xxx 通配（*.qq.com）。
 
     不接受：空串、单标签、IP（1.2.3.4 / 999.999.999）、URL、含下划线。
+
+    B11（0.4.13）：原 `_valid_allowlist_entry`，随白名单→「需代理」名单改造更名。
+    规则未变——校验的是"域名写法合法性"，与名单语义无关，故可直接复用。
     """
     e = e.strip().lower().rstrip(".")
     if not e:
@@ -238,13 +252,13 @@ def _validate(cur: dict[str, Any]) -> None:
         raise ValueError("default_model 不能为空")
     if cur.get("network_switch") not in ("on", "off", "auto", "proxy"):
         raise ValueError("network_switch 必须是 auto/proxy（遗留值 on/off 会自动迁移）")
-    al = cur.get("egress_allowlist")
-    if al is not None:
-        if not (isinstance(al, list) and all(isinstance(x, str) for x in al)):
-            raise ValueError("egress_allowlist 必须是字符串数组")
-        for entry in al:
-            if not _valid_allowlist_entry(entry):
-                raise ValueError(f"egress_allowlist 含非法域名: {entry!r}（需为合法域名，支持 *.xxx 通配）")
+    pr = cur.get("egress_proxy_required")
+    if pr is not None:
+        if not (isinstance(pr, list) and all(isinstance(x, str) for x in pr)):
+            raise ValueError("egress_proxy_required 必须是字符串数组")
+        for entry in pr:
+            if not _valid_domain_entry(entry):
+                raise ValueError(f"egress_proxy_required 含非法域名: {entry!r}（需为合法域名，支持 *.xxx 通配）")
     mtr = cur.get("max_tool_rounds")
     if not isinstance(mtr, int) or not (1 <= mtr <= 1000):
         raise ValueError("max_tool_rounds 必须是 1-1000 的整数")
@@ -342,17 +356,14 @@ def get_config() -> dict[str, Any]:
         if raw_switch in ("on", "off"):
             merged["network_switch"] = "proxy" if raw_switch == "on" else "auto"
             missing.append("network_switch")  # 触发写盘
-        # 2026-08-28 问题1修复：放行名单幂等自愈——
-        # 用户现有 config 的 egress_allowlist 可能是空数组（磁盘值覆盖了默认值），
-        # 导致搜索工具无法访问国内源。自动补入缺失的默认条目。
-        default_al = DEFAULT_CONFIG.get("egress_allowlist") or []
-        cur_al = merged.get("egress_allowlist") or []
-        added = [e for e in default_al if e not in cur_al]
-        if added:
-            merged["egress_allowlist"] = cur_al + added
-            missing.append("egress_allowlist")  # 触发写盘
-        # checkpoint-047 幂等迁移：全局插件/技能开关已废弃（改逐项开关），清理旧值
-        for legacy in ("plugins_enabled", "skills_enabled"):
+        # checkpoint-047 幂等迁移：全局插件/技能开关已废弃（改逐项开关），清理旧值。
+        # B11（0.4.13）追加 egress_allowlist：白名单制已被「需代理」名单制取代。
+        # ⛔ **只删除，不迁移**——两者语义完全相反（白名单=允许直连放行；
+        # 需代理=标准模式下拒绝直连）。若把旧条目搬进 egress_proxy_required，
+        # 会把"允许"反转成"拒绝"，导致原本正常的站点在标准模式下被拦。
+        # 实测：删键后磁盘 config.json 里的残留**不会报错**（_validate 的未知键检查只拦
+        # reload_config 的 patch，不拦磁盘残留），会变成无人读取的僵尸键，故须主动 pop。
+        for legacy in ("plugins_enabled", "skills_enabled", "egress_allowlist"):
             if legacy in merged:
                 merged.pop(legacy)
                 missing.append(legacy)  # 触发写盘（移除）
@@ -368,6 +379,7 @@ def reload_config(patch: dict[str, Any] | None = None) -> dict[str, Any]:
     global _MEM
     with _LOCK:
         cur = {**DEFAULT_CONFIG, **_load_from_disk()}
+        _prev_switch = str(cur.get("network_switch", "")).lower()
         if patch:
             for k, v in patch.items():
                 if k not in DEFAULT_CONFIG:
@@ -376,4 +388,18 @@ def reload_config(patch: dict[str, Any] | None = None) -> dict[str, Any]:
         _validate(cur)
         _save(cur)
         _MEM = dict(cur)
+        # B11（0.4.13）：切换网络模式必须重置熔断器。
+        # ⛔ 否则 B11 名单制失去意义：auto 下某站直连失败被熔断（300s 秒拒）并写入
+        # 「需代理」名单 → 用户切到 proxy 想走代理访问它 → 熔断器仍开着 → 照样被秒拒，
+        # 切换白切了。熔断历史属"直连路径"的失败记录，对"走代理路径"毫无参考价值。
+        # 反向同理（proxy→auto 也应重新给直连一次机会）。
+        # 放在 _save 之后：配置已落盘成功才清熔断，避免写失败却清了状态。
+        # ⚠️ 函数内延迟导入：guard.py 的 _cfg() 也延迟导入 config，双向模块级导入会成环。
+        _new_switch = str(cur.get("network_switch", "")).lower()
+        if _new_switch != _prev_switch:
+            try:
+                from sidecar.network.guard import guard_reset_circuit
+                guard_reset_circuit()
+            except Exception as e:  # 清熔断失败不应让配置写入整体失败
+                print(f"[config] WARN: 切换网络模式后重置熔断器失败: {e}", flush=True)
         return dict(cur)

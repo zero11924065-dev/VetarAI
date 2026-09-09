@@ -56,15 +56,25 @@ async def main():
     from sidecar.agent_engine.loop import tools_spec
     guard.guard_reset_circuit()
 
+    # B11（0.4.13）隔离：guard_report_failure 现在会在熔断时调 reload_config **写磁盘**
+    # config.json（把域名持久化进「需代理」名单）。本文件只桩了 get_config、没桩写入路径，
+    # 若不钉死 get_config_path，跑测试会污染用户真实 ~/.subagent/config.json
+    # （实测已发生过：写入 google.com 并打乱 egress_allowlist 键序，已逐字节还原）。
+    import tempfile
+    import sidecar.config.store as _cs
+    _TMP_CFG_DIR = Path(tempfile.mkdtemp(prefix="ws_cfg_"))
+    _cs.get_config_path = lambda: _TMP_CFG_DIR / "config.json"
+
     # ── 1. 入参契约 ──
     cfgmod.get_config = lambda: {"network_switch": "auto",
                                  "web_search_url": "https://search.example.com/q",
-                                 "egress_allowlist": []}
+                                 "egress_proxy_required": []}
     r = await execute("web_search", {}, "/tmp")
     check("1 缺 query → bad_arg", r.get("ok") is False and "bad_arg" in r.get("error", ""), str(r))
 
     # ── 2. 全源连接失败 → 结构化错误 + 熔断秒拒（融合方案：不再发起前拒绝）──
-    # 注意：两个端点域名都不在放行名单——名单命中的域名是用户明确放行，不走熔断
+    # 注意：两个端点域名都不在「需代理」名单——名单命中的域名在标准模式会被直接拒绝
+    # （不走熔断、也不发起请求），本用例要测的是"发起后失败→熔断"路径，故名单留空。
     import sidecar.tools.web_search as ws
 
     class FailClient:
@@ -79,7 +89,7 @@ async def main():
     cfgmod.get_config = lambda: {"network_switch": "auto",
                                  "web_search_url": "https://search.example.com/q",
                                  "web_search_url_cn": "https://cn.example.com/s",
-                                 "egress_allowlist": []}
+                                 "egress_proxy_required": []}
     r = await execute("web_search", {"query": "北京天气"}, "/tmp")
     check("2 全源失败 → search_failed（不假装成功）",
           r.get("ok") is False and r.get("error", "").startswith("search_failed"), str(r)[:200])
@@ -125,7 +135,10 @@ async def main():
     cfgmod.get_config = lambda: {"network_switch": "auto",
                                  "web_search_url": "https://www.so.com/s",
                                  "web_search_url_cn": "https://cn.example.com/s",
-                                 "egress_allowlist": ["so.com"]}
+                                 # B11：旧桩此处的 ["so.com"] 是**白名单**语义（允许直连）；
+                                 # 换成「需代理」名单后语义反转（标准模式拒绝直连 so.com），
+                                 # 会使本用例断言的"先试首源再降级"落空。新语义下"可达"=不在名单，故留空。
+                                 "egress_proxy_required": []}
     r = await execute("web_search", {"query": "北京天气", "max_results": 5}, "/tmp")
     check("3 首源失败自动降级次源 → ok", r.get("ok") is True, str(r)[:200])
     check("3 确实先试了首源再切次源", len(call_log) >= 2 and "cn.example.com" in call_log[0][1] and "so.com" in call_log[1][1], str(call_log))
@@ -144,7 +157,8 @@ async def main():
                                  "web_search_url": "https://www.so.com/s",
                                  "web_search_url_cn": "https://cn.example.com/s",
                                  "proxy_http_port": 21081,
-                                 "egress_allowlist": ["so.com"]}
+                                 # B11：proxy 模式下「需代理」名单不拦截，此处留空避免白名单遗留误导
+                                 "egress_proxy_required": []}
     r = await execute("web_search", {"query": "x"}, "/tmp")
     check("3b proxy 模式国际源排前（先请求 so.com）", len(call_log) >= 1 and "so.com" in call_log[0][1], str(call_log))
     ws.httpx.AsyncClient = orig_client
@@ -192,7 +206,8 @@ async def main():
     cfgmod.get_config = lambda: {"network_switch": "auto",
                                  "web_search_url": "https://html.duckduckgo.com/html/",
                                  "web_search_url_cn": "https://www.so.com/s",
-                                 "egress_allowlist": ["so.com"]}
+                                 # B11：auto 下名单会拒绝直连 so.com，本用例要测的是沙盒无关性，留空
+                                 "egress_proxy_required": []}
     r1 = await execute("web_search", {"query": "x"}, "/tmp/any_sandbox_1")
     r2 = await execute("web_search", {"query": "x"}, "/tmp/any_sandbox_2")
     check("6 web_search 不走沙盒（任意 sandbox_root 均放行）",
@@ -246,7 +261,7 @@ async def main():
     check("10A 前置：熔断器已开启", guard.guard_circuit_open("intl.example.com") is True)
     cfgmod.get_config = lambda: {"network_switch": "auto",
                                  "web_search_url": "https://intl.example.com/q",
-                                 "egress_allowlist": []}
+                                 "egress_proxy_required": []}
     ws.httpx.AsyncClient = lambda **kw: FailClient()
     r = await execute("web_search", {"query": "今日金价"}, "/tmp")
     check("10A 熔断开启+全源失败 → error 含「已熔断」",
@@ -260,7 +275,7 @@ async def main():
     guard.guard_reset_circuit()
     cfgmod.get_config = lambda: {"network_switch": "auto",
                                  "web_search_url": "https://search.example.com/q",
-                                 "egress_allowlist": []}
+                                 "egress_proxy_required": []}
     r = await execute("web_search", {"query": "x"}, "/tmp")
     check("10B 熔断关闭+全源失败 → error 保持原样（所有搜索源均不可用）",
           r.get("ok") is False and "所有搜索源均不可用" in str(r.get("error", "")), str(r)[:250])
@@ -273,7 +288,7 @@ async def main():
     guard.guard_report_failure("intl2.example.com")
     cfgmod.get_config = lambda: {"network_switch": "auto",
                                  "web_search_url": "https://intl2.example.com/q",
-                                 "egress_allowlist": []}
+                                 "egress_proxy_required": []}
     r = await execute("web_search", {"query": "今日金价"}, "/tmp")
     check("10C auto+熔断开启 → error 含「启动代理」指引",
           r.get("ok") is False and "已熔断" in str(r.get("error", "")) and "启动代理" in str(r.get("error", "")),
