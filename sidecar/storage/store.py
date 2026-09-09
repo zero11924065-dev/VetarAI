@@ -207,6 +207,12 @@ def _ensure_schema(conn: sqlite3.Connection):
     # TS-120（0.3.0）：消息归档标记（已移入知识仓库的消息脱离模型上下文）
     if "archived" not in cols:
         conn.execute("ALTER TABLE session_messages ADD COLUMN archived INTEGER DEFAULT 0")
+    # C8（0.4.16）：停止态落库。此前用户停止生成的那条助手回复**只在本地缓存里标 stopped，
+    # 从不写进 DB** → 刷新/切回会话时缓存副本与 DB 定稿内容不一致（content 被拼了「（已停止）」），
+    # 按内容去重失配 → 副本被追加到会话末尾且重复（C8 根因②③）。落库后停止态成为 DB 权威字段，
+    # 前端不再需要把「（已停止）」拼进 content。幂等迁移，旧库无此列时补齐。
+    if "stopped" not in cols:
+        conn.execute("ALTER TABLE session_messages ADD COLUMN stopped INTEGER DEFAULT 0")
     # TS-109 增强（H18-3）：圆桌议题附件列（幂等迁移；旧库无此列时补齐）
     rt_cols = {r[1] for r in conn.execute("PRAGMA table_info(roundtables)").fetchall()}
     if rt_cols and "attachments" not in rt_cols:
@@ -635,14 +641,16 @@ def delete_session(project_id: str, session_id: str) -> bool:
 def save_message(project_id: str, session_id: str, agent_id: str, role: str, content: str,
                  images: list[str] | None = None, model_used: str | None = None,
                  tool_steps: list[dict] | None = None, truncated: bool = False,
-                 prompt_eval_count: int | None = None):
+                 prompt_eval_count: int | None = None, stopped: bool = False):
+    # C8（0.4.16）：stopped 标记用户主动停止的那条助手回复，落库后成为权威字段，
+    # 前端据此显示"已手动停止"，不再需要把「（已停止）」文字拼进 content（根因②）。
     with _write_conn(project_id) as conn:
         conn.execute(
-            "INSERT INTO session_messages (session_id, agent_id, project_id, role, content, images, model_used, tool_steps, truncated, prompt_eval_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO session_messages (session_id, agent_id, project_id, role, content, images, model_used, tool_steps, truncated, prompt_eval_count, stopped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (session_id, agent_id, project_id, role, content,
              json.dumps(images) if images else None, model_used,
              json.dumps(tool_steps, ensure_ascii=False) if tool_steps else None,
-             1 if truncated else 0, prompt_eval_count),
+             1 if truncated else 0, prompt_eval_count, 1 if stopped else 0),
         )
         # 更新会话时间
         conn.execute("UPDATE sessions SET updated_at = datetime('now') WHERE id = ?", (session_id,))
@@ -694,7 +702,7 @@ def delete_messages_before(project_id: str, session_id: str, keep_recent: int) -
 def load_messages(project_id: str, session_id: str) -> list[dict[str, Any]]:
     with _read_conn(project_id) as conn:
         rows = conn.execute(
-            "SELECT id, role, content, images, model_used, created_at, tool_steps, truncated, prompt_eval_count, COALESCE(archived, 0) FROM session_messages WHERE session_id = ? ORDER BY id",
+            "SELECT id, role, content, images, model_used, created_at, tool_steps, truncated, prompt_eval_count, COALESCE(archived, 0), COALESCE(stopped, 0) FROM session_messages WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
     result = []
@@ -716,6 +724,8 @@ def load_messages(project_id: str, session_id: str) -> list[dict[str, Any]]:
             msg["prompt_eval_count"] = r[8]
         if r[9]:
             msg["archived"] = True  # TS-120：已移入知识仓库，脱离模型上下文
+        if r[10]:
+            msg["stopped"] = True  # C8（0.4.16）：停止态从 DB 权威读取，前端据此显示"已手动停止"
         result.append(msg)
     return result
 

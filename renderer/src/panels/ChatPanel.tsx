@@ -486,12 +486,24 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   function mergeDbWithLocal(dbMsgs: Message[], local: Message[], live: boolean): Message[] {
     const dbIds = new Set(dbMsgs.map(m => String(m.id ?? '')));
     const dbByContent = new Set(dbMsgs.filter(m => m.content).map(m => `${m.role}::${m.content}`));
+    // C8（0.4.16）：DB 同 role 定稿 content 列表，用于**前缀匹配**。
+    // ⛔ 精确匹配不够：前端 abort 时可能比后端少收几个 token，缓存 content 是 DB 定稿的
+    // **前缀**而非全等 → 精确匹配失配 → 副本被当新消息追加到末尾且重复（C8 根因①）。
+    // 配合"停止态已落库 + 不再拼（已停止）"，前缀匹配即可让停止气泡与 DB 定稿正确去重。
+    const dbContentsByRole: Record<string, string[]> = {};
+    for (const m of dbMsgs) { if (m.content) (dbContentsByRole[m.role] ||= []).push(m.content); }
+    const matchesDb = (role: string, content: string): boolean => {
+      if (!content) return false;
+      if (dbByContent.has(`${role}::${content}`)) return true;            // 精确
+      const list = dbContentsByRole[role] || [];
+      return list.some(db => db.length > content.length && db.startsWith(content));  // 前缀
+    };
     const extra: Message[] = [];
     for (const m of local) {
       const key = String(m.id ?? '');
       if (key.startsWith('local_')) {
-        // 流式气泡：若 DB 已有同角色同内容的定稿（流式期间已落盘），以 DB 为准不重复追加
-        if (m.content && dbByContent.has(`${m.role}::${m.content}`)) continue;
+        // 流式气泡：若 DB 已有同角色、内容相同或以其为前缀的定稿（流式期间已落盘），以 DB 为准不重复追加
+        if (m.content && matchesDb(m.role, m.content)) continue;
         // 活流（该会话仍有进行中的流）→ 原样保留，流会继续推进（H16 语义）
         if (live) { extra.push(m); continue; }
         // checkpoint-059：僵尸气泡清理——空内容（且无工具步骤）的进行态气泡不恢复
@@ -521,7 +533,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         let local: Message[] = [];
         try { local = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')[sid] || []; } catch { local = []; }
         const live = activeStreamSidRef.current === sid;
-        const merged = local.length > 0 ? mergeDbWithLocal(msgs as Message[], local, live) : (msgs as Message[]);
+        // C8（0.4.16）：后端 stopped 列 = 用户主动停止（只在 C2取消/CancelledError 路径落 True，
+        // done 路径为 False）→ 语义等价前端 manualStopped。DB 来源的消息据此映射出 manualStopped，
+        // 使刷新/切回会话后仍显示"已手动停止"标签（此前停止态不落库，刷新即丢，是 C8 根因③）。
+        // ⛔ 只映射 DB 来源：前端内存的 stopped 语义更宽（done/error 也置，见 useMessages.ts），
+        // 不能全局把 stopped 当 manualStopped，否则正常完成也会显示"已手动停止"（C6 修过的缺陷）。
+        const dbMsgs = (msgs as Message[]).map(m =>
+          (m.stopped && !m.manualStopped) ? { ...m, manualStopped: true } : m);
+        const merged = local.length > 0 ? mergeDbWithLocal(dbMsgs, local, live) : dbMsgs;
         setLocalMessages(merged);
         syncSessionLocal(sid, merged); // 合并结果回写缓存，缓存从此与 DB 对齐
         restoreTokenIndicator(merged);
@@ -1404,7 +1423,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         closeThinkingPhase();
         const c = accContent; accContent = '';
-        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, manualStopped: true, thinking: false }));
+        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false }));
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
         setSending(false);
       }
@@ -1526,7 +1545,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             const c = accContent; accContent = '';
             // 0.4.12（C6）：只有 AbortError 才是**用户手动停止**，故额外置 manualStopped；
             // done/error 路径只置 stopped（"流已终止"），不再被渲染成"已手动停止"。
-            patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, manualStopped: true, thinking: false }));
+            patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false }));
             // B07：停止时的已生成部分也同步本地缓存
             setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
             break;
@@ -1559,7 +1578,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         const c = accContent; accContent = '';
         // 0.4.12（C6）：同上，仅此处（用户手动停止）置 manualStopped
-        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, manualStopped: true, thinking: false }));
+        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false }));
         // B07：停止时的已生成部分也同步本地缓存
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
       } else {

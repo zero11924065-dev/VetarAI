@@ -1055,14 +1055,18 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
 
     _state: dict = {"text": "", "steps": [], "saved": False, "prompt_eval_count": None}
 
-    def _persist_assistant(truncated: bool = False):
+    def _persist_assistant(truncated: bool = False, stopped: bool = False):
         if not (_pid and _sid) or _state["saved"]:
             return
         _state["saved"] = True
         try:
+            # C8（0.4.16）：stopped=True 标记"用户主动停止"的那条助手回复并落库。
+            # ⛔ _state["saved"] 门闩保证每条流只落库一次：C2 的 handleStop 先发 stop
+            # 请求再 abort，故取消分支(下方)与 CancelledError 分支存在竞态——但两者都传
+            # stopped=True，无论哪条先落库结果一致，竞态自然消解。
             save_message(_pid, _sid, _aid, "assistant", _state["text"],
                          model_used=req.model, tool_steps=_state["steps"] or None,
-                         truncated=truncated,
+                         truncated=truncated, stopped=stopped,
                          prompt_eval_count=_state.get("prompt_eval_count"))
         except Exception:
             pass  # 持久化失败不阻塞流（前端仍持有事件内容）
@@ -1230,7 +1234,8 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                             pass
                     next_task = None
                     # 已生成内容照常落库（与客户端断连路径一致，不丢用户已看到的部分）
-                    _persist_assistant(truncated=True)
+                    # C8：这是用户主动停止的权威路径 → 落 stopped=True
+                    _persist_assistant(truncated=True, stopped=True)
                     if _exec_state.get("status") == "running":
                         _flush_exec_state(status="interrupted", detail="用户已停止生成")
                     # 通知前端：这是**用户主动停止**，不是错误（前端据此显示"已手动停止"）
@@ -1327,7 +1332,9 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         except asyncio.CancelledError:
             # B06：客户端断开 → 已生成部分落盘（truncated 标记）后静默结束。
             # 注意：取消路径下不允许 await，落盘用 sqlite 同步连接（本函数内为同步调用）。
-            _persist_assistant(truncated=True)
+            # C8：客户端断开（含用户点停止触发的 abort）= 生成被中断 → 落 stopped=True，
+            # 使刷新后该消息显示"已手动停止"，且与缓存副本内容一致而去重（不再挪到末尾）。
+            _persist_assistant(truncated=True, stopped=True)
             _flush_exec_state(status="interrupted", detail="客户端断开")
             raise
         except Exception as e:  # 最终安全网：任何异常都转 error 事件，不裸抛堆栈
