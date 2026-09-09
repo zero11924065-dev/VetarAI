@@ -68,7 +68,9 @@ beforeEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
 describe('ModelOptionsEditor 单元', () => {
   it('编辑 num_ctx → onSave 带正确的 model_options 结构', async () => {
-    const onSave = vi.fn(async () => {});
+    // ⛔ 必须声明参数类型：否则 vi.fn 的 mock.calls 元素被推断为空元组 []，
+    // 取 calls[i][0] 会报 TS2493（本文件曾因此漏过 typecheck）。
+    const onSave = vi.fn(async (_patch: Record<string, any>) => {});
     render(<ModelOptionsEditor cfg={{ model_options: { 'qwen3.8': { num_ctx: 4096 } } }}
       busy={false} onSave={onSave} isOllama focus="qwen3.8" />);
     const input = screen.getByPlaceholderText('如 8192');
@@ -80,7 +82,9 @@ describe('ModelOptionsEditor 单元', () => {
   });
 
   it('清空某项 → 从 model_options 移除该键（回落模型默认）', async () => {
-    const onSave = vi.fn(async () => {});
+    // ⛔ 必须声明参数类型：否则 vi.fn 的 mock.calls 元素被推断为空元组 []，
+    // 取 calls[i][0] 会报 TS2493（本文件曾因此漏过 typecheck）。
+    const onSave = vi.fn(async (_patch: Record<string, any>) => {});
     render(<ModelOptionsEditor cfg={{ model_options: { 'qwen3.8': { temperature: 0.5 } } }}
       busy={false} onSave={onSave} isOllama focus="qwen3.8" />);
     const input = screen.getByPlaceholderText('0.0 ~ 2.0');
@@ -92,7 +96,9 @@ describe('ModelOptionsEditor 单元', () => {
   });
 
   it('越界值 → 显示错误且不调用 onSave（不注入坏值）', async () => {
-    const onSave = vi.fn(async () => {});
+    // ⛔ 必须声明参数类型：否则 vi.fn 的 mock.calls 元素被推断为空元组 []，
+    // 取 calls[i][0] 会报 TS2493（本文件曾因此漏过 typecheck）。
+    const onSave = vi.fn(async (_patch: Record<string, any>) => {});
     render(<ModelOptionsEditor cfg={{ model_options: { 'qwen3.8': {} } }}
       busy={false} onSave={onSave} isOllama focus="qwen3.8" />);
     fireEvent.change(screen.getByPlaceholderText('0.0 ~ 2.0'), { target: { value: '99' } });
