@@ -81,6 +81,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "inference_base_url": "",            # openai_compatible 时必填（如 http://localhost:1234/v1）；ollama 用 ollama_base_url
     "inference_api_key": "",             # 可选（远程中转服务才需要）
     "openai_compat_supports_tools": True,  # OpenAI 兼容后端是否支持工具调用（部分本地服务器不支持）
+
+    # ── 第 2 批（0.4.15）A1：推理超时可配 ────────────────────────────────
+    # 此前超时**全硬编码**（connector.py 的 CONNECT_TIMEOUT=10 / READING_TIMEOUT=300 /
+    # STREAM_READ_TIMEOUT=1800），本地 30B/35B 模型上 300s 非流式读超时偏紧，
+    # 用户无法调整（config 里只有 delegation_activity_timeout / auth_confirm_timeout 两项超时）。
+    # ⛔ 0 或缺省 = 用原硬编码值（向后兼容：不设就和改造前逐字节一致）。
+    # ⚠️ timeout_stream_reading 被 openai_compat.py 复用，改一处两个后端都生效。
+    "timeout_connect": 0,          # 连接超时（秒）；0=默认 10
+    "timeout_reading": 0,          # 非流式读超时（秒）；0=默认 300
+    "timeout_stream_reading": 0,   # 流式读超时（秒）；0=默认 1800（覆盖 qwen thinking 长间隙）
+
+    # ── 第 2 批（0.4.15）A2/A4：每模型推理参数 ───────────────────────────
+    # 结构：{模型名: {参数名: 值}}，例如 {"qwen3.8": {"num_ctx": 8192, "temperature": 0.3}}
+    # 取值与后端映射统一走 sidecar/ollama/infer_options.py（⛔ 不要在 connector 里散着读）。
+    # 模型名支持去 tag 匹配：配 "qwen3.8" 对 "qwen3.8:latest" 同样生效
+    # （否则用户配置会静默失效，这类"设了不生效"极难排查）。
+    # ⛔ 两个后端参数名不同：Ollama 用 num_ctx/repeat_penalty/num_predict；
+    #    OpenAI 兼容端用 frequency_penalty/max_tokens 且**无 num_ctx**（注入时自动丢弃）。
+    # ⚠️ num_ctx 越大 prefill 越慢（B7 联动），故**不设默认值**——不传即沿用模型自身默认。
+    "model_options": {},
     # M7（TS-113）：体验与契约增强
     "default_export_dir": "",            # 默认导出目录（空=项目工作目录）；圆桌导出/交卷报告/会话导出统一走此配置
     "vision_parse_attachments": False,   # 圆桌图片附件是否走视觉模型识别（默认关）
@@ -294,6 +314,17 @@ def _validate(cur: dict[str, Any]) -> None:
     ocs = cur.get("openai_compat_supports_tools")
     if ocs is not None and not isinstance(ocs, bool):
         raise ValueError("openai_compat_supports_tools 必须是 bool")
+    # 第 2 批（0.4.15）A1/A2/A4：超时与推理参数校验。
+    # ⛔ 校验规则**只在 infer_options 里定义一份**，此处调用而非重写——
+    # 两处各写一遍必然漂移（改了范围忘了同步），是典型的"冗余"而非"防御性编程"。
+    # 延迟导入：config 是最底层模块，避免与 ollama 包形成模块级循环导入。
+    from sidecar.ollama import infer_options as _io
+    _err = _io.timeout_validate(cur)
+    if _err:
+        raise ValueError(_err)
+    _err = _io.validate_model_options(cur.get("model_options"))
+    if _err:
+        raise ValueError(_err)
     # M7（TS-113）：导出目录与附件视觉解析校验
     ded = cur.get("default_export_dir")
     if ded is not None and not isinstance(ded, str):

@@ -37,6 +37,10 @@ import httpx
 from sidecar.network.guard import guard_request, NetworkGuardError
 from sidecar.config import get_config
 from sidecar.ollama.connector import OllamaAPIError, CONNECT_TIMEOUT, STREAM_READ_TIMEOUT
+# 第 2 批（0.4.15）A1-A4：与 OllamaConnector 共用同一取值口径（超时 + 推理参数）。
+# ⚠️ 上面 import 的 CONNECT_TIMEOUT / STREAM_READ_TIMEOUT 现仅作兜底参照，
+# 实际生效值一律走 _infer.timeout_*()（config 配了就用配置，未配才回落常量）。
+from sidecar.ollama import infer_options as _infer
 
 
 def _host_of(base_url: str) -> str:
@@ -73,9 +77,18 @@ class OpenAICompatConnector:
             raise NetworkGuardError(reason, _host_of(self._base()))
         return proxies
 
-    async def _client(self, reading: float = 300.0,
-                      connect: float = CONNECT_TIMEOUT) -> httpx.AsyncClient:
-        """共享复用 client（调用方不得关闭）；配置指纹变化 → 关闭旧连接重建。"""
+    async def _client(self, reading: float | None = None,
+                      connect: float | None = None) -> httpx.AsyncClient:
+        """共享复用 client（调用方不得关闭）；配置指纹变化 → 关闭旧连接重建。
+
+        A1（0.4.15）：超时改为每次调用**动态读 config**。
+        ⛔ 原写法 `reading: float = 300.0` / `connect: float = CONNECT_TIMEOUT` 有陷阱：
+        Python 默认参数在**模块加载时求值一次**，用户在设置页改了超时永远拿不到新值。
+        """
+        if reading is None:
+            reading = _infer.timeout_reading()
+        if connect is None:
+            connect = _infer.timeout_connect()
         state = self._config_state()
         if state != self._state:
             for c in self._clients.values():
@@ -162,6 +175,10 @@ class OpenAICompatConnector:
     async def chat(self, model: str, messages: list[dict[str, Any]], *,
                    stream: bool = False, images: list[str] | None = None) -> str:
         payload: dict[str, Any] = {"model": model, "messages": list(messages), "stream": False}
+        # A2/A4（0.4.15）：注入推理参数。⚠️ OpenAI 兼容端参数是**顶层字段**（非嵌套 options），
+        # 且 num_ctx / top_k 不被支持 → model_options() 内部已按后端映射并静默丢弃，
+        # 直接透传会导致 400 或参数被忽略。
+        payload.update(_infer.model_options(model))
         dropped_images = 0
         if images:
             parsed = []
@@ -220,6 +237,8 @@ class OpenAICompatConnector:
         """
         payload: dict[str, Any] = {"model": model, "messages": list(messages), "stream": True,
                                    "stream_options": {"include_usage": True}}
+        # A2/A4（0.4.15）：同上，流式路径同样注入
+        payload.update(_infer.model_options(model))
         if tools:
             payload["tools"] = tools
         if images:
@@ -227,7 +246,8 @@ class OpenAICompatConnector:
             if parts:
                 payload["messages"] = self._merge_images_into_messages(payload["messages"], parts)
 
-        client = await self._client(reading=STREAM_READ_TIMEOUT)
+        # A1（0.4.15）：流式超时动态读 config（timeout_stream_reading），未配置回落 1800s
+        client = await self._client(reading=_infer.timeout_stream_reading())
         usage_counts = {"prompt_eval_count": 0, "eval_count": 0}
         # 工具调用累积缓冲：{index: {"id":..., "name":..., "arguments":...}}
         tc_buf: dict[int, dict[str, str]] = {}

@@ -30,11 +30,19 @@ from typing import Any
 
 from sidecar.network.guard import guard_request, NetworkGuardError
 from sidecar.config import get_config
+# 第 2 批（0.4.15）A1-A4：推理超时与参数的**唯一取值口径**。
+# ⛔ 不要在 connector 里直接 get_config() 读 timeout_*/model_options——
+# payload 构造点有 4 处、超时常量还被 openai_compat 跨模块复用，散着读必然改漏。
+from sidecar.ollama import infer_options as _infer
 
 # 超时拆分（P1-4 回归修复）：
 #   CONNECT/代理握手 10s —— 防空转卡死（guard 发起前拒绝不受影响）
 #   推理/读取 300s —— 正常长回复不被掐断
 # 禁止用单一全局大数糊弄。
+# ⚠️ A1（0.4.15）后这三个常量是**兜底默认值**，不再是实际生效值：
+# 实际取值走 _infer.timeout_*()（config 配了就用配置，未配才回落这里）。
+# 常量本身**不能删**——openai_compat.py:39 仍 import CONNECT_TIMEOUT/STREAM_READ_TIMEOUT，
+# 且多处测试与 _client 的类型注解引用它们。
 CONNECT_TIMEOUT = 10.0
 READING_TIMEOUT = 300.0
 
@@ -106,13 +114,25 @@ class OllamaConnector:
             raise NetworkGuardError(reason, self._host)
         return proxies
 
-    async def _client(self, reading: float = READING_TIMEOUT,
-                      connect: float = CONNECT_TIMEOUT) -> httpx.AsyncClient:
+    async def _client(self, reading: float | None = None,
+                      connect: float | None = None) -> httpx.AsyncClient:
         """TS-103 B09：返回共享复用的 client（调用方不得关闭）。
 
         每次调用先比对配置指纹：Ollama 地址/网络开关/代理端口任一变化 →
         关闭旧 client 并按新 base/host 重建（设置面板改配置即时生效，无需重启）。
+
+        A1（0.4.15）：超时改为**每次调用动态读 config**（`timeout_reading`/`timeout_connect`）。
+        ⛔ 原来的写法 `reading: float = READING_TIMEOUT` 有陷阱：Python 默认参数在
+        **模块加载时求值一次**，用户在设置页改了超时也永远拿不到新值（必须重启）。
+        故改为 None 哨兵 + 函数体内取值。传 None = 用非流式默认；
+        流式调用方显式传 `infer_options.timeout_stream_reading()`。
+        ⚠️ 超时值参与 client 缓存 key（见下方 `key = (proxy, reading, connect)`），
+        故改超时会自动建独立 client，不会复用旧超时实例。
         """
+        if reading is None:
+            reading = _infer.timeout_reading()
+        if connect is None:
+            connect = _infer.timeout_connect()
         state = self._config_state()
         if state != self._state:
             self._base = state[0].rstrip("/")
@@ -161,6 +181,10 @@ class OllamaConnector:
             "messages": messages,
             "stream": False,
         }
+        # A2/A4（0.4.15）：注入该模型的推理参数（num_ctx / temperature / top_p ...）。
+        # ⛔ 未配置时 model_options() 返回**空 dict**，update 后 payload 逐字节不变——
+        # 绝不能注入一个空 `options: {}`，部分服务端会因此报 400。
+        payload.update(_infer.model_options(model))
 
         dropped_images = 0
         if images:
@@ -232,6 +256,8 @@ class OllamaConnector:
         超时沿用 _client()：connect 10s / read 300s；过 guard；非 200 → OllamaAPIError。
         """
         payload: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+        # A2/A4（0.4.15）：同上，流式路径同样注入（聊天主链路走这里）
+        payload.update(_infer.model_options(model))
         if tools:
             payload["tools"] = tools
         # M6（TS-112）图片入流：图片合入最后一条 user 消息（Ollama 格式：images=base64 列表）
@@ -249,8 +275,9 @@ class OllamaConnector:
                         msgs[i] = merged
                         break
                 payload["messages"] = msgs
-        # 流式独立超时（STREAM_READ_TIMEOUT），覆盖 qwen thinking 间隙；connect 仍 10s
-        client = await self._client(reading=STREAM_READ_TIMEOUT)
+        # 流式独立超时，覆盖 qwen thinking 间隙。
+        # A1（0.4.15）：改动态读 config（timeout_stream_reading），未配置时回落 1800s。
+        client = await self._client(reading=_infer.timeout_stream_reading())
         # M6 checkpoint-041：流式非 200（400/500 图片不支持等）→ 剥图重试 +
         # 降级文案（与 chat() 同款），文案命中前端视觉引导卡片渲染条件。
         had_images = any("images" in m for m in payload["messages"])

@@ -54,7 +54,9 @@ from typing import Any, AsyncIterator, Callable
 from sidecar.storage.store import update_workflow_run, append_workflow_node_event
 # 0.4.11：非流式模型调用的 reading 超时上限（connector 层常量）。
 # 推理节点超时时要把它写进报错，用户才知道"等了多少秒被掐断"而非只看到空白错误。
-from sidecar.ollama.connector import READING_TIMEOUT
+# ⚠️ A1（0.4.15）：超时已改为可配（config `timeout_reading`），故**不能再引用模块级常量**——
+# 那会让用户把超时调到 900s 后，报错仍写"已等待 300s"，属误导。改为调用点动态取值。
+from sidecar.ollama import infer_options as _infer
 
 NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
               "approval", "file_input", "file_output", "file_read",
@@ -441,10 +443,10 @@ class WorkflowEngine:
             #     界面只显示"模型调用失败："，用户以为是模型出错，实际是超时）。
             #    与 T1（0.4.8）同一类缺陷、同一修法：走 _exc_text 统一带上异常类型名。
             return NodeResult(node["id"], ok=False, error=f"模型调用失败：{_exc_text(e, timeout_hint=(
-                f"模型调用超时：{type(e).__name__}。已等待 {READING_TIMEOUT:.0f}s 仍未返回"
+                f"模型调用超时：{type(e).__name__}。已等待 {_infer.timeout_reading():.0f}s 仍未返回"
                 f"（非流式调用的 reading 超时上限）。常见原因：本地大参数模型（如 35B）"
                 f"处理超长文本推理耗时超过该上限。可尝试：① 减小单批输入（循环节点分批更小）"
-                f"② 换更小的模型 ③ 提高 connector.READING_TIMEOUT。模型：{model}"))}",
+                f"② 换更小的模型 ③ 在 设置→推理 调大「非流式读超时」。模型：{model}"))}",
                 model_used=model)
         return NodeResult(node["id"], ok=True, output=text, model_used=model)
 
@@ -485,7 +487,7 @@ class WorkflowEngine:
                 # str() 为空，此前会让用户看到"裁判模型调用失败："后面一片空白）
                 return (NodeResult(node["id"], ok=False, error=f"裁判模型调用失败：{_exc_text(e, timeout_hint=(
                                        f'裁判模型调用超时：{type(e).__name__}。已等待 '
-                                       f'{READING_TIMEOUT:.0f}s 仍未返回（条件分支的动态裁判无法判定，'
+                                       f'{_infer.timeout_reading():.0f}s 仍未返回（条件分支的动态裁判无法判定，'
                                        f'已按 false 分支继续）。模型：{model}'))}",
                                    model_used=model), "false")
             lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]

@@ -56,6 +56,21 @@ class HybridConn:
         self.real = real
         self.main_calls = 0
 
+    def __getattr__(self, name):
+        """第 0 批（0.4.15）：未实现的成员一律委托给真实连接器。
+
+        本桩只 mock chat_stream（主会话两轮假回复 + 子会话转真实推理），
+        其余成员必须与真实 OllamaConnector 保持一致——否则生产代码一旦调用
+        （如 app.py 用 capabilities() 判断后端是否支持工具调用）就 AttributeError。
+        ⛔ 用委托而非逐个补方法：逐个补会在生产代码新增调用时再次断裂。
+        """
+        # self.real 在 __init__ 里赋值；赋值前的属性查找会走到这里，
+        # 若不防会无限递归（object.__getattribute__ 失败 → __getattr__ → 再失败）。
+        real = self.__dict__.get("real")
+        if real is None:
+            raise AttributeError(name)
+        return getattr(real, name)
+
     async def chat_stream(self, model, messages, tools=None):
         joined = " ".join(str(m.get("content", ""))[:200] for m in messages)
         if "【委派任务】" in joined:

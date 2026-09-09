@@ -54,7 +54,7 @@ function mockFetch(handlers: Record<string, unknown>) {
     void opts;
     return jsonRes([]);
   };
-return vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
 }
 
 describe('TS-112 M6 推理面板', () => {

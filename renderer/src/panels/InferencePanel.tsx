@@ -22,6 +22,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, input, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog } from '../Dialog';
+import { ModelOptionsEditor } from './ModelOptionsEditor';
 
 // M6（TS-112）：推理面板
 // - 状态区：当前后端 + 在线状态 + 测试连接
@@ -43,6 +44,10 @@ export function InferencePanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pullName, setPullName] = useState('');
+  // 第 2 批（0.4.15）A2/A4：模型列表行点「参数」按钮 → 让下方编辑器展开该模型。
+  // 不用「下拉选模型」的方式新增配置：那会把模型名再渲染一遍，与模型列表撞成
+  // 两处同名文本，令 getByText('qwen3.8') 报 Found multiple elements。
+  const [focusModel, setFocusModel] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -256,6 +261,46 @@ export function InferencePanel() {
         )}
       </div>
 
+      {/* ===== 第 2 批（0.4.15）A1/A2/A4：推理参数与超时 ===== */}
+      <div style={{ ...cardL, padding: '16px 20px' }}>
+        <div style={{ ...typo.sectionTitle, color: colors.textPrimary, marginBottom: 12 }}>
+          推理参数与超时
+        </div>
+
+        {/* A1：超时（0 = 用默认值）*/}
+        <div style={{ fontSize: 13, color: colors.textPrimary, marginBottom: 8 }}>推理超时（秒，填 0 = 用默认值）</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {([
+            ['timeout_connect', '连接超时', 10],
+            ['timeout_reading', '非流式读超时', 300],
+            ['timeout_stream_reading', '流式读超时', 1800],
+          ] as Array<[string, string, number]>).map(([key, label, dft]) => (
+            <div key={key} style={{ flex: '1 1 150px', minWidth: 150 }}>
+              <div style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 4 }}>{label}</div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input className="ui-input" type="number" min={0}
+                  style={{ ...input, flex: 1, fontFamily: fonts.mono }}
+                  value={String(cfg[key] ?? 0)}
+                  onChange={e => setCfg({ ...cfg, [key]: e.target.value === '' ? 0 : Number(e.target.value) })} />
+                <button className="ui-btn ui-btn-secondary" style={smallSecondary} disabled={busy}
+                  onClick={() => saveBackend({ [key]: Number(cfg[key] ?? 0) })}>保存</button>
+              </div>
+              <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 2 }}>默认 {dft}s</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 12, color: colors.textTertiary, lineHeight: 1.6, marginTop: 8 }}>
+          本地大参数模型（30B/35B）处理超长文本时，「非流式读超时」300s 可能偏紧——工作流推理节点走的就是它。
+          流式（聊天）默认 1800s，覆盖思考间隙。
+        </div>
+
+        {/* A2/A4：每模型推理参数 */}
+        <div style={{ ...typo.sectionTitle, color: colors.textPrimary, margin: '20px 0 8px' }}>
+          模型推理参数（按模型单独配置）
+        </div>
+        <ModelOptionsEditor cfg={cfg} busy={busy} onSave={saveBackend} isOllama={isOllama} focus={focusModel} />
+      </div>
+
       {/* 模型管理区 - 分区卡 */}
       <div style={{ ...cardL, padding: '16px 20px' }}>
         <div style={{ ...typo.sectionTitle, color: colors.textPrimary, marginBottom: 12 }}>
@@ -278,6 +323,20 @@ export function InferencePanel() {
                 <span style={{ fontSize: 12, color: colors.textTertiary }}>{(m.size / 1e9).toFixed(1)}GB</span>
               )}
               {m.context_length && <span style={{ fontSize: 12, color: colors.textTertiary }}>ctx {m.context_length}</span>}
+              {/* A2/A4（0.4.15）：就地配置该模型的推理参数。
+                  按钮文案不含模型名，避免与行内模型名重复渲染（保 getByText 唯一性） */}
+              <button className="ui-btn ui-btn-ghost"
+                data-tip="配置该模型的 num_ctx / temperature 等推理参数"
+                style={{ ...btnSecondary, height: 22, padding: '0 8px', fontSize: 12, background: 'transparent', border: 'none', color: (cfg.model_options || {})[m.name] ? colors.accent : colors.textTertiary }}
+                onClick={() => {
+                  const mo = { ...(cfg.model_options || {}) };
+                  if (!mo[m.name]) mo[m.name] = {};
+                  setFocusModel(m.name);
+                  saveBackend({ model_options: mo });
+                }}>
+                <Icon name="sliders" size={14} />
+                参数
+              </button>
               {isOllama && status?.capabilities?.delete && (
                 <button className="ui-btn ui-btn-ghost ui-ico-danger"
                   style={{ ...btnSecondary, height: 22, padding: '0 8px', fontSize: 12, background: 'transparent', border: 'none', color: colors.dangerText }}

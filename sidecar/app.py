@@ -448,22 +448,40 @@ async def api_model_status(model: str = ""):
 async def api_context_limit(model: str = "qwen3.8"):
     """M2 上下文上限 API：返回模型的 context_length。
 
-    - 已加载 → 从 /api/ps 读 context_length
-    - 未加载 → 兜底 262144（协议常量：qwen 系默认上限）
+    A3（0.4.15）：改为**四级取值**，此前只有两级（ps → 盲目兜底 262144）。
+    旧实现的缺陷：模型未加载时一律报 262144，而实测 deepseek-r1:14b 真实上限是 131072
+    —— 指示器会按 262144 算占比，把"已用 40%"显示成"20%"，溢出预警因此失真。
+
+    取值优先级（高 → 低）：
+      1. `config`  —— 用户在设置页为该模型显式配的 num_ctx。**最高优先**：
+                      那是用户明确要求模型使用的上下文窗口，Ollama 实际也会按它执行，
+                      指示器必须与之对齐，否则用量占比全错。
+      2. `ps`      —— 模型已加载时 Ollama 报告的**实际生效值**（最准，但需模型在内存）
+      3. `show`    —— 模型未加载时读 /api/show 的 model_info["<架构>.context_length"]
+                      （模型**自身**上限，实测 qwen3.8=262144、deepseek-r1:14b=131072）
+      4. `default` —— 上述全不可得时兜底 262144（协议常量：qwen 系默认上限）
+
     - Ollama 不可达 → {"context_length": 0, "source": "error"}
     - 非 Ollama 后端 → {"context_length": 0, "source": "unsupported"}（M6）
     整体超时 5s，失败不阻塞前端。
     """
     # M6（TS-112）：仅 Ollama 后端可查 /api/ps；其余后端返回 unsupported（前端隐藏指示器，不报错）
-    if str(get_config().get("inference_backend", "ollama")) != "ollama":
-        return {"context_length": 0, "source": "unsupported", "model": model}
-    import httpx
     cfg = get_config()
+    if str(cfg.get("inference_backend", "ollama")) != "ollama":
+        return {"context_length": 0, "source": "unsupported", "model": model}
+
+    # A3 第 1 级：用户显式配置的 num_ctx 优先（延迟导入避免模块级循环）
+    from sidecar.ollama import infer_options as _infer
+    _nc = _infer.configured_num_ctx(model)
+    if _nc:
+        return {"context_length": int(_nc), "source": "config", "model": model}
+
+    import httpx
     base = cfg.get("ollama_base_url", "http://localhost:11434").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=5.0),
                                      trust_env=False) as client:
-            # 1) 尝试 /api/ps 读已加载模型的 context_length
+            # 第 2 级：/api/ps —— 已加载模型的实际生效值
             r = await client.get(f"{base}/api/ps")
             r.raise_for_status()
             data = r.json()
@@ -474,7 +492,20 @@ async def api_context_limit(model: str = "qwen3.8"):
                     cl = m.get("context_length") or m.get("details", {}).get("context_length")
                     if cl:
                         return {"context_length": int(cl), "source": "ps", "model": name}
-            # 2) 模型未加载 → 兜底
+            # 第 3 级：/api/show —— 模型未加载也能拿到其自身上限
+            # ⛔ 实测（Ollama 0.33.3）字段路径是 model_info["<架构>.context_length"]，
+            #    架构前缀随模型而异（qwen35./qwen2./llama. ...），**不能硬编码前缀**，
+            #    故遍历 model_info 找任何以 .context_length 结尾的键。
+            try:
+                r2 = await client.post(f"{base}/api/show", json={"name": model}, timeout=5.0)
+                if r2.status_code == 200:
+                    mi = (r2.json() or {}).get("model_info") or {}
+                    for k, v in mi.items():
+                        if k.endswith(".context_length") and isinstance(v, int) and v > 0:
+                            return {"context_length": int(v), "source": "show", "model": model}
+            except Exception:
+                pass  # show 失败不致命 → 落到第 4 级兜底
+            # 第 4 级：兜底
             return {"context_length": 262144, "source": "default", "model": model}
     except Exception:
         return {"context_length": 0, "source": "error", "model": model}
