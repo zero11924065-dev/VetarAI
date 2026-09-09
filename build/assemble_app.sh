@@ -6,7 +6,7 @@ set -e
 BASE="/Users/vetar/Desktop/beta/subagent"
 OUT="$BASE/build/VetarAI.app"
 ELECTRON="$BASE/node_modules/electron/Electron.app"
-VERSION="0.4.15"
+VERSION="0.4.16"
 
 echo "[1/6] 清理旧产物..."
 rm -rf "$OUT"
