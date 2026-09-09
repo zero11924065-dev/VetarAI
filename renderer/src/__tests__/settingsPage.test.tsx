@@ -40,9 +40,26 @@ describe('SettingsPage 整页设置', () => {
     expect(screen.getByText('打开日志文件夹')).toBeTruthy();
   });
 
-  it('问题5：日志与数据缓存目录是两个独立按钮', () => {
+  it('问题5：日志与数据目录是两个独立按钮', () => {
     render(<SettingsPage projectId={null} onExit={() => {}} onOpenLogs={() => {}} onOpenDataDir={() => {}} />);
-    expect(screen.getByText('打开数据缓存目录')).toBeTruthy();
+    expect(screen.getByText('打开数据目录')).toBeTruthy();
+  });
+
+  it('C1（0.4.12）：数据目录按钮不再称"缓存"，且提示点明核心数据不可随意清理', () => {
+    render(<SettingsPage projectId={null} onExit={() => {}} onOpenLogs={() => {}} onOpenDataDir={() => {}} />);
+    // 旧文案必须彻底消失（用户实测反馈："缓存目录打开好像不是缓存文件，而是核心文件"）
+    expect(screen.queryByText('打开数据缓存目录')).toBeNull();
+    // ⚠️ 提示语内含 <b> 标签，getByText 默认只匹配"直接文本节点"，
+    //    故按位于外层的文本（请勿随意清理）取容器，再断言其完整 textContent
+    const hint = screen.getByText(/请勿随意清理/);
+    const full = hint.textContent || '';
+    // 必须同时说明"这是核心数据"与"不要随意清理"，否则改名只解决一半问题
+    expect(full).toContain('核心数据不是缓存');
+    expect(full).toContain('请勿随意清理');
+    // 提示需列全用户实际会看到的内容（模型与技能是其反馈中明确提到的两项）
+    expect(full).toContain('模型');
+    expect(full).toContain('技能');
+    expect(full).toContain('~/.subagent');
   });
 
   it('点击返回触发 onExit', () => {

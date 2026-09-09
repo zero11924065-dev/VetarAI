@@ -161,6 +161,59 @@ def main():
         _md = Path(r["path"]).read_text(encoding="utf-8")
         check("D5c md 分页标记存在", "---" in _md, _md[:60])
 
+        # ---------- D6（0.4.12 A7）：image 块尺寸 width_cm / height_cm ----------
+        # ⛔ 关键语义：add_picture 同时传 width+height 会【强制拉伸不保比例】，
+        #    只传其一则另一维按原图比例自动推算。用例覆盖：默认 / 只宽 / 只高 / 都给 / 带单位字符串。
+        _img = Path(tmp) / "_probe_2to1.png"
+        from PIL import Image
+        Image.new("RGB", (800, 400), (200, 220, 240)).save(_img)   # 宽高比恒 2.00
+
+        import docx as _docx2
+
+        async def _img_docx(name, size_fields):
+            r = await execute("create_document", {
+                "path": f"{tmp}/img_{name}.docx",
+                "content": {"title": "T", "blocks": [
+                    {"type": "image", "path": str(_img), **size_fields}]}}, tmp)
+            assert r.get("ok") is True, f"{name} 生成失败: {r}"
+            sh = _docx2.Document(r["path"]).inline_shapes[0]
+            return sh.width / 360000, sh.height / 360000   # EMU → cm
+
+        w, h = await _img_docx("default", {})
+        check("D6a 默认（都不给）→ width=13 且按比例算出 height=6.5",
+              abs(w - 13.0) < 0.02 and abs(h - 6.5) < 0.02, f"{w:.2f}x{h:.2f}")
+
+        w, h = await _img_docx("onlyw", {"width_cm": 10})
+        check("D6b 只给 width=10 → height 按比例自动=5（不变形）",
+              abs(w - 10.0) < 0.02 and abs(h - 5.0) < 0.02, f"{w:.2f}x{h:.2f}")
+
+        w, h = await _img_docx("onlyh", {"height_cm": 5})
+        check("D6c ⭐只给 height=5 → width 按比例自动=10（本次新增能力）",
+              abs(w - 10.0) < 0.02 and abs(h - 5.0) < 0.02, f"{w:.2f}x{h:.2f}")
+
+        w, h = await _img_docx("both", {"width_cm": 8, "height_cm": 6})
+        check("D6d 两者都给 → 按显式尺寸（拉伸，属用户指定意图）",
+              abs(w - 8.0) < 0.02 and abs(h - 6.0) < 0.02, f"{w:.2f}x{h:.2f}")
+
+        w, h = await _img_docx("unitstr", {"width_cm": "12cm"})
+        check("D6e 带单位字符串 '12cm' 可解析 → width=12 height=6",
+              abs(w - 12.0) < 0.02 and abs(h - 6.0) < 0.02, f"{w:.2f}x{h:.2f}")
+
+        w, h = await _img_docx("invalid", {"width_cm": "abc", "height_cm": -3})
+        check("D6f 非法值（'abc' / 负数）安全忽略 → 回落默认 13x6.5",
+              abs(w - 13.0) < 0.02 and abs(h - 6.5) < 0.02, f"{w:.2f}x{h:.2f}")
+
+        w, h = await _img_docx("grid_h", {"layout": "grid", "paths": [str(_img)] * 2,
+                                          "height_cm": 4})
+        check("D6g grid 布局也接受 height_cm（列宽固定 4.4，高度受约束）",
+              abs(h - 4.0) < 0.02, f"{w:.2f}x{h:.2f}")
+
+        from sidecar.tools.doc_writer import _to_pos_float
+        check("D6h _to_pos_float 区分「未指定」与「指定 0」（0→None 非 0.0）",
+              _to_pos_float(0) is None and _to_pos_float(None) is None
+              and _to_pos_float(True) is None and _to_pos_float("7.5") == 7.5,
+              f"0→{_to_pos_float(0)} None→{_to_pos_float(None)}")
+
     asyncio.run(run())
 
     import shutil

@@ -97,7 +97,24 @@ async def api_logs_info():
 # 侧车通过 SSE 发 auth_request 事件 → 前端弹窗 → 用户选择经 /api/auth/respond 回传
 # _auth_pending: {request_id: {"event": asyncio.Event, "result": bool}}
 _auth_pending: dict[str, dict] = {}
-_AUTH_TIMEOUT = 120.0  # 用户 2 分钟未响应 → 自动拒绝
+_AUTH_TIMEOUT_DEFAULT = 600.0  # 兜底值；实际以 config 的 auth_confirm_timeout 为准（0.4.12 B2）
+
+
+def _auth_timeout() -> float:
+    """读取权限弹窗等待超时（秒）。0.4.12（B2）。
+
+    ⛔ 此前是模块常量 `_AUTH_TIMEOUT = 120.0` 硬编码：用户离开一会儿再回来点确认，
+    超过 2 分钟就被静默记为"拒绝"（真机反馈："我前面晚点了确认，agent的记录里显示我拒绝了"）。
+    现改为读 config `auth_confirm_timeout`（默认 600s，**0 = 无限等待**，只能手动关闭弹窗）。
+    每次调用实时读取 → 用户在设置页改完立即生效，无需重启。
+    """
+    try:
+        from sidecar.config import get_config
+        v = get_config().get("auth_confirm_timeout", _AUTH_TIMEOUT_DEFAULT)
+        f = float(v)
+        return f if f >= 0 else _AUTH_TIMEOUT_DEFAULT
+    except Exception:
+        return _AUTH_TIMEOUT_DEFAULT
 
 
 async def _sse_authorizer(tool_name: str, target_path: str, action: str,
@@ -114,7 +131,9 @@ async def _sse_authorizer(tool_name: str, target_path: str, action: str,
       - 普通授权（敏感路径删除等）→ bool，保持既有 `allowed is False` 判定不变；
       - 联网安装确认（action="net_install"）→ dict {"allowed", "enable_network"}，
         以便用户同意后由调用方自动把网络模式切到 proxy（全量联网）。
-    超时（120s 未响应）一律按"拒绝"处理。
+    超时按"拒绝"处理；超时时长由 config `auth_confirm_timeout` 决定（0.4.12 B2：
+    默认 600s，**0 = 无限等待**，用户可在设置页调整——此前硬编码 120s 导致
+    用户晚点确认被误记为拒绝）。
     """
     import uuid
     _is_net_install = action == "net_install"
@@ -124,8 +143,12 @@ async def _sse_authorizer(tool_name: str, target_path: str, action: str,
                               "tool": tool_name, "path": target_path, "action": action,
                               "extra": extra or {}, "enable_network": False}
     # 等待 gen() 主循环检测到新请求并发出 SSE 事件后，前端响应唤醒此 Event
+    # 0.4.12（B2）：超时改为可配（config auth_confirm_timeout），且 0 = 无限等待。
+    # ⛔ 注意 asyncio.wait_for(timeout=0) 语义是"立即超时"而非"无限等待"，
+    #    故 0 时必须传 None，否则会一进来就判定超时 → 比硬编码 120s 更糟。
+    _to = _auth_timeout()
     try:
-        await asyncio.wait_for(evt.wait(), timeout=_AUTH_TIMEOUT)
+        await asyncio.wait_for(evt.wait(), timeout=(_to if _to > 0 else None))
     except asyncio.TimeoutError:
         _auth_pending.pop(req_id, None)
         return {"allowed": False, "enable_network": False} if _is_net_install else False

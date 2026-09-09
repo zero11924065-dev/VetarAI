@@ -65,6 +65,8 @@ interface Config {
   computer_use_enabled?: boolean;
   computer_use_confirm_each?: boolean;
   computer_use_app_whitelist?: string[];
+  // 0.4.12（B2）：权限确认弹窗等待超时秒数；0 = 无限等待
+  auth_confirm_timeout?: number;
 }
 
 // 0.4.9（3.48.1）：Computer Use 设置区——总开关 + 每步确认 + 应用白名单 + 权限探测。
@@ -487,10 +489,15 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
         </div>
       )}
 
-      {/* 问题5修复：日志与数据缓存是两个不同的目录，分两个按钮（顶层渲染，
+      {/* 问题5修复：日志与数据目录是两个不同的目录，分两个按钮（顶层渲染，
           不依赖配置加载状态，配置未加载完成也可点）：
           · 日志文件夹 → logs/（app.log / sidecar.log）
-          · 数据缓存目录 → 数据根（数据库、导出、知识索引、全局知识等） */}
+          · 数据目录 → 数据根（数据库、导出、知识索引、全局知识、模型、技能、配置等）
+      0.4.12（C1）：按钮原名「打开数据缓存目录」→ 改为「打开数据目录」。
+          用户实测反馈："缓存目录打开好像不是缓存文件，而是核心文件，我看到了索引用的模型，
+          也看到了技能目录"。该目录是 dataRoot（默认 ~/.subagent），含 projects/ knowledge/
+          models/ skills/ plugins/ config.json —— 全是**核心数据**，删了会丢项目与知识。
+          「缓存」二字会让人误以为可随意清理，属命名误导，故改名并在提示中列全内容与风险。 */}
       {(onOpenLogs || onOpenDataDir) && (
         <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
           {onOpenLogs && (
@@ -506,9 +513,13 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
             <div>
               <button className="ui-btn ui-btn-secondary" onClick={onOpenDataDir}
                 style={{ ...btnSecondary, gap: 6 }}>
-                <Icon name="database" size={14} /> 打开数据缓存目录
+                <Icon name="database" size={14} /> 打开数据目录
               </button>
-              <div style={hintStyle}>应用数据根目录：数据库、会话导出、知识仓库索引与全局知识等。按需清理前请先确认用途。</div>
+              <div style={hintStyle}>
+                应用数据根目录（默认 ~/.subagent）：项目与会话数据库、知识仓库索引与全局知识、
+                已下载的模型（如语义检索用的 bge-m3）、技能与插件、config.json 配置。
+                ⚠️ 这里是<b>核心数据不是缓存</b>，删除会丢失项目、会话与知识库，请勿随意清理。
+              </div>
             </div>
           )}
         </div>
@@ -574,6 +585,22 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
             </div>
             <div style={hintStyle}>
               重连次数：网络错误时自动重试的最大次数（1-10）。心跳间隔：长任务保活的基础间隔（5-60 秒，实际按事件节奏动态调整）
+            </div>
+
+            {/* 0.4.12（B2）：权限确认弹窗等待时长。此前硬编码 120s，用户离开一会儿再点确认
+                就被静默记为"拒绝"（真机反馈）。现可配，0 = 无限等待。 */}
+            <div style={{ marginTop: 14 }}>
+              <label style={formLabel}>权限确认等待时长（秒）</label>
+              <input className="ui-input" style={inpStyle} type="number" min={0} max={86400}
+                value={cfg.auth_confirm_timeout ?? 600}
+                onChange={e => setCfg({ ...cfg, auth_confirm_timeout: Number(e.target.value) })} />
+              <div style={hintStyle}>
+                Agent 请求敏感操作（删除系统文件、联网安装、Computer Use 点击输入等）时弹窗等你确认的时长。
+                超时未点＝按「拒绝」处理。<b>填 0 = 无限等待</b>（永不超时，只能自己关闭弹窗）。
+                {(cfg.auth_confirm_timeout ?? 600) === 0
+                  ? '当前：无限等待——你随时回来点确认都有效，不会被误判为拒绝。'
+                  : `当前：${Math.round((cfg.auth_confirm_timeout ?? 600) / 60)} 分钟内未确认将按拒绝处理。`}
+              </div>
             </div>
           </div>
 

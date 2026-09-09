@@ -47,6 +47,19 @@ const DB_MSGS = [
 
 beforeEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
+/**
+ * B4（0.4.12）适配：工具步骤完成后整组会先收拢成一行摘要（不再逐条常驻），
+ * 因此本文件要验证的「单条折叠条单行化 / 展开看详情」语义需**先展开组**才能触及。
+ * ⛔ 这是 B4 的预期新行为，不是产品回归——本文件原有断言（nowrap+ellipsis、展开区渲染）
+ * 全部保留不动，只补这一步前置展开。
+ */
+async function expandToolGroup() {
+  const bar = Array.from(document.querySelectorAll('div')).find(
+    d => d.style.height === '28px' && /工具调用 \d+ 步/.test(d.textContent || '')) as HTMLElement | undefined;
+  if (bar) await act(async () => { bar.click(); });
+  await new Promise(r => setTimeout(r, 50));
+}
+
 function mount() {
   vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
     const u = String(url);
@@ -63,6 +76,7 @@ describe('checkpoint-060 工具折叠条单行化', () => {
   it('折叠条标签单行省略（nowrap+ellipsis），不再换行溢出叠印', async () => {
     const { unmount } = mount();
     await new Promise(r => setTimeout(r, 100));
+    await expandToolGroup(); // B4：先展开整组，才能看到单条折叠条
     const label = screen.getByText(/^delegate_task 完成/);
     const st = label.style;
     expect(st.whiteSpace).toBe('nowrap');
@@ -74,12 +88,24 @@ describe('checkpoint-060 工具折叠条单行化', () => {
   it('点击展开后完整摘要与参数在展开区渲染', async () => {
     const { unmount } = mount();
     await new Promise(r => setTimeout(r, 100));
+    await expandToolGroup(); // B4：先展开整组
     await act(async () => { screen.getByText(/^delegate_task 完成/).click(); });
     await new Promise(r => setTimeout(r, 50));
     // 展开后：完整摘要至少出现在展开区（折叠标签是视觉省略，DOM 文本仍在，故 ≥2 处匹配）
     expect(screen.getAllByText(/一般纳税人适用税率：初级农产品9%/).length).toBeGreaterThanOrEqual(2);
     // 参数 JSON 在展开区渲染
     expect(screen.getByText(/"task": "查税点"/)).toBeTruthy();
+    unmount();
+  });
+
+  it('B4：历史消息的工具步骤默认已折叠为整组摘要（不逐条常驻会话窗）', async () => {
+    const { unmount } = mount();
+    await new Promise(r => setTimeout(r, 100));
+    // 折叠态：整组摘要在，单条步骤名不在
+    expect(document.body.textContent).toContain('工具调用 1 步');
+    expect(document.body.textContent).not.toContain('delegate_task 完成');
+    // ⛔ 长摘要（LONG_SUMMARY，本文件的核心溢出源）也不得因折叠而外泄到会话窗
+    expect(document.body.textContent).not.toContain('一般纳税人适用税率：初级农产品9%');
     unmount();
   });
 });

@@ -254,9 +254,12 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
                                "当用户要求输出报告、表格、幻灯片等正式文档时使用本工具（而非 write_file 纯文本）。"
                                "docx 默认 A4 竖版、宋体、页脚自动页码「第X页 共Y页」（page_number 默认开启）。"
                                "content 必须是结构化 JSON："
-                               "docx/md 用 {title, blocks:[{type:'heading',level,text}|{type:'paragraph',text}|{type:'bullets',items:[..]}|{type:'table',rows:[[..],..]}|{type:'page_break'}|{type:'image',layout:'single'|'grid',paths:[..],width_cm,caption}]}；"
+                               "docx/md 用 {title, blocks:[{type:'heading',level,text}|{type:'paragraph',text}|{type:'bullets',items:[..]}|{type:'table',rows:[[..],..]}|{type:'page_break'}|{type:'image',layout:'single'|'grid',paths:[..],width_cm,height_cm,caption}]}；"
                                "image 块：layout='single' 单图/多张原文居中（身份证/合同等），"
                                "layout='grid' 一行3列网格（聊天截图等并排）；"
+                               "尺寸：width_cm / height_cm 均为厘米，⛔ **只传其中一个**则另一维按原图比例自动推算"
+                               "（推荐做法，如只给 width_cm=13）；两者都传会强制拉伸变形，仅在确需指定精确尺寸时使用；"
+                               "都不传默认 width_cm=13（A4 正文宽）；"
                                "page_break 表示分页（证据文档每份证据独立起页时用）；"
                                "xlsx 用 {sheets:[{name, rows:[[单元格,..],..]}]}；"
                                "pptx 用 {slides:[{title, bullets:[..], notes}]}.",

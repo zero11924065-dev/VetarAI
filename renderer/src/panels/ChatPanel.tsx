@@ -36,6 +36,23 @@ interface PendingItem { name: string; dataUri: string; isImage: boolean; size: n
 
 const API = getApiBase();
 
+// B1（0.4.12）：输入的「判空」与「内容保真」必须共用同一套规则。
+// ⛔ 此前的两个缺陷（同一段代码的两面）：
+//   ① 内容用了判空值——`replace(/[\s...]/,'')` 里的 `\s` 同时匹配**换行与普通空格**，
+//      该值本只用于"是否为空白"判定，却被 push 进气泡 content；而 apiMessages 派生自 content，
+//      于是发给模型的载荷也被剥掉全部空白（"please fix this bug" → "pleasefixthisbug"），
+//      用户 Shift+Enter 的换行在会话里丢失。
+//   ② 判据不一致——发送按钮用 `input.trim()`，而 `trim()` **不剥**零宽/BOM/软连字符，
+//      handleSend 却用更严格的 cleanText 规则；纯不可见字符时按钮可点但点了不发送（死点击）。
+// 归一化：只剔真正的不可见字符；\u00A0 降级为普通空格（直接删会让两侧单词粘连）；换行与词间空格保留。
+function normalizeInputText(raw: string): string {
+  return raw.replace(/[\u200B-\u200F\u2060\uFEFF\u00AD]/g, '').replace(/\u00A0/g, ' ');
+}
+/** 发送可用性唯一判据：按钮 disabled 与 handleSend 守卫必须调同一个函数。 */
+function hasSendableText(raw: string): boolean {
+  return normalizeInputText(raw).trim().length > 0;
+}
+
 // TS-116（3.28）：消息时间戳格式化（SQLite datetime('now') 是 UTC，补 'Z' 解析）
 function formatTime(isoString: string): string {
   if (!isoString) return '';
@@ -66,17 +83,49 @@ function StreamingMarkdown({ text }: { text: string }) {
   const openFences = (text.match(/```/g) || []).length;
   const balanced = openFences % 2 === 0;
   if (!text) return null;
+  // B3（0.4.12）：长文本溢出聊天框。⛔ 三个真实成因，缺一都会漏：
+  //   ① `wordBreak:'break-word'` 是**已废弃的别名**（word-break 规范值只有 normal|break-all|keep-all），
+  //      标准写法是 `overflowWrap:'anywhere'`——它才会把「无空格长串」（长 URL、base64、
+  //      超长英文标识符）也纳入断行计算，而 `break-word` 只在"软换行机会"处生效，长 URL 仍会撑破容器。
+  //   ② 缺 `minWidth:0`：本组件是 flex 子项，flex 子项默认 `min-width:auto`（不得小于内容宽度），
+  //      因此**再怎么写 overflow-wrap 也不会收缩**，必须先解开这个下限。
+  //   ③ 表格：已启用 remarkGfm，但 components 只自定义了 code，`<table>` 是裸的 →
+  //      宽表格会直接撑破 maxWidth:78% 的气泡。表格不能断字（会把单元格内容打散、破坏对齐），
+  //      正确做法是给它一个可横向滚动的包裹层。
+  const wrapStyle: React.CSSProperties = {
+    overflowWrap: 'anywhere', wordBreak: 'break-word', // 保留 break-word 兜底老内核
+    minWidth: 0, maxWidth: '100%',
+  };
   if (!balanced) {
     // 代码块未闭合 → 整段按 pre-wrap 纯文本，避免半截 markdown 抖动
-    return <pre style={{ whiteSpace:'pre-wrap', wordBreak:'break-word', margin:0, fontFamily:'inherit', fontSize:14 }}>{text}</pre>;
+    return <pre style={{ ...wrapStyle, whiteSpace:'pre-wrap', margin:0, fontFamily:'inherit', fontSize:14, overflowX:'auto' }}>{text}</pre>;
   }
   return (
-    <div style={{ fontSize:14, lineHeight:1.65, wordBreak:'break-word' }}>
+    <div style={{ ...wrapStyle, fontSize:14, lineHeight:1.65 }}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
         code({ className, children, ...rest }: any) {
           const isBlock = /language-/.test(className || '');
-          if (isBlock) return <pre style={{ background:colors.bgCode, padding:'8px 10px', borderRadius:radius.s, overflowX:'auto', fontSize:12.5, margin:'6px 0', border:`1px solid ${colors.borderSubtle}`, fontFamily:fonts.mono, lineHeight:1.6 }}><code className={className} style={{ fontFamily:fonts.mono, fontSize:12.5 }}>{children}</code></pre>;
-          return <code style={{ background:colors.bgInlineCode, padding:'1px 5px', borderRadius:4, fontSize:12.5, fontFamily:fonts.mono }} {...rest}>{children}</code>;
+          if (isBlock) return <pre style={{ background:colors.bgCode, padding:'8px 10px', borderRadius:radius.s, overflowX:'auto', fontSize:12.5, margin:'6px 0', border:`1px solid ${colors.borderSubtle}`, fontFamily:fonts.mono, lineHeight:1.6, maxWidth:'100%' }}><code className={className} style={{ fontFamily:fonts.mono, fontSize:12.5, whiteSpace:'pre' }}>{children}</code></pre>;
+          return <code style={{ background:colors.bgInlineCode, padding:'1px 5px', borderRadius:4, fontSize:12.5, fontFamily:fonts.mono, ...wrapStyle }} {...rest}>{children}</code>;
+        },
+        // B3：表格外包一层横向滚动容器——表格自身宽度不受限，超出部分滚动查看，
+        // 不再撑破气泡。tableLayout:fixed + width:100% 让列宽按容器分配，避免窄表被拉变形。
+        table({ children, ...rest }: any) {
+          return (
+            <div style={{ overflowX:'auto', maxWidth:'100%', margin:'6px 0' }}>
+              <table style={{ borderCollapse:'collapse', width:'100%', tableLayout:'auto', fontSize:13 }} {...rest}>{children}</table>
+            </div>
+          );
+        },
+        th({ children, ...rest }: any) {
+          return <th style={{ border:`1px solid ${colors.borderSubtle}`, padding:'4px 8px', background:colors.bgCode, textAlign:'left', ...wrapStyle }} {...rest}>{children}</th>;
+        },
+        td({ children, ...rest }: any) {
+          return <td style={{ border:`1px solid ${colors.borderSubtle}`, padding:'4px 8px', ...wrapStyle }} {...rest}>{children}</td>;
+        },
+        // 链接：长 URL 同样需要断行，否则单行链接即可撑破气泡
+        a({ children, ...rest }: any) {
+          return <a style={{ color:colors.accent, ...wrapStyle }} {...rest}>{children}</a>;
         },
       }}>{text}</ReactMarkdown>
     </div>
@@ -113,6 +162,89 @@ function ToolStepBar({ step }: { step: ToolStep }) {
           </pre>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * B4（0.4.12）：工具步骤「完成后折叠」。
+ *
+ * 问题：每条 ToolStepBar 自身虽已单行折叠，但 N 个步骤会**常驻**会话窗（每条约 38px），
+ * 一轮对话调十几次工具就会把正文顶出视野——用户报告"工具调用步骤一直占着会话窗"。
+ *
+ * 方案：整组收拢为一行摘要；运行中自动展开，全部终结后自动收拢，点击可再展开。
+ * ⛔ 两个必须守住的约束（否则会引入新缺陷）：
+ *   ① **失败不能被折叠藏起来**——收拢行须显眼标出失败数并用警示色，
+ *      否则用户以为一切正常，排查线索被藏掉；error 步骤也不计入"成功"。
+ *   ② **用户手动展开/收拢的状态不能被自动行为覆盖**——自动切换只在状态跃迁的那一次生效，
+ *      用户点过之后（userToggled）组件重渲染也不得再自动改动。
+ *
+ * "已完成"判据不能用 msg.stopped：DB 加载的历史消息**不带** stopped（只有缓存恢复才置位），
+ * 而历史消息里的工具步骤恰恰是最该折叠的。故由外层传入 done（流是否已结束），
+ * 组内再确认没有 running 步骤。
+ */
+function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
+  const running = steps.filter(s => s.status === 'running').length;
+  const failed = steps.filter(s => s.status === 'error').length;
+  const okCount = steps.filter(s => s.status === 'ok').length;
+  // 自动收拢条件：外层已告知流结束，且没有仍在跑的步骤
+  const shouldCollapse = done && running === 0;
+  const [userToggled, setUserToggled] = useState(false);
+  const [open, setOpen] = useState(false);
+  // 状态跃迁时同步一次：运行中展开、完成后收拢；用户手动点过就不再自动改
+  const prevCollapseRef = useRef(shouldCollapse);
+  useEffect(() => {
+    if (prevCollapseRef.current !== shouldCollapse) {
+      prevCollapseRef.current = shouldCollapse;
+      if (!userToggled) setOpen(!shouldCollapse);
+    }
+  }, [shouldCollapse, userToggled]);
+
+  const collapsed = shouldCollapse && !open;
+  const headLabel = collapsed
+    ? (failed > 0
+        ? `工具调用 ${steps.length} 步 · ${okCount} 成功 · ${failed} 失败`
+        : `工具调用 ${steps.length} 步 · 已完成`)
+    : running > 0
+      ? `正在调用工具（${running}/${steps.length} 进行中）…`
+      : `工具调用 ${steps.length} 步`;
+
+  if (collapsed) {
+    /* 收拢态：整组一行，点击展开全部步骤（展开后每条仍可单独查看摘要/参数） */
+    return (
+      <div style={{ marginBottom:8 }}>
+        <div
+          onClick={() => { setUserToggled(true); setOpen(true); }}
+          style={{ display:'flex', alignItems:'center', gap:6, padding:'0 10px', height:28,
+            cursor:'pointer', borderRadius:radius.s, fontSize:12.5,
+            border:`1px solid ${failed > 0 ? colors.warnBorder : colors.borderSubtle}`,
+            background: failed > 0 ? colors.warnBg : '#F5F5F7',
+            color: failed > 0 ? colors.warnText : colors.textSecondary }}>
+          {failed > 0
+            ? <Icon name="alert-triangle" size={13} style={{ color: colors.warnText, flexShrink:0 }} />
+            : <Icon name="check-circle" size={13} style={{ color: colors.ok, flexShrink:0 }} />}
+          <span style={{ flex:1, minWidth:0, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }} title={headLabel}>
+            {headLabel}
+          </span>
+          <Icon name="chevron-right" size={13} style={{ color:colors.textTertiary, flexShrink:0 }} />
+        </div>
+      </div>
+    );
+  }
+  /* 展开态：逐条渲染；多于一步时给出可点收起的组头 */
+  return (
+    <div style={{ marginBottom:8 }}>
+      {steps.length > 1 && (
+        <div
+          onClick={() => { setUserToggled(true); setOpen(false); }}
+          style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6, height:22,
+            cursor:'pointer', fontSize:12, color:colors.textTertiary }}>
+          <Icon name="layers" size={12} style={{ flexShrink:0 }} />
+          <span style={{ flex:1, minWidth:0, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }} title={headLabel}>{headLabel}</span>
+          <Icon name="chevron-up" size={12} style={{ flexShrink:0 }} />
+        </div>
+      )}
+      {steps.map((st, j) => <ToolStepBar key={st.id||j} step={st} />)}
     </div>
   );
 }
@@ -303,6 +435,22 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // 0.4.12 附带修复：节流计时器提升为组件级 ref，卸载时 clearTimeout（无害卫生）。
+  // 原实现是 handleSend 的闭包局部变量，卸载后外部无从清理。
+  const cacheSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 0.4.12 附带修复（**真实根因**）：卸载守卫。
+  // ⛔ 定位纠错——最初以为泄漏来自上面的节流 timer，但**变异测试证伪**：把卸载清理删掉，
+  // 回归测试照样全绿。原因是节流 timer 的写缓存动作在
+  //   `setLocalMessages(prev => { syncSessionLocal(...); return prev; })` 的 updater 里，
+  // 而 React 18 卸载后 updater **根本不会被调用** → 那条路径本就不会幽灵写入。
+  // 插桩 localStorage.setItem 抓到的真实调用栈，是两处**直接**调用 syncSessionLocal 的异步回调：
+  //   ① applyEvent 的 done 分支——流循环在卸载后仍被 reader.read() 推进；
+  //   ② alignLocalIdsWithDb——finally 里发起的 fetch，回来时组件已卸载。
+  // 后果：切 agent / 关面板后仍有"幽灵写入"，可把已离开会话的内容写进缓存；
+  // 测试侧则跨用例泄漏，表现为 chatPanelStream 长期 flaky
+  // （'目录里有 2 个文件' 串进 '旧流文字继续串话?' 的断言）。
+  // 故正解是用 mountedRef 守卫这两处，而不是只清 timer。
+  const mountedRef = useRef(true);
   // 输入法组合态（IME composition）：用 ref 显式跟踪，拦截组合期内按回车导致的误发送。
   // 背景：macOS 中文输入法在 Chromium 下，确认候选词的回车有时以 isComposing:false 触发，
   // 仅靠 keydown 的 isComposing/keyCode 守卫不可靠，故改用 compositionstart/end 事件跟踪。
@@ -417,6 +565,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (Number.isFinite(n) && n >= 1 && n <= 10) reconnectMaxRef.current = Math.floor(n);
     }).catch(() => {});
   }, []);
+  // 0.4.12 附带修复：卸载收尾。
+  // mountedRef 置 false 是**主修复**——两处直接写缓存的异步回调据此短路（见其声明处注释）；
+  // clearTimeout 是附带的无害卫生（其写操作本就在 updater 内，卸载后不会执行）。
+  // ⛔ 此处**故意不 abort 流**：中断语义由 handleStop / 会话切换各自负责，
+  // 卸载时擅自 abort 会撞上 C6 刚分离出的 manualStopped（"用户手动停止"）语义。
+  useEffect(() => {
+    // 挂载即置 true：当前未启用 StrictMode，但若将来启用，React 会 mount→unmount→remount，
+    // 缺少这一步会让 mountedRef 永久停在 false，两处卸载守卫将永久短路（缓存不再写入）。
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (cacheSyncTimerRef.current) { clearTimeout(cacheSyncTimerRef.current); cacheSyncTimerRef.current = null; }
+    };
+  }, []);
   // M2 溢出预警
   const [compactWarning, setCompactWarning] = useState<{used:number;limit:number;est:number}|null>(null);
   const [toast, setToast] = useState<string|null>(null);
@@ -472,7 +634,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           const isLive = activeStreamSidRef.current === currentSessionId;
           const view = isLive ? (cached as Message[]) : (cached as Message[])
             .filter(m => !(String(m.id ?? '').startsWith('local_') && !(m.content || '').trim() && !((m.toolSteps || []).length)))
-            .map(m => String(m.id ?? '').startsWith('local_') ? { ...m, thinking: false, waitingSeconds: 0, stopped: m.stopped || true } : m);
+            // 0.4.12（C6）：原写 `stopped: m.stopped || true` —— 恒真表达式（无论 m.stopped 为何
+            // 都得到 true），是逻辑错误写法。本意确为强制置位（缓存恢复的流永不再推进，须清活态），
+            // 故直接写 true 并把意图写进注释。⛔ 不置 manualStopped：恢复的缓存流无法判断
+            // 究竟是用户手动停止还是崩溃/关闭窗口导致中断，不能谎称"已手动停止"。
+            .map(m => String(m.id ?? '').startsWith('local_') ? { ...m, thinking: false, waitingSeconds: 0, stopped: true } : m);
           if (view.length > 0) {
             setLocalMessages(view);
             restoreTokenIndicator(view);
@@ -701,10 +867,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   async function alignLocalIdsWithDb(sid: string) {
     try {
       const res = await fetch(`${API}/sessions/${sid}/messages?project_id=${encodeURIComponent(projectId)}`);
+      // 0.4.12 附带修复：卸载守卫。本函数由 handleSend 的 finally 触发，
+      // 组件卸载（切 agent / 关面板）后这个 fetch 仍会回来，并直接 syncSessionLocal 写缓存
+      // → "幽灵写入"，也是测试跨用例泄漏的源头之一。两个 await 之后都要判。
+      if (!mountedRef.current) return;
       if (!res.ok) return;
       // 查虫D：对齐期间用户可能已切走会话——过期结果不得覆盖新会话显示
       if (currentSessionIdRef.current !== sid) return;
       const dbMsgs = (await res.json()) as Message[];
+      if (!mountedRef.current) return; // 第二个 await 之后同样可能已卸载
       const prev = localMessagesRef.current;
       if (!prev.some(m => String(m.id ?? '').startsWith('local_'))) return;
       // 查虫B：同内容消息可能出现多条（如"继续"），按内容排队取号，
@@ -941,11 +1112,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
   async function handleSend() {
     if (sending) return;
-    // checkpoint-067 R-1：严格判定空白——除常规空白外，零宽字符（\u200B-\u200F）、
-    // 不换行空格（\u00A0）、BOM（\uFEFF）、其他控制/格式字符（\u00AD、\u2060）也算空白，
-    // 杜绝输入法误插入的不可见字符被当成有内容而发送"空白消息"。
-    const cleanText = input.replace(/[\s\u00A0\u200B-\u200F\u2060\uFEFF\u00AD]/g, '');
-    const hasText = cleanText.length > 0;
+    // checkpoint-067 R-1 + B1（0.4.12）：判空与内容一律走模块级 normalizeInputText/hasSendableText，
+    // 与发送按钮的 disabled 共用同一判据（详见那两个函数上方的注释——它们各自记录了一个真实缺陷）。
+    const hasText = hasSendableText(input);
+    const contentText = normalizeInputText(input).trim();
     const hasImages = pendingItems.some(p => p.isImage);
     if (!hasText && !hasImages) return;
 
@@ -959,7 +1129,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     const textFileItems = pendingItems.filter(p => !p.isImage);
 
     const parts: string[] = [];
-    if (hasText) parts.push(cleanText);
+    if (hasText) parts.push(contentText);
     if (imageItems.length) parts.push(`[📎 ${imageItems.length} 张图片已附加]`);
     if (textFileItems.length) parts.push(textFileItems.map(f => `[📄 ${f.name}]`).join(' '));
 
@@ -1012,18 +1182,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // checkpoint-055：流式内容实时写穿缓存（500ms 节流）。缓存因此始终是完整"活态"，
     // 合并加载统一以缓存为本地快照——消除"内存快照滞后/串会话"竞态（切走切回不丢气泡）。
     let lastCacheSync = 0;
-    let cacheSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    // 0.4.12 附带修复：改用组件级 cacheSyncTimerRef（原为闭包局部变量，卸载后无人能清理）。
+    // 新流启动前先清掉上一流可能仍挂起的节流 timer，避免两流的 doSync 交错写缓存。
+    if (cacheSyncTimerRef.current) { clearTimeout(cacheSyncTimerRef.current); cacheSyncTimerRef.current = null; }
     function scheduleStreamCacheSync() {
       const doSync = () => {
-        cacheSyncTimer = null;
+        cacheSyncTimerRef.current = null;
         if (currentSessionIdRef.current !== streamSid) return; // 已切走：归属保护，不写旧会话
         lastCacheSync = Date.now();
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
       };
-      if (cacheSyncTimer) return; // 已有挂起的同步
+      if (cacheSyncTimerRef.current) return; // 已有挂起的同步
       const elapsed = Date.now() - lastCacheSync;
       if (elapsed >= 500) doSync();
-      else cacheSyncTimer = setTimeout(doSync, 500 - elapsed);
+      else cacheSyncTimerRef.current = setTimeout(doSync, 500 - elapsed);
     }
     // 节流：token 高频时 rAF 合并一次 setState（避免每 token 重渲染卡 UI）
     // B05（TS-101）：按 streamMsgId 定位目标气泡，不再盲写"最后一条"
@@ -1249,15 +1421,23 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 按 streamMsgId 精确定位本流消息（不依赖数组顺序/身份），直接写缓存。
         const finalMsg = localMessagesRef.current.find(m => m.id === streamMsgId)
           || { id: streamMsgId, role: 'assistant', content: (typeof d.content === 'string' ? d.content : '') };
-        // checkpoint-061：缓存读取加保护——缓存损坏时 JSON.parse 抛错会被外层误判为
-        // 网络错误触发重连循环；损坏即按空缓存兜底（DB 已有定稿，不丢消息）。
-        let existing: any[] = [];
-        try { existing = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')[streamSid] || []; } catch { existing = []; }
-        // checkpoint-055：本轮 user 消息确保在缓存（此前只落 assistant，缓存残缺是丢消息根因之一）。
-        // user 在发送时已按序写入，这里仅兜底补入（不重排，保持时序）
-        const others = existing.filter((m: any) => m.id !== streamMsgId);
-        const hasUser = others.some((m: any) => m.id === userMsg.id);
-        syncSessionLocal(streamSid, hasUser ? [...others, finalMsg] : [...others, userMsg, finalMsg]);
+        // 0.4.12 附带修复（**真实根因之一**）：卸载守卫。
+        // 本分支由 reader.read() 循环驱动，组件卸载后循环仍会继续推进并执行到这里，
+        // 直接 syncSessionLocal 写缓存 → "幽灵写入"（插桩 localStorage.setItem 抓到的调用栈
+        // 正是 applyEvent ← applyEventWrapped ← handleSend）。
+        // ⛔ 只守卫这一行写缓存，不要扩大到整块：下方的 setLocalMessages 走 updater，
+        // React 18 卸载后 updater 本就不会被调用，无需也不应改变其行为。
+        if (mountedRef.current) {
+          // checkpoint-061：缓存读取加保护——缓存损坏时 JSON.parse 抛错会被外层误判为
+          // 网络错误触发重连循环；损坏即按空缓存兜底（DB 已有定稿，不丢消息）。
+          let existing: any[] = [];
+          try { existing = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')[streamSid] || []; } catch { existing = []; }
+          // checkpoint-055：本轮 user 消息确保在缓存（此前只落 assistant，缓存残缺是丢消息根因之一）。
+          // user 在发送时已按序写入，这里仅兜底补入（不重排，保持时序）
+          const others = existing.filter((m: any) => m.id !== streamMsgId);
+          const hasUser = others.some((m: any) => m.id === userMsg.id);
+          syncSessionLocal(streamSid, hasUser ? [...others, finalMsg] : [...others, userMsg, finalMsg]);
+        }
         if (currentSessionIdRef.current === streamSid) {
           setLocalMessages(prev => {
             const idx = prev.findIndex(m => m.id === streamMsgId);
@@ -1331,7 +1511,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
             if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
             const c = accContent; accContent = '';
-            patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, thinking: false }));
+            // 0.4.12（C6）：只有 AbortError 才是**用户手动停止**，故额外置 manualStopped；
+            // done/error 路径只置 stopped（"流已终止"），不再被渲染成"已手动停止"。
+            patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, manualStopped: true, thinking: false }));
             // B07：停止时的已生成部分也同步本地缓存
             setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
             break;
@@ -1363,7 +1545,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         const c = accContent; accContent = '';
-        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, thinking: false }));
+        // 0.4.12（C6）：同上，仅此处（用户手动停止）置 manualStopped
+        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c + '（已停止）', stopped: true, manualStopped: true, thinking: false }));
         // B07：停止时的已生成部分也同步本地缓存
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
       } else {
@@ -1655,7 +1838,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 {msg.created_at && <span style={{marginLeft:4,opacity:0.7}}>{formatTime(msg.created_at)}</span>}
               </div>
               {/* 气泡 */}
-              <div style={{ maxWidth:'78%', padding:'10px 14px', borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
+              {/* B3：maxWidth 已封顶，但 flex 子项默认 min-width:auto（不得小于内容宽度），
+                  长串会把气泡顶开并在消息区拉出横向滚动条；minWidth:0 解开该下限即可让
+                  overflow-wrap:anywhere 生效。⛔ 这里**故意不加 overflow:hidden**——那会把仍溢出的
+                  内容静默裁掉、用户永久看不到；表格与代码块各自有独立横向滚动层，不需要它兜底。 */}
+              <div style={{ maxWidth:'78%', minWidth:0, padding:'10px 14px', borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
                 {msg.archived ? (
                   /* TS-120：已移入知识仓库 → 占位提示（内容脱离模型上下文，文件永久保存在仓库） */
                   <div style={{ fontSize:12, color: colors.textTertiary, display:'flex', alignItems:'center', gap:6, fontStyle:'italic' }}>
@@ -1703,15 +1890,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                     )}
                   </div>
                 )}
-                {/* M1-4：工具折叠条（在 content 上方，顺序堆叠） */}
+                {/* M1-4 + B4（0.4.12）：工具步骤整组折叠（在 content 上方，顺序堆叠）。
+                    done = 该消息不是"正在流式的那条"——复用下方光标的同一判据，
+                    保证流进行中的步骤始终可见，流一结束即自动收拢成一行。
+                    ⛔ 不用 msg.stopped 判 done：DB 加载的历史消息不带 stopped，
+                    而历史消息的工具步骤恰恰最该折叠。 */}
                 {msg.toolSteps && msg.toolSteps.length > 0 && (
-                  <div style={{ marginBottom:8 }}>
-                    {msg.toolSteps.map((st, j) => <ToolStepBar key={st.id||j} step={st} />)}
-                  </div>
+                  <ToolStepsGroup
+                    steps={msg.toolSteps}
+                    done={!(sending && !msg.stopped && !msg.streamError && i === localMessages.length - 1)}
+                  />
                 )}
                 {/* 内容：用户消息纯文本；assistant 用 Markdown 流式渲染 */}
                 {msg.role === 'user'
-                  ? <div style={{whiteSpace:'pre-wrap',wordBreak:'break-word',fontSize:14,lineHeight:1.65}}>{msg.content}</div>
+                  ? <div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word',fontSize:14,lineHeight:1.65,minWidth:0,maxWidth:'100%'}}>{msg.content}</div>
                   : <StreamingMarkdown text={msg.content} />}
                 {/* 流式打字机光标 */}
                 {msg.role === 'assistant' && sending && !msg.stopped && !msg.streamError && i === localMessages.length - 1 && (
@@ -1775,7 +1967,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                   <span style={{fontSize:12}}>模型加载/推理中，较久属正常（本地模型）…已等待 {msg.waitingSeconds}s</span>
                 </div>
               )}
-              {msg.role === 'assistant' && msg.stopped && (
+              {/* 0.4.12（C6）：只有**用户手动停止**（manualStopped）才显示此条。
+                  此前判据是 stopped，而 done/error 正常结束也置 stopped → 正常执行完
+                  也错误显示"已手动停止 重新发送"（用户真机反馈）。stopped 现仅用于停光标。 */}
+              {msg.role === 'assistant' && msg.manualStopped && (
                 <div style={{ marginTop:8, display:'flex', alignItems:'center', gap:8 }}>
                   <Icon name="stop" size={14} style={{color:colors.textTertiary}} />
                   <span style={{ fontSize:12, color:colors.textTertiary }}>已手动停止</span>
@@ -1858,8 +2053,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             <Icon name="stop" size={12} style={{color:'#FFFFFF'}} />
           </button>
         ) : (
-          <button className="ui-btn ui-btn-primary" onClick={handleSend} data-tip="发送" disabled={inputDisabled || (!input.trim() && pendingItems.length===0)}
-            style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:(!input.trim() && pendingItems.length===0) ? 0.5 : 1}}>
+          <button className="ui-btn ui-btn-primary" onClick={handleSend} data-tip="发送" disabled={inputDisabled || (!hasSendableText(input) && pendingItems.length===0)}
+            style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:(!hasSendableText(input) && pendingItems.length===0) ? 0.5 : 1}}>
             <Icon name="send" size={16} style={{color:colors.onAccent}} />
           </button>
         )}

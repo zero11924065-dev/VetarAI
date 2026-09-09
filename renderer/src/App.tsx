@@ -68,18 +68,20 @@ export default function App() {
       alertDialog({ message: '无法获取日志目录（侧车未运行？）' });
     }
   };
-  // 问题5修复：打开数据缓存目录（数据库/导出/知识索引/全局知识）——与日志目录分开
+  // 问题5修复：打开数据目录（数据库/导出/知识索引/全局知识/模型/技能/配置）——与日志目录分开
+  // 0.4.12（C1）：原称"数据缓存目录"，实测该目录全是核心数据（用户看到索引模型与技能目录），
+  // "缓存"二字误导用户以为可随意清理 → 统一改称"数据目录"。
   const openDataDir = async () => {
     const bridge = (window as any).subagent;
     if (bridge && typeof bridge.openDataDir === 'function') {
       const res = await bridge.openDataDir().catch((e: Error) => ({ ok: false, error: e.message }));
       if (!res || !res.ok) {
-        alertDialog({ message: `打开数据缓存目录失败：${res && res.error ? res.error : '未知错误'}` });
+        alertDialog({ message: `打开数据目录失败：${res && res.error ? res.error : '未知错误'}` });
       }
       return;
     }
     // 纯浏览器环境：降级提示数据目录位置
-    alertDialog({ message: '数据缓存目录：~/.subagent（可在 Finder 手动打开）' });
+    alertDialog({ message: '数据目录：~/.subagent（可在 Finder 手动打开）。⚠️ 此处为核心数据非缓存，请勿随意清理。' });
   };
   // TS-109 改进：右侧大屏查看的圆桌 id（null = 正常对话视图）
   const [viewingRtId, setViewingRtId] = useState<string | null>(null);

@@ -44,6 +44,24 @@ def _clean_text(v: Any) -> str:
     return str(v) if v is not None else ""
 
 
+def _to_pos_float(v: Any) -> float | None:
+    """把模型给的尺寸值安全转成正浮点数；无效则返回 None（0.4.12，A7）。
+
+    返回 None 的语义是"用户没指定这一维"，调用方据此决定传不传给 add_picture
+    ——⛔ 不能返回 0 兜底：0 会被当成"指定了 0cm"，与"未指定"语义不同。
+    容忍模型常见写法：数字、数字字符串（"13"/"13.5"）、带单位（"13cm"）。
+    """
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(str(v).strip().lower().replace("cm", "").replace("厘米", ""))
+    except (TypeError, ValueError):
+        return None
+    if f <= 0 or f != f:      # 非正数或 NaN
+        return None
+    return f
+
+
 def _extract_blocks(content: dict) -> tuple[str, list[dict]]:
     title = _clean_text(content.get("title") or "")
     blocks = content.get("blocks") or []
@@ -233,7 +251,16 @@ def _write_docx(target: Path, content: dict) -> int:
             paths = b.get("paths") or ([b["path"]] if b.get("path") else [])
             layout = b.get("layout", "single")
             caption = b.get("caption") or ""
-            width_cm = float(b.get("width_cm", 13.0))
+            # 0.4.12（A7）：支持 height_cm。⛔ 语义陷阱——python-docx 的 add_picture
+            #   同时传 width+height 会【强制拉伸到该尺寸、不保持宽高比】；只传其一则
+            #   另一维按图片原始比例自动推算。故 width_cm 默认值不能再恒为 13.0，
+            #   否则"只给 height"会变成"两个都给"→ 图片变形。
+            #   规则：两者都未给 → 沿用 width 13.0（向后兼容）；给了任一个 → 只传给了的。
+            _w_raw, _h_raw = b.get("width_cm"), b.get("height_cm")
+            width_cm = _to_pos_float(_w_raw)
+            height_cm = _to_pos_float(_h_raw)
+            if width_cm is None and height_cm is None:
+                width_cm = 13.0          # 默认：A4 正文宽，保持原图比例
             paths = [p for p in paths if isinstance(p, str) and Path(p).is_file()]
             if paths:
                 if layout == "grid":
@@ -249,7 +276,9 @@ def _write_docx(target: Path, content: dict) -> int:
                             para.alignment = 1
                             run = para.add_run()
                             try:
-                                run.add_picture(p, width=Cm(col_w_cm))
+                                # grid 宽度由列宽决定；height_cm 若给了则一并约束
+                                run.add_picture(p, width=Cm(col_w_cm),
+                                                height=Cm(height_cm) if height_cm else None)
                             except Exception:
                                 run.text = f"[图片加载失败: {Path(p).name}]"
                         # 表格无边框视觉：去掉表格样式
@@ -263,7 +292,9 @@ def _write_docx(target: Path, content: dict) -> int:
                         para.alignment = 1
                         run = para.add_run()
                         try:
-                            run.add_picture(p, width=Cm(width_cm))
+                            run.add_picture(p,
+                                            width=Cm(width_cm) if width_cm else None,
+                                            height=Cm(height_cm) if height_cm else None)
                         except Exception:
                             run.text = f"[图片加载失败: {Path(p).name}]"
                     if caption:

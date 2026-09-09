@@ -48,6 +48,12 @@ export interface Message {
   errorAnalysis?: string;
   errorAnalysisModel?: string;
   stopped?: boolean;
+  /** 0.4.12（C6）：用户**手动**点了停止（仅 AbortError 路径置位）。
+   *  ⛔ 不要与 stopped 混用：stopped 是"流已终止"（done/error/abort/缓存恢复都置位，
+   *  用来停掉打字机光标），而 manualStopped 才是"用户主动停止"（用来显示"已手动停止 + 重新发送"）。
+   *  此前二者共用 stopped → 正常执行完（done 也置 stopped）界面同样显示"已手动停止 重新发送"，
+   *  与事实相反（用户真机反馈：agent执行完停止，为什么下方显示也是已手动停止）。 */
+  manualStopped?: boolean;
   // TS-102 B13：思考中指示（thinking 事件到达→正文首 token 到达期间为 true）
   thinking?: boolean;
   // 0.4.2 阶段化思考：当前思考阶段已持续秒数（每秒跳动）

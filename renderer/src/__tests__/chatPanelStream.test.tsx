@@ -107,10 +107,12 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
       (document.querySelector('button[data-tip="发送"]') as HTMLElement).click();
     });
 
-    // 折叠条：tool_call 后出现"正在调用 list_dir"
-    await waitFor(() => {
-      expect(screen.getAllByText(/list_dir/).length).toBeGreaterThan(0);
-    }, { timeout: 3000 });
+    // ⛔ 此处**原有**一条"tool_call 后出现『正在调用 list_dir』"的中间态断言，已删除——
+    // 它依赖时序：本 mock 流是瞬间读完的（enqueue 后立即 close），done 一到整组工具步骤即
+    // 折叠（B4），"正在调用 …"这个运行中态根本来不及被观察到 → 这正是本文件长期 flaky 的根源。
+    // 「运行中必须保持展开」的语义改由 chatPanelB4Collapse.test.tsx 用例⑤ 覆盖
+    // （它用**不发 tool_result/done** 的流，让运行态稳定停留，不再赌时序）。
+    // 这里只断言最终稳定态：工具步骤确实产生了（下方折叠摘要 + 展开后的 list_dir 完成）。
 
     // content 累加（done 后完整）
     await waitFor(() => {
@@ -118,6 +120,21 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
     }, { timeout: 3000 });
 
     // 折叠条最终状态：✅ list_dir 完成
+    // B4（0.4.12）适配：流结束后工具步骤**整组**收拢为一行摘要（不再逐条常驻），
+    // 故先断言收拢摘要，再展开验证单条状态仍为"完成"——原语义保留，未被折叠吃掉。
+    // ⛔ 这是 B4 的预期新行为，不是产品回归。
+    await waitFor(() => {
+      const bar = Array.from(document.querySelectorAll('div')).find(
+        d => d.style.height === '28px' && /工具调用 \d+ 步/.test(d.textContent || '')) as HTMLElement | undefined;
+      expect(bar).toBeTruthy();
+      expect(bar!.textContent).toContain('工具调用 1 步');
+      expect(bar!.textContent).toContain('已完成');
+    }, { timeout: 3000 });
+    await act(async () => {
+      const bar = Array.from(document.querySelectorAll('div')).find(
+        d => d.style.height === '28px' && /工具调用 \d+ 步/.test(d.textContent || '')) as HTMLElement;
+      bar.click();
+    });
     await waitFor(() => {
       expect(screen.getAllByText(/list_dir 完成/).length).toBeGreaterThan(0);
     }, { timeout: 3000 });
