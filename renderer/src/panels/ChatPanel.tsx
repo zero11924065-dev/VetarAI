@@ -1130,7 +1130,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const inputDisabled = !!compactWarning;
 
   async function handleSend() {
-    if (sending) return;
+    // A5（0.4.16）：思考中（sending）点发送/回车 → 走"插入新消息"，不打断当前轮。
+    // 用户拍板语义：模型先做完手上这一轮，下一轮开始前读到这条新消息，再自行
+    // 纠偏或补充——正如助手处理用户在其工作时发来的消息的方式。
+    if (sending) { handleInject(); return; }
     // checkpoint-067 R-1 + B1（0.4.12）：判空与内容一律走模块级 normalizeInputText/hasSendableText，
     // 与发送按钮的 disabled 共用同一判据（详见那两个函数上方的注释——它们各自记录了一个真实缺陷）。
     const hasText = hasSendableText(input);
@@ -1616,6 +1619,28 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     abortRef.current?.abort();
   }
 
+  // A5（0.4.16）：把"思考中"输入的新消息投进后端待注入队列（不打断当前流）。
+  // 乐观显示用户气泡（与正常发送一致），后端先落库再入队，loop 下一轮 drain 读到。
+  async function handleInject() {
+    const sid = activeStreamSidRef.current || currentSessionIdRef.current;
+    if (!sid) return;
+    if (!hasSendableText(input)) return;
+    const text = normalizeInputText(input).trim();
+    // 乐观追加用户气泡并写穿缓存（与 handleSend 的即时反馈一致）
+    const userMsg: Message = { id: newLocalMsgId(), role: 'user', content: text };
+    setLocalMessages(prev => { const next = [...prev, userMsg]; syncSessionLocal(sid, next); return next; });
+    setInput('');
+    try {
+      const r = await fetch(`${API}/chat/${encodeURIComponent(sid)}/inject`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, agent_id: agentId, content: text }),
+      });
+      const d = await r.json().catch(() => ({}));
+      // 无活流（可能当前轮刚好结束）→ 如实提示，让用户直接发送
+      if (!d.ok) setReconnectNotice(d.detail || '当前没有进行中的生成，请直接发送');
+    } catch (e) { console.error('inject failed:', e); }
+  }
+
   function resendLast() {
     // M5 做指数退避自动重连；本任务：手动重发上一条 user 消息
     const lastUser = [...localMessages].reverse().find(m => m.role === 'user');
@@ -2096,10 +2121,19 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           placeholder={pendingItems.length ? '输入文字描述，或直接发送...' : '输入消息（可先上传附件，再输入文字，一起发送）...'}
           style={{padding:'8px 10px',borderRadius:radius.s,border:`1px solid ${colors.borderStrong}`,background:colors.bgCard,color:colors.textPrimary,fontSize:14,flex:1,minHeight:38,maxHeight:120,resize:'none',fontFamily:fonts.base,lineHeight:1.6,boxSizing:'border-box'}} />
         {sending ? (
-          <button onClick={handleStop} data-tip="停止"
-            style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',background:'#1A1A1E',cursor:'pointer',flexShrink:0}}>
-            <Icon name="stop" size={12} style={{color:'#FFFFFF'}} />
-          </button>
+          <>
+            {/* A5（0.4.16）：思考中也能发送——插入新消息（不打断当前轮，下一轮被读到）。
+                无文本时禁用，与正常发送按钮同一判据。 */}
+            <button className="ui-btn ui-btn-primary" onClick={handleSend} data-tip="发送新消息（模型完成当前这一步后会读到）"
+              disabled={!hasSendableText(input)}
+              style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:hasSendableText(input)?1:0.5}}>
+              <Icon name="send" size={16} style={{color:colors.onAccent}} />
+            </button>
+            <button onClick={handleStop} data-tip="停止"
+              style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',background:'#1A1A1E',cursor:'pointer',flexShrink:0}}>
+              <Icon name="stop" size={12} style={{color:'#FFFFFF'}} />
+            </button>
+          </>
         ) : (
           <button className="ui-btn ui-btn-primary" onClick={handleSend} data-tip="发送" disabled={inputDisabled || (!hasSendableText(input) && pendingItems.length===0)}
             style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:(!hasSendableText(input) && pendingItems.length===0) ? 0.5 : 1}}>

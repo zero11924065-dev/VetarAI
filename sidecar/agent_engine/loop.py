@@ -904,6 +904,7 @@ async def run_tool_loop(
     delegation_ctx: dict | None = None,
     first_round_images: list[str] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    inject_check: Callable[[], list[str]] | None = None,
     knowledge_ctx: dict | None = None,
     archive_ctx: dict | None = None,
     app_control_ctx: dict | None = None,
@@ -926,6 +927,10 @@ async def run_tool_loop(
     ⚠️ 这些工具直接操作用户真实电脑，路由层强制两道防线：应用白名单校验（越界拒绝）
     + 每步动作确认（computer_use_confirm_each，经 authorizer 弹窗，拒绝则不执行）。
     cancel_check（TS-114 3.25）：回调为真时，本轮开始前（未发起模型调用）yield cancelled 事件并返回。
+    inject_check（A5 / 0.4.16）：每轮开始前调用，返回用户在「思考中」插入的新消息列表。
+      ⛔ 语义是**不打断当前轮**——用户拍板：助手处理用户在其工作时发来的新消息，
+      是先做完手上这一段，下一轮开始时再读到新消息并据此纠偏或补充。
+      取出即清空（同一条只并入一次）。与 cancel_check 共用同一检查点。
     """
     from sidecar.ollama.connector import get_ollama_connector
     conn = connector or get_ollama_connector()  # TS-103 B18：默认走单例，连接池复用
@@ -962,6 +967,18 @@ async def run_tool_loop(
             if _cancelled:
                 yield {"event": "cancelled", "data": {"detail": "已停止"}}
                 return
+        # A5（0.4.16）：每轮开始前读取用户「思考中」插入的新消息，并入上下文。
+        # ⛔ 不打断当前轮：模型照常做完这一轮，下一轮开始时才看到新消息，
+        # 然后自行判断是纠偏（方向错了）还是补充（用户只是加了内容）。
+        # 与 cancel_check 共用检查点：停止=读到取消就退出，A5=读到新消息就继续。
+        if inject_check is not None:
+            try:
+                _injected = inject_check() or []
+            except Exception:
+                _injected = []          # 注入失败不能拖垮推理主流程
+            for _txt in _injected:
+                if str(_txt).strip():
+                    msgs.append({"role": "user", "content": str(_txt)})
         # M2 溢出预警（每轮开始前判定）
         if prompt_eval_history:
             last_pe = prompt_eval_history[-1]

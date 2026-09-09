@@ -30,6 +30,8 @@ from sidecar.ollama.connector import get_ollama_connector, OllamaAPIError
 from sidecar.agent_engine.loop import run_tool_loop, build_system_prompt, tools_spec
 # 第 3 批（0.4.16）C2：聊天取消标志注册表（补上 loop.cancel_check 缺失的共享状态）
 from sidecar.agent_engine import cancel as _cancel
+# 第 3 批（0.4.16）A5：思考中插入新消息的待注入队列
+from sidecar.agent_engine import inject as _inject
 from sidecar.network.guard import NetworkGuardError
 from sidecar.config import get_config, reload_config, get_config_path
 from sidecar.storage.store import (
@@ -1156,7 +1158,9 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                               # {"event":"cancelled"} 并干净退出，不再空跑剩余轮次。
                               # 仅在 tools_enabled（有 session_id 语境）时才有意义，
                               # 但即使为空 session_id 也安全（is_chat_cancelled 对空串恒 False）。
-                              cancel_check=_cancel.make_cancel_check(req.session_id)).__aiter__()
+                              cancel_check=_cancel.make_cancel_check(req.session_id),
+                              # A5：每轮开始前 drain 待注入消息（不打断当前轮）
+                              inject_check=_inject.make_inject_check(req.session_id)).__aiter__()
         # M2 打回修复（2026-08-29）：compact_auto 服务端闭环。
         # loop 发 compact_auto 只是"通知该压缩了"，真正压缩在此处执行。
         # 同一次请求内最多自动压缩 1 次（防 compact_session 成功但 prompt_eval 仍高导致二次触发死循环）。
@@ -1170,6 +1174,8 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         # ⛔ 不复用心跳 timer 来轮询：心跳基础值 15s 且会动态放大到 60s，
         # 用它做取消检查等于"点停止后最多等一分钟"，那不叫停止。
         _cancel_event = _cancel.register_stream(req.session_id)
+        # A5：标记该会话有活流，允许「思考中」插入新消息（push 只对活流生效）
+        _inject.begin_stream(req.session_id)
         # ⛔ waiter task 必须在**循环外创建一次**并复用，两个原因：
         #   1. `asyncio.wait()` 在 Python 3.11+ **禁止传协程**（实测 3.14.7 抛
         #      TypeError: Passing coroutines is forbidden）→ 必须传 task；
@@ -1350,6 +1356,9 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
             # 结构上杜绝残留（残留会让该会话下次发送刚进循环就被取消 = 停止按钮永久生效）
             if req.session_id:
                 _cancel.unregister_stream(req.session_id)
+                # A5：⛔ 必须清空残留队列，否则上一轮没被读走的消息会被同会话
+                # 的下一轮流读到，表现为「新回复莫名混进旧消息」
+                _inject.end_stream(req.session_id)
             # waiter task 同样要回收（与 timer / auth_watchers 的每轮 cancel 纪律一致）
             if _cancel_waiter is not None and not _cancel_waiter.done():
                 _cancel_waiter.cancel()
@@ -1401,6 +1410,44 @@ async def api_chat_stop(session_id: str):
         # 该会话本无活流（或已置位）——如实告知，不谎称停止成功
         return {"ok": False, "detail": "该会话当前没有进行中的生成，无需停止"}
     return {"ok": True, "detail": "已请求停止：将在本轮模型输出结束、下一轮开始前中止"}
+
+
+class ChatInjectReq(BaseModel):
+    project_id: str = ""
+    agent_id: str = ""
+    content: str = ""
+
+
+@app.post("/api/chat/{session_id}/inject")
+async def api_chat_inject(session_id: str, req: ChatInjectReq):
+    """A5（0.4.16）：思考中插入新消息（**不打断当前轮**）。
+
+    用户拍板语义：模型正在生成时用户发来的新消息，不是急刹车重来，而是
+    **先让当前这一轮做完，下一轮开始前模型读到它**，再自行判断是纠偏
+    （助手方向错了）还是补充（用户只是加了内容）。类比"助手如何处理用户在
+    其工作时发来的新消息"。
+
+    ⛔ 不丢消息：先 save_message 落库（刷新后仍可见），再 push 进内存队列
+    交给正在跑的 loop drain。即使流随后意外结束，消息也已在 DB。
+    ⛔ 仅活流接受：无活流（当前没在生成）→ 返回 ok=False，前端应走正常发送。
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=422, detail="session_id 不能为空")
+    text = str(req.content or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="消息内容不能为空")
+    if not _inject.is_active(sid):
+        return {"ok": False, "detail": "该会话当前没有进行中的生成，请直接发送"}
+    # 先落库（不丢），再入队（交接给 loop）
+    try:
+        save_message(req.project_id or sid, sid, req.agent_id or "", "user", text)
+    except Exception:
+        pass  # 落库失败不阻塞注入（消息仍会进上下文，只是刷新后可能不可见）
+    queued = _inject.push(sid, text)
+    if not queued:
+        return {"ok": False, "detail": "该会话当前没有进行中的生成，请直接发送"}
+    return {"ok": True, "detail": "已加入：模型完成当前这一步后会读到你的新消息"}
 
 
 @app.get("/api/projects/{project_id}/state")
