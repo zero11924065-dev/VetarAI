@@ -61,10 +61,16 @@ Design rules (硬性):
 from __future__ import annotations
 
 import ipaddress
+import logging
 import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
+
+# D1（0.4.18）：模块级 logger。名单写入告警此前用 print（走 stdout 被丢弃）→ 改走 logging。
+# ⛔ logging.getLogger 是标准库、不导入项目模块；本模块对 config 的依赖仍是函数内延迟导入，
+#    故加 logger 不引入循环依赖。
+_log = logging.getLogger("sidecar.guard")
 
 # ── 白名单固定网段（协议常量，非配置；RFC1918 + IANA loopback）──────────
 # 这些是"本地/内网"的判定依据，属网络层常量，允许硬编码。
@@ -182,7 +188,7 @@ def guard_report_failure(host: str) -> None:
         reload_config({"egress_proxy_required": cur})
     except Exception as e:
         # 名单写入是优化项，失败不得影响调用方的降级/重试流程
-        print(f"[guard] WARN: 写入「需代理」名单失败（{key}）: {e}", flush=True)
+        _log.warning("写入「需代理」名单失败（%s）: %s", key, e)
 
 
 def guard_report_success(host: str) -> None:

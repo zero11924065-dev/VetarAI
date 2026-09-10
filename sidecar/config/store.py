@@ -23,10 +23,16 @@ elsewhere in the codebase.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
 from typing import Any
+
+# D1（0.4.18）：模块级 logger。配置读写告警此前用 print（走 stdout，被 main.js 的
+# stdio 'ignore' 全丢）→ 改走 logging 落 app.log，便于排查"配置读不出/网络切换异常"。
+# ⛔ logging.getLogger 是标准库、不导入项目模块，无循环依赖风险。
+_log = logging.getLogger("sidecar.config")
 
 # RLock: some public helpers re-enter each other (data_root -> ...), so the
 # lock must be re-entrant.
@@ -205,7 +211,7 @@ def _load_from_disk() -> dict[str, Any]:
             if isinstance(on_disk, dict):
                 return on_disk
         except Exception as e:
-            print(f"[config] WARN: failed to read {path}: {e}", flush=True)
+            _log.warning("failed to read %s: %s", path, e)
     return {}
 
 
@@ -432,5 +438,5 @@ def reload_config(patch: dict[str, Any] | None = None) -> dict[str, Any]:
                 from sidecar.network.guard import guard_reset_circuit
                 guard_reset_circuit()
             except Exception as e:  # 清熔断失败不应让配置写入整体失败
-                print(f"[config] WARN: 切换网络模式后重置熔断器失败: {e}", flush=True)
+                _log.warning("切换网络模式后重置熔断器失败: %s", e)
         return dict(cur)

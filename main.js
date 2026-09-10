@@ -248,7 +248,7 @@ function startSidecar() {
         VETARAI_HOST: cfg.sidecarHost,
         VETARAI_PORT: String(cfg.sidecarPort),
       },
-      stdio: ['pipe', 'ignore', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],   // D1（0.4.18）：stdout 由 'ignore' 改 'pipe'，不再丢弃常规日志
     });
   } else {
     const sidecarDir = path.join(__dirname, 'sidecar');
@@ -258,15 +258,26 @@ function startSidecar() {
       {
         cwd: __dirname,
         env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', PYTHONPATH: __dirname },
-        stdio: ['pipe', 'ignore', 'pipe'], // stderr 捕获（stdout 仍丢弃）
+        stdio: ['pipe', 'pipe', 'pipe'],   // D1（0.4.18）：stdout 由 'ignore' 改 'pipe'
       });
   }
 
   if (logStream) {
-    sidecarProcess.stderr.on('data', (chunk) => {
+    // D1（0.4.18）：stdout + stderr **都**写入同一 sidecar.log。
+    // ⛔ 根因①（实测确认）：原 stdio 第二项是 'ignore' → stdout 全丢。而**真凶就是 stdout**：
+    //    uvicorn 的访问日志（`INFO: 127.0.0.1 - "GET /api/... 200 OK"`）走 stdout，
+    //    于是用户看到的 sidecar.log 长期只有启动几行 stderr、之后再不更新
+    //    （用户："之前说要修复的实则没修复"——TS-102 B10 当时只接了 stderr，漏了 stdout）。
+    // ⛔ 不加"跳过 logging 结构化行"的去重——实测证明那是**死代码**：logging_setup 只挂
+    //    RotatingFileHandler 写 app.log、**不加 StreamHandler**，故结构化日志（`YYYY-.. | LEVEL |`）
+    //    根本不冒到 stdout（开发/类生产两种模式实测计数均为 0）。stdout 唯一来源是 uvicorn
+    //    访问日志，与 app.log 内容不重叠，无重复可去。曾据错误假设写过该正则，已删。
+    const writeChunk = (streamName, chunk) => {
       try {
+        const text = String(chunk);
+        if (!text.trim()) return;        // 跳过空/纯空白 chunk（uvicorn 尾部空行），避免日志噪声
         const ts = new Date().toISOString();
-        logStream.write(`[${ts}] ${chunk}`);
+        logStream.write(`[${ts}] [${streamName}] ${text}`);
         // 轮转：超阈值 → 关闭流，改名 .old，重开
         if (logStream.bytesWritten > MAX_LOG_BYTES) {
           logStream.end();
@@ -274,7 +285,9 @@ function startSidecar() {
           logStream = fs.createWriteStream(logFile, { flags: 'a' });
         }
       } catch (e) { /* 日志失败不阻塞 */ }
-    });
+    };
+    sidecarProcess.stdout.on('data', (chunk) => writeChunk('stdout', chunk));
+    sidecarProcess.stderr.on('data', (chunk) => writeChunk('stderr', chunk));
   }
 
   sidecarProcess.on('error', (err) => console.log('[sidecar spawn error]', err));

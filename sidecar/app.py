@@ -181,8 +181,10 @@ async def _ollama_api_handler(request, exc: OllamaAPIError):
 async def _boot():
     # Ensure config.json exists (first run) and log the resolved location.
     cfg = get_config()
-    print(f"[sidecar] config loaded from {get_config_path()}", flush=True)
-    print(f"[sidecar] ollama={cfg['ollama_base_url']} data_root={cfg['data_root']}", flush=True)
+    # D1（0.4.18）：print → logging。原 print(flush=True) 走 stdout，而 main.js 的 stdio
+    # 曾把 stdout 设为 'ignore' 全丢 → 这两行"配置已加载"从未落盘。改走 _log 进 app.log。
+    _log.info("config loaded from %s", get_config_path())
+    _log.info("ollama=%s data_root=%s", cfg['ollama_base_url'], cfg['data_root'])
 
 
 @app.on_event("shutdown")
@@ -191,7 +193,7 @@ async def _shutdown():
     try:
         await get_ollama_connector().aclose_all()
     except Exception as e:
-        print(f"[sidecar] connector close error: {e}", flush=True)
+        _log.warning("connector close error: %s", e)
 
 
 @app.get("/api/config")
