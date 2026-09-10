@@ -329,6 +329,26 @@ class WorkflowEngine:
     # ---- 0.2.3：图片路径扩展名（自动继承用） ----
     _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".heic")
 
+    # ---- C4（0.4.18）：file_read 需走解析器的二进制文档格式 ----
+    # ⛔ **从 parser 推导，不另写一份清单**：C3 刚清理过"前端 PARSEABLE_EXTS 与后端
+    #    SUPPORTED_EXTS 双源漂移"（前端缺 .pptx 致其永不解析），此处不能重犯。
+    #    文档格式 = 解析器支持的全部 − 纯文本族 − 图片（后两者无需解析器）。
+    #    → 后端将来加格式（如 .odt），本节点自动跟上，无需改这里。
+    # ⚠️ 注意 .csv 落在 TEXT_EXTS 里，故走纯文本路径**原样全读**（parser 的 _parse_csv
+    #    限 500 行是为聊天附件设计的）；工作流节点语义是"读文件内容"，原样更有用，
+    #    总量仍由 max_bytes 限制。这是有意的差异，不是遗漏。
+    try:
+        from sidecar.attachments.parser import (SUPPORTED_EXTS as _P_SUPPORTED,
+                                                TEXT_EXTS as _P_TEXT,
+                                                IMAGE_EXTS as _P_IMAGE)
+        _DOC_PARSE_EXTS = frozenset(_P_SUPPORTED - _P_TEXT - _P_IMAGE)
+    except Exception:                                  # pragma: no cover - 导入失败兜底
+        _DOC_PARSE_EXTS = frozenset({".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".pptx"})
+    # ⛔ 源文件字节上限：二进制格式必须**整读**才能解析（截断会破坏 PDF/ZIP 中央目录），
+    #    故需要一个独立于 max_bytes（那是输出文本上限）的内存保护阈值。
+    #    20MB：远超正常文档（律所案件材料多在数 MB 内），只挡异常大文件。
+    _FILE_READ_MAX_SOURCE_BYTES = 20 * 1024 * 1024
+
     def _inherit_upstream_images(self, node: dict) -> list[str]:
         """0.2.3：推理节点未配置 images 时，自动继承上游图片。两级兜底：
 
@@ -871,9 +891,21 @@ class WorkflowEngine:
           path（必填）：单个文件，或文件夹（读取其内文件）；支持 {{变量}}
           extensions（可选）：扩展名过滤，如 "md, txt"
           separator（可选）：文件间分隔模板，默认带文件名标题；支持 {{filename}}
-          max_bytes（可选）：单文件读取上限，默认 200000（防超大文件撑爆上下文）
+          max_bytes（可选）：单文件**输出文本**上限，默认 200000（防超大文件撑爆上下文）
 
         输出：拼接后的文本（供推理/分析节点消费）。
+
+        ⛔ C4（0.4.18）：本节点原本 `read_bytes()[:max].decode('utf-8','replace')`，
+        **不调任何解析器** → PDF/docx/xlsx/pptx/.doc 读出来是乱码（用户报告"工作流不可读 pdf"）。
+        现按扩展名分发到 `attachments/parser.py`（聊天附件同一解析链，含 C3 的 .doc）。
+        ⚠️ **两个必须区分的上限**（旧实现只有一个 max_bytes，对二进制格式语义是错的）：
+          * `max_bytes` = **输出文本**上限。上下文里装的是文本，不是原始字节。
+          * `_FILE_READ_MAX_SOURCE_BYTES` = **源文件字节**上限（防整读超大文件爆内存）。
+        ⛔ 二进制格式**不能沿用"先截断字节再解析"**：截断会破坏容器结构
+        （PDF/ZIP 的中央目录在文件尾部）→ 解析必然失败。必须整读→解析→再截断文本。
+        ⛔ 解析是 sync 且 CPU 密集（pypdf/openpyxl 逐页逐行），引擎是 async →
+        必须 `run_in_executor`，否则阻塞事件循环（心跳/SSE/取消全部卡住，
+        用户点停止都无响应）。本模块 `_run_code` 已有同一先例。
         """
         raw_path = render_template(str(node.get("path") or ""), self.variables)
         if not raw_path.strip():
@@ -901,12 +933,73 @@ class WorkflowEngine:
             max_bytes = 200000
         sep_tpl = node.get("separator")
 
+        loop = asyncio.get_running_loop()
         chunks: list[str] = []
         for f in files:
-            try:
-                text = f.read_bytes()[:max_bytes].decode("utf-8", errors="replace")
-            except OSError as e:
-                return NodeResult(node["id"], ok=False, error=f"读取失败 {f.name}：{e.strerror}")
+            suffix = f.suffix.lower()
+            # C4：二进制文档格式走解析器；其余仍按纯文本读（行为与改造前一致）
+            if suffix in self._DOC_PARSE_EXTS:
+                try:
+                    src_size = f.stat().st_size
+                except OSError as e:
+                    return NodeResult(node["id"], ok=False, error=f"读取失败 {f.name}：{e.strerror}")
+                if src_size > self._FILE_READ_MAX_SOURCE_BYTES:
+                    return NodeResult(node["id"], ok=False, error=(
+                        f"{f.name} 过大（{src_size} 字节 > 上限 "
+                        f"{self._FILE_READ_MAX_SOURCE_BYTES} 字节）：{suffix} 需整读后解析，"
+                        f"无法像纯文本那样只读前段（截断会破坏文件结构）"))
+                # ⛔ 二进制格式是**整读后解析**，故源文件不存在截断（cut=False）；
+                #    截断只可能发生在"解析出的文本超 max_bytes"这一步，由下方统一处理。
+                cut = False
+                try:
+                    raw = await loop.run_in_executor(None, f.read_bytes)
+                except OSError as e:
+                    return NodeResult(node["id"], ok=False, error=f"读取失败 {f.name}：{e.strerror}")
+                try:
+                    from sidecar.attachments.parser import parse_attachment
+                    # ⛔ sync + CPU 密集 → 丢线程池，不阻塞事件循环
+                    text, kind = await loop.run_in_executor(
+                        None, parse_attachment, f.name, raw)
+                except Exception as e:
+                    return NodeResult(node["id"], ok=False,
+                                      error=f"解析异常 {f.name}：{_exc_text(e)}")
+                if text is None:
+                    # ⛔ 如实报错而不是塞乱码/空串——乱码会让下游推理节点产出无意义结论，
+                    #    且用户无法察觉（这正是本节点改造前的病症）。
+                    return NodeResult(node["id"], ok=False, error=(
+                        f"无法解析 {f.name}（{suffix or '无扩展名'}）：文件损坏、加密，"
+                        f"或该格式不支持文本提取"))
+            else:
+                # ⛔ C4 补漏（0.4.18，本批自查发现）：旧写法 `read_bytes()[:max_bytes]`
+                #    **先截字节再解码**，有两个真实缺陷（测试 T6b 抓到）：
+                #    ① 在多字节字符中间切断 → 半个汉字解码成 U+FFFD 乱码，喂给下游推理节点；
+                #    ② 截断后 len(text) 恒 ≤ max_bytes → 统一的"已截断"标注**永不触发**，
+                #       用户以为读到了全文（静默丢内容比报错更糟）。
+                #    故改为：记录源大小 → 解码时回退尾部被切断的不完整字节序列 → 如实标注。
+                try:
+                    src_size = f.stat().st_size
+                    raw = await loop.run_in_executor(
+                        None, lambda: f.read_bytes()[:max_bytes])
+                except OSError as e:
+                    return NodeResult(node["id"], ok=False, error=f"读取失败 {f.name}：{e.strerror}")
+                cut = src_size > len(raw)          # 源文件确实被截了
+                # 回退最多 3 字节找到可成功解码的边界（UTF-8 单字符最长 4 字节）
+                text = None
+                for _back in range(0, 4):
+                    _b = raw[:len(raw) - _back] if _back else raw
+                    try:
+                        text = _b.decode("utf-8")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                if text is None:
+                    # 非 UTF-8（如 gbk）：沿用旧的 replace 容错，不因本次改造变成报错
+                    text = raw.decode("utf-8", errors="replace")
+            # 两类路径统一在此按**输出文本**上限截断（max_bytes 的语义是文本上限）
+            if cut or len(text) > max_bytes:
+                if len(text) > max_bytes:
+                    text = text[:max_bytes]
+                text += f"\n（已截断：源文件 {src_size} 字节，输出上限 {max_bytes} 字）"
             if sep_tpl is not None:
                 header = render_template(str(sep_tpl), {**self.variables, "filename": f.name})
                 chunks.append(f"{header}\n{text}")
