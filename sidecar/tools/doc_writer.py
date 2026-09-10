@@ -103,12 +103,16 @@ def _write_md(target: Path, content: dict) -> int:
     return len(text.encode("utf-8"))
 
 
-def _set_cjk_font(d, font: str = "宋体", ascii_font: str = "Times New Roman") -> None:
+def _set_cjk_font(d, font: str = "宋体", ascii_font: str = "Times New Roman",
+                  size_pt: float | None = None) -> None:
     """0.4.6+：把文档默认（Normal 样式）中文设为宋体、西文设为 Times New Roman。
 
     python-docx 默认模板中文会回退为西文字体，在 WPS/Office 中显示不规范。
     法律文书用宋体最正式。通过 Normal 样式 + 默认 rPr 的 eastAsia 属性设置，
     使全文（含表格、标题）中文统一宋体。不依赖本机安装 Office，纯文件层操作。
+
+    size_pt（0.4.20 #14）：正文字号（磅）。给了就套用参考文件字号；
+    None 时沿用默认小四（12pt）。⛔ 单位是磅，docx 的 w:sz 存半磅 → ×2。
     """
     from docx.oxml.ns import qn
     style = d.styles["Normal"]
@@ -121,28 +125,42 @@ def _set_cjk_font(d, font: str = "宋体", ascii_font: str = "Times New Roman") 
     rfonts.set(qn("w:ascii"), ascii_font)
     rfonts.set(qn("w:hAnsi"), ascii_font)
     rfonts.set(qn("w:eastAsia"), font)
-    # 默认字号：小四（12pt），法律文书常用
+    # 默认字号：小四（12pt），法律文书常用；#14 给了参考字号则套用
+    _pt = size_pt if (size_pt is not None and size_pt > 0) else 12.0
     sz = rpr.find(qn("w:sz"))
     if sz is None:
         from docx.oxml import OxmlElement
         sz = OxmlElement("w:sz")
         rpr.append(sz)
-    sz.set(qn("w:val"), "24")  # 12pt = 24 半磅
+    sz.set(qn("w:val"), str(int(round(_pt * 2))))  # 磅 → 半磅
 
 
-def _setup_a4_page(d) -> None:
+def _setup_a4_page(d, page: dict | None = None) -> None:
     """0.4.6+：A4 竖版 + 法律文书页边距（上下 2.54cm，左右 3.18cm 标准）。
 
     对文档中所有 section 统一设置。证据编排按 A4 竖版输出（用户规范）。
+
+    page（0.4.20 #14）：参考文件的页面设置 dict，键 width_cm/height_cm/
+    top_cm/bottom_cm/left_cm/right_cm。给了某项就套用、缺某项回退默认值——
+    ⛔ 逐项回退而非整体回退：参考文件可能只提取到尺寸没提取到边距（或反之），
+    整体丢弃会让已拿到的部分白提取。无效值（None/非正数）同样按缺省处理。
     """
     from docx.shared import Cm
+
+    def _pick(key: str, default: float) -> float:
+        if not page:
+            return default
+        v = page.get(key)
+        return float(v) if (isinstance(v, (int, float)) and not isinstance(v, bool)
+                            and v > 0) else default
+
     for sec in d.sections:
-        sec.page_width = Cm(21.0)
-        sec.page_height = Cm(29.7)
-        sec.top_margin = Cm(2.54)
-        sec.bottom_margin = Cm(2.54)
-        sec.left_margin = Cm(3.18)
-        sec.right_margin = Cm(3.18)
+        sec.page_width = Cm(_pick("width_cm", 21.0))
+        sec.page_height = Cm(_pick("height_cm", 29.7))
+        sec.top_margin = Cm(_pick("top_cm", 2.54))
+        sec.bottom_margin = Cm(_pick("bottom_cm", 2.54))
+        sec.left_margin = Cm(_pick("left_cm", 3.18))
+        sec.right_margin = Cm(_pick("right_cm", 3.18))
 
 
 def _add_page_number_footer(d, fmt: str = "第{p}页 共{t}页") -> None:
@@ -211,13 +229,56 @@ def _add_page_number_footer(d, fmt: str = "第{p}页 共{t}页") -> None:
             p._element.append(_make_text_run(tail))
 
 
-def _write_docx(target: Path, content: dict) -> int:
+def _apply_body_fmt(para, body: dict) -> None:
+    """把一个正文段落套用参考文件的段落格式（#14）：对齐 / 首行缩进 / 行距。
+
+    ⛔ 逐项判空套用——参考文件可能只提取到对齐没提取到行距，缺的项保持
+      python-docx 默认，不能因为某项为 None 就整体跳过。
+    ⛔ line_spacing 有两种语义（与 doc_reader 提取端对应，实测踩坑同源）：
+      · line_spacing（float）= **倍数**行距 → 直接赋给 paragraph_format.line_spacing
+      · line_spacing_pt（float）= **固定**行距（磅）→ 赋 Pt 值
+      两者都给了优先用倍数（更接近原文档观感）；都缺则不动。
+    """
+    if not body:
+        return
+    from docx.shared import Cm, Pt
+    pf = para.paragraph_format
+    av = body.get("align_value")
+    if av is not None:
+        try:
+            para.alignment = av
+        except Exception:
+            pass
+    fli = body.get("first_line_indent_cm")
+    if isinstance(fli, (int, float)) and not isinstance(fli, bool) and fli > 0:
+        try:
+            pf.first_line_indent = Cm(fli)
+        except Exception:
+            pass
+    lsp = body.get("line_spacing")
+    lsp_pt = body.get("line_spacing_pt")
+    try:
+        if isinstance(lsp, (int, float)) and not isinstance(lsp, bool) and lsp > 0:
+            pf.line_spacing = lsp                       # 倍数
+        elif isinstance(lsp_pt, (int, float)) and not isinstance(lsp_pt, bool) and lsp_pt > 0:
+            pf.line_spacing = Pt(lsp_pt)                # 固定磅
+    except Exception:
+        pass
+
+
+def _write_docx(target: Path, content: dict, ref_style: dict | None = None) -> int:
     import docx
     from docx.shared import Cm, Pt
     title, blocks = _extract_blocks(content)
     d = docx.Document()
-    _set_cjk_font(d)
-    _setup_a4_page(d)
+    # #14：ref_style 来自参考文件的结构化格式（doc_reader.extract_docx_style）；
+    #   缺省时各字段为空 dict → _set_cjk_font/_setup_a4_page 回退自身默认值。
+    _body = (ref_style or {}).get("body") or {}
+    _page = (ref_style or {}).get("page") or {}
+    _set_cjk_font(d, font=_body.get("font") or "宋体",
+                  ascii_font=_body.get("ascii_font") or "Times New Roman",
+                  size_pt=_body.get("size_pt"))
+    _setup_a4_page(d, page=_page or None)
     # 0.4.6+：整体页码页脚（默认开启，证据/目录类文档需要全档案连续页码）
     if content.get("page_number", True):
         fmt = content.get("page_number_format", "第{p}页 共{t}页")
@@ -301,7 +362,9 @@ def _write_docx(target: Path, content: dict) -> int:
                         cp = d.add_paragraph(caption)
                         cp.alignment = 1
         else:
-            d.add_paragraph(_clean_text(b.get("text")))
+            # 正文段落：套用参考文件的对齐/首行缩进/行距（#14）
+            para = d.add_paragraph(_clean_text(b.get("text")))
+            _apply_body_fmt(para, _body)
     d.save(str(target))
     return target.stat().st_size
 
@@ -371,15 +434,33 @@ def _write_pptx(target: Path, content: dict) -> int:
     return target.stat().st_size
 
 
-def write_document(doc_type: str, target: Path, content: dict) -> int:
-    """按类型生成文档，返回写入字节数。不支持的类型抛 ValueError。"""
+def write_document(doc_type: str, target: Path, content: dict,
+                   reference_path: str | None = None) -> int:
+    """按类型生成文档，返回写入字节数。不支持的类型抛 ValueError。
+
+    reference_path（0.4.20 #14）：可选的参考 .docx 路径。给了就提取它的格式
+    （字体/字号/对齐/首行缩进/行距/页面尺寸边距）套用到新生成的 docx——
+    "读参考文件格式 → 按该格式写出"，是通用能力（用户拍板：通用能力非模板）。
+    ⛔ 仅 docx 生效：参考格式提取依赖 python-docx，xlsx/pptx/md 无段落级排版概念。
+    ⛔ 提取失败（文件不存在/非 docx/结构异常）一律静默回退到默认格式，绝不阻断写出——
+      参考格式是"锦上添花"，不该因为参考文件有问题就让用户拿不到任何产物。
+    """
     if not isinstance(content, dict):
         raise ValueError("bad_arg: content 必须是结构化 JSON 对象（非纯文本）")
     dt = (doc_type or "").lower().strip()
     if dt in ("md", "markdown"):
         return _write_md(target, content)
     if dt == "docx":
-        return _write_docx(target, content)
+        ref_style = None
+        if reference_path:
+            try:
+                from sidecar.tools.doc_reader import extract_docx_style
+                _rp = Path(reference_path)
+                if _rp.is_file() and _rp.suffix.lower() == ".docx":
+                    ref_style = extract_docx_style(_rp)
+            except Exception:
+                ref_style = None
+        return _write_docx(target, content, ref_style=ref_style)
     if dt in ("xlsx", "xls"):
         return _write_xlsx(target, content)
     if dt in ("pptx", "ppt"):

@@ -182,6 +182,8 @@ TOOLS = {
             "path": "str（保存路径，扩展名决定类型 .docx/.xlsx/.pptx/.md）",
             "doc_type": "str（docx/xlsx/pptx/md，可选，默认从扩展名推断）",
             "content": "dict（结构化内容，契约见 doc_writer：blocks/sheets/slides）",
+            "reference_path": "str（可选，参考 .docx 绝对路径；给了就按它的字体/字号/"
+                              "对齐/首行缩进/行距/页面边距生成，仅 docx 生效——#14）",
         },
         "return_schema": CREATE_DOC_RETURN,
     },
@@ -536,7 +538,10 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | N
                 raise ValueError("bad_arg: content 必须是结构化 JSON 对象"
                                  "（docx/md 用 title+blocks；xlsx 用 sheets；pptx 用 slides）")
             target.parent.mkdir(parents=True, exist_ok=True)
-            nbytes = write_document(doc_type, target, content)
+            # #14：参考文件路径透传（仅 docx 生效，提取失败在 write_document 内静默回退）
+            _ref = args.get("reference_path")
+            _ref = str(_ref).strip() if isinstance(_ref, str) and _ref.strip() else None
+            nbytes = write_document(doc_type, target, content, reference_path=_ref)
             return {"ok": True, "path": str(target), "bytes": nbytes}
         if tool_name == "delete_path":
             if not target.exists():

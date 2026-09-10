@@ -214,6 +214,127 @@ def main():
               and _to_pos_float(True) is None and _to_pos_float("7.5") == 7.5,
               f"0→{_to_pos_float(0)} None→{_to_pos_float(None)}")
 
+        # ---------- D7（0.4.20 #14）：写出端按参考文件格式套用 ----------
+        # 需求：「读参考文件字体/字号/对齐/页边距 → 写出来」。读取端（doc_reader）已提取，
+        #   本组验证写出端（doc_writer.write_document(reference_path=...)）真的把格式套上去。
+        # ⛔ 用户拍板「通用能力非模板」：不内置任何固定模板，只按用户给的参考文件复刻。
+        import docx as _docx3
+        from docx.shared import Pt as _Pt, Cm as _Cm
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as _AL
+        from docx.oxml.ns import qn as _qn
+        from sidecar.tools import doc_reader as _dr
+
+        def _set_cjk(run, font):
+            rpr = run._element.get_or_add_rPr()
+            rf = rpr.find(_qn("w:rFonts"))
+            if rf is None:
+                from docx.oxml import OxmlElement
+                rf = OxmlElement("w:rFonts"); rpr.append(rf)
+            rf.set(_qn("w:eastAsia"), font)
+
+        # 构造参考 docx：正文=楷体 16pt 右对齐 首行缩进1.5cm 行距1.5倍；页边距全 5cm
+        ref = Path(tmp) / "ref_fmt.docx"
+        rd = _docx3.Document()
+        rs = rd.sections[0]
+        rs.top_margin = rs.bottom_margin = rs.left_margin = rs.right_margin = _Cm(5.0)
+        for txt in ["参考正文一", "参考正文二", "参考正文三"]:
+            p = rd.add_paragraph(txt)
+            p.alignment = _AL.RIGHT
+            p.paragraph_format.first_line_indent = _Cm(1.5)
+            p.paragraph_format.line_spacing = 1.5
+            for r in p.runs:
+                r.font.size = _Pt(16)
+                _set_cjk(r, "楷体")
+        rd.save(str(ref))
+
+        # D7a 提取端：extract_docx_style 返回结构化 dict（非字符串）
+        st = _dr.extract_docx_style(ref)
+        check("D7a extract_docx_style 返回结构化 dict",
+              isinstance(st, dict) and st.get("body", {}).get("font") == "楷体"
+              and st["body"].get("size_pt") == 16.0
+              and st["body"].get("align_value") == 2
+              and abs(st["body"].get("first_line_indent_cm", 0) - 1.5) < 0.01
+              and st["body"].get("line_spacing") == 1.5
+              and abs(st["page"].get("top_cm", 0) - 5.0) < 0.01, str(st))
+
+        # D7b 写出端端到端：reference_path 套用 → 读回核对六项格式
+        r = await execute("create_document", {
+            "path": f"{tmp}/out_fmt.docx",
+            "reference_path": str(ref),
+            "content": {"title": "标题", "blocks": [
+                {"type": "paragraph", "text": "新文档正文段落"}]}}, tmp)
+        check("D7b 带 reference_path 生成成功", r.get("ok") is True, str(r))
+
+        od = _docx3.Document(r["path"])
+        os_ = od.sections[0]
+        nrpr = od.styles["Normal"].element.find(_qn("w:rPr"))
+        nrf = nrpr.find(_qn("w:rFonts")) if nrpr is not None else None
+        nsz = nrpr.find(_qn("w:sz")) if nrpr is not None else None
+        _bp = [p for p in od.paragraphs if p.text == "新文档正文段落"]
+        bp = _bp[0] if _bp else None
+        pf = bp.paragraph_format if bp else None
+        check("D7c 字体套用（Normal eastAsia=楷体）",
+              nrf is not None and nrf.get(_qn("w:eastAsia")) == "楷体",
+              nrf.get(_qn("w:eastAsia")) if nrf is not None else "None")
+        check("D7d 字号套用（Normal sz=32 半磅=16pt）",
+              nsz is not None and nsz.get(_qn("w:val")) == "32",
+              nsz.get(_qn("w:val")) if nsz is not None else "None")
+        check("D7e 页边距套用（上下左右=5cm）",
+              abs(os_.top_margin.cm - 5.0) < 0.01 and abs(os_.left_margin.cm - 5.0) < 0.01,
+              f"上{round(os_.top_margin.cm,2)} 左{round(os_.left_margin.cm,2)}")
+        check("D7f 正文对齐套用（RIGHT）",
+              bp is not None and bp.alignment == _AL.RIGHT,
+              str(bp.alignment) if bp else "无正文段")
+        check("D7g 正文首行缩进套用（1.5cm）",
+              pf is not None and pf.first_line_indent is not None
+              and abs(pf.first_line_indent.cm - 1.5) < 0.01,
+              f"{round(pf.first_line_indent.cm,2) if pf and pf.first_line_indent else None}")
+        check("D7h 正文行距套用（1.5 倍）",
+              pf is not None and pf.line_spacing == 1.5,
+              str(pf.line_spacing) if pf else "无正文段")
+
+        # D7i 缺省回退：不给 reference_path → 仍是默认（宋体/12pt/A4 边距3.18）
+        r2 = await execute("create_document", {
+            "path": f"{tmp}/out_default.docx",
+            "content": {"title": "标题", "blocks": [
+                {"type": "paragraph", "text": "默认正文"}]}}, tmp)
+        dd = _docx3.Document(r2["path"])
+        dnrpr = dd.styles["Normal"].element.find(_qn("w:rPr"))
+        drf = dnrpr.find(_qn("w:rFonts")) if dnrpr is not None else None
+        dsz = dnrpr.find(_qn("w:sz")) if dnrpr is not None else None
+        check("D7i 不给 reference_path → 默认宋体/12pt（向后兼容）",
+              drf is not None and drf.get(_qn("w:eastAsia")) == "宋体"
+              and dsz is not None and dsz.get(_qn("w:val")) == "24",
+              f"{drf.get(_qn('w:eastAsia')) if drf is not None else None}/"
+              f"{dsz.get(_qn('w:val')) if dsz is not None else None}")
+
+        # D7j 异常容错：reference_path 指向不存在文件 → 静默回退默认、不报错、仍产出
+        r3 = await execute("create_document", {
+            "path": f"{tmp}/out_badref.docx",
+            "reference_path": f"{tmp}/不存在.docx",
+            "content": {"title": "标题", "blocks": [
+                {"type": "paragraph", "text": "正文"}]}}, tmp)
+        check("D7j reference 文件不存在 → 仍成功生成（回退默认）",
+              r3.get("ok") is True and Path(r3["path"]).is_file(), str(r3))
+
+        # D7k 异常容错：reference_path 指向非 docx（.xlsx）→ 忽略参考、仍产出 docx
+        r4 = await execute("create_document", {
+            "path": f"{tmp}/out_xlsxref.docx",
+            "reference_path": f"{tmp}/数据.xlsx",
+            "content": {"title": "标题", "blocks": [
+                {"type": "paragraph", "text": "正文"}]}}, tmp)
+        check("D7k reference 非 docx（.xlsx）→ 忽略参考、仍生成 docx",
+              r4.get("ok") is True and Path(r4["path"]).is_file(), str(r4))
+
+        # D7l 仅 docx 生效：md 给 reference_path 不报错（md 无段落排版，安全忽略）
+        r5 = await execute("create_document", {
+            "path": f"{tmp}/out_ref.md",
+            "reference_path": str(ref),
+            "content": {"title": "标题", "blocks": [
+                {"type": "paragraph", "text": "正文"}]}}, tmp)
+        check("D7l md + reference_path → 安全忽略、正常生成",
+              r5.get("ok") is True and Path(r5["path"]).is_file(), str(r5))
+
     asyncio.run(run())
 
     import shutil

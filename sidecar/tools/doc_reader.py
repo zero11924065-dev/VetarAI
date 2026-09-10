@@ -393,6 +393,99 @@ def _docx_format_summary(d: Any, path: Path | None = None) -> str:
     return "\n".join(out) if len(out) > 1 else ""
 
 
+# 对齐 label（人话）→ WD_ALIGN_PARAGRAPH 枚举值（写出端套用参考格式时反查）
+# ⛔ 与上方 _ALIGN_LABEL 互为逆映射；新增对齐方式时两处必须同步。
+_ALIGN_VALUE = {v: k for k, v in _ALIGN_LABEL.items()}
+
+
+def extract_docx_style(path: Path) -> dict[str, Any]:
+    """提取参考 .docx 的**结构化**格式，供 doc_writer 套用到新生成的文档（#14 写出端）。
+
+    与 `_docx_format_summary` 的区别：后者返回**给人/模型看的字符串概要**（聚合去重、
+    带中文说明），本函数返回**机器可读的 dict**，字段是 doc_writer 能直接消费的原值。
+
+    返回（任一项缺失即为 None / 空 dict，写出端据此回退到自身默认值）：
+      {"page": {"width_cm","height_cm","top_cm","bottom_cm","left_cm","right_cm"},
+       "body": {"font","ascii_font","size_pt","align_value","first_line_indent_cm",
+                "line_spacing"(float 倍数 或 None),"line_spacing_pt"(float 磅 或 None)}}
+
+    ⛔ body 取「正文主格式」：遍历段落，按出现次数最多的 (字体,字号,对齐,缩进,行距) 组合
+      判定为正文格式——标题/页脚的少数格式不应主导正文排版。与 _docx_format_summary
+      的聚合口径一致，但这里只要"出现最多的那一组"而非全部组合。
+    ⛔ 字体须读 eastAsia（_docx_run_font 已兼顾 ascii/eastAsia），中文文档才取得到。
+    ⛔ 全部 try 包裹：参考文件可能缺字段或结构异常，任一处失败都回退默认、绝不抛断写入。
+    """
+    result: dict[str, Any] = {"page": {}, "body": {}}
+    try:
+        import docx
+        d = docx.Document(str(path))
+    except Exception:
+        return result
+
+    # ── 页面设置 ──
+    try:
+        s = d.sections[0]
+
+        def _cm(v: Any) -> Any:
+            return round(v.cm, 2) if v is not None else None
+
+        result["page"] = {
+            "width_cm": _cm(s.page_width), "height_cm": _cm(s.page_height),
+            "top_cm": _cm(s.top_margin), "bottom_cm": _cm(s.bottom_margin),
+            "left_cm": _cm(s.left_margin), "right_cm": _cm(s.right_margin),
+        }
+    except Exception:
+        pass
+
+    # ── 正文主格式（按出现次数聚合取众数）──
+    combos: dict[tuple, int] = {}
+    for p in d.paragraphs:
+        if not (p.text or "").strip():
+            continue
+        # 跳过标题段（标题格式不该主导正文）
+        try:
+            sname = (p.style.name if p.style is not None else "") or "Normal"
+        except Exception:
+            sname = "Normal"
+        low = sname.lower()
+        if low.startswith("heading") or sname.startswith("标题"):
+            continue
+        name, size, _bold = _docx_run_font(p.runs[0]) if p.runs else (None, None, None)
+        # 字体名可能是 "ascii/eastAsia" 合并串，写出端要分开 → 这里拆开
+        ascii_font = eastasia = None
+        if name:
+            if "/" in name:
+                ascii_font, eastasia = name.split("/", 1)
+            else:
+                eastasia = name  # 只有 eastAsia 时（中文文档常见）
+        fli = lsp_mult = lsp_pt = None
+        try:
+            pf = p.paragraph_format
+            if pf.first_line_indent is not None:
+                fli = round(pf.first_line_indent.cm, 2)
+            _ls = pf.line_spacing
+            if _ls is not None:
+                if hasattr(_ls, "pt"):       # Length = 固定行距（磅）
+                    lsp_pt = round(float(_ls.pt), 1)
+                else:                        # float = 倍数行距
+                    lsp_mult = round(float(_ls), 2)
+        except Exception:
+            pass
+        key = (ascii_font, eastasia, size, _align_label(p.alignment), fli, lsp_mult, lsp_pt)
+        combos[key] = combos.get(key, 0) + 1
+
+    if combos:
+        (ascii_font, eastasia, size, align_lbl, fli, lsp_mult, lsp_pt), _cnt = \
+            max(combos.items(), key=lambda kv: kv[1])
+        result["body"] = {
+            "font": eastasia, "ascii_font": ascii_font, "size_pt": size,
+            "align_value": _ALIGN_VALUE.get(align_lbl),
+            "first_line_indent_cm": fli,
+            "line_spacing": lsp_mult, "line_spacing_pt": lsp_pt,
+        }
+    return result
+
+
 # ────────────────────────────── xlsx ──────────────────────────────
 
 def _read_xlsx(path: Path) -> tuple[str, str]:
