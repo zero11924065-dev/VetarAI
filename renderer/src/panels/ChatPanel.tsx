@@ -72,7 +72,16 @@ function formatTime(isoString: string): string {
 }
 const IMAGE_MIMES = ['image/png','image/jpeg','image/webp','image/gif','image/bmp'];
 // checkpoint-048：聊天上传支持办公文档（走后端附件解析端点）
-const PARSEABLE_EXTS = ['.pdf','.docx','.xlsx','.xlsm','.csv','.txt','.md','.json','.yaml','.yml','.log','.ini'];
+// ⛔ C3 局部去重（0.4.18）：此处原有 `PARSEABLE_EXTS` 白名单，是后端
+//    `attachments/parser.py: SUPPORTED_EXTS` 的**第二份真相源**，且已**漂移**：
+//    缺 `.pptx`（0.4.6 后端已加解析、前端漏改 → 用户能选 pptx 却从不解析，
+//    且因 parseable=false 直接 continue，界面连「（仅文件名）」都不显示），
+//    也缺后端 TEXT_EXTS 里的 .js/.ts/.py/.html/.css/.xml/.toml/.cfg/.conf/.sh/.markdown。
+//    ⛔ 修法不是"把清单补全"（后端下次加格式仍会漂），而是**删掉白名单、交后端唯一裁决**：
+//    非图片一律调解析端点，后端对不支持的格式返回 text=null → 前端显示「（仅文件名）」。
+//    与既有渲染三态（解析中… / 已提取 /（仅文件名））天然契合。
+//    代价：传 .zip/.exe 等会多一次往返，但后端有 10MB 上限保护（_CHAT_ATT_MAX_BYTES）。
+//    ⚠️ 故 handleFileChange 的判据简化为 `!item.isImage`，不再引用任何前端格式清单。
 
 // TS-102 B14：流式/临时消息稳定 id 生成器（单调序号，同一毫秒内也不重复）
 let localMsgSeq = 0;
@@ -1131,11 +1140,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     setPendingItems(prev => [...prev, ...newItems]);
     e.target.value = '';
 
-    // checkpoint-048：可解析的文档（PDF/Word/Excel/CSV/文本族）调后端解析端点提取文本
+    // checkpoint-048：可解析的文档调后端解析端点提取文本
+    // C3 局部去重（0.4.18）：⛔ 不再用前端格式白名单预判（见文件顶部注释——那份清单
+    //    已与后端 SUPPORTED_EXTS 漂移，导致 .pptx 等永远不被解析且界面无任何状态）。
+    //    改为「非图片一律交后端裁决」：后端对不支持的格式返回 text=null，
+    //    前端按既有三态显示「（仅文件名）」。图片仍单独走 dataUri 视觉链路，不调解析端点。
     for (const item of newItems) {
-      const ext = item.name.toLowerCase();
-      const parseable = !item.isImage && PARSEABLE_EXTS.some(pe => ext.endsWith(pe));
-      if (!parseable) continue;
+      if (item.isImage) continue;
       const b64 = item.dataUri.split(',')[1] || '';
       setPendingItems(prev => prev.map(p => p.name === item.name && p.dataUri === item.dataUri ? { ...p, parsing: true } : p));
       try {
@@ -2153,7 +2164,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* Input (§8.12) */}
       <div style={{ padding:'12px 16px', borderTop:`1px solid ${colors.borderSubtle}`, display:'flex', gap:8, alignItems:'flex-end', flexShrink:0 }}>
-        <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.docx,.xlsx,.xlsm,.pptx" />
+        <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.doc,.docx,.xlsx,.xlsm,.pptx" />
         {/* 验收修复：补回上传按钮（checkpoint-003 会话系统重写时丢失，handleUpload 成死代码） */}
         <button className="ui-btn ui-btn-secondary" onClick={handleUpload} data-tip="上传图片或文本文件（发送前可在暂存区删除）"
           style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,flexShrink:0}}>
