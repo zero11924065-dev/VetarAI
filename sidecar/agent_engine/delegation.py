@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 from typing import Any
 
@@ -453,16 +454,34 @@ def auto_create_agent(project_id: str, suggested_role: str, model_name: str) -> 
 async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
                         authorizer: Any, max_rounds: int, connector: Any,
                         cancel_check: Any = None,
-                        first_round_images: list[str] | None = None) -> tuple[str, list[dict], str | None, int]:
+                        first_round_images: list[str] | None = None,
+                        project_id: str = "", task_id: str = "") -> tuple[str, list[dict], str | None, int]:
     """跑一次子会话 loop，返回 (最终文本, tool_steps, 错误)。
     子任务不做压缩交互：compact 事件按跳过处理（不弹窗、不中断）。
     TS-114（3.25）：cancel_check 回调为真时，run_tool_loop 在下一轮开始前中止。
-    TS-114（3.27）：first_round_images 把委派附着的图片传给子会话视觉流。"""
+    TS-114（3.27）：first_round_images 把委派附着的图片传给子会话视觉流。
+    0.4.20（#15）：project_id+task_id 非空时，把进度转发进事件总线供任务面板实时显示。
+      ⛔ token **不逐字转发**（逐 SSE 行 yield，一次委派可达上千条，会淹没总线）→
+      节流为 `progress` 事件（≥2s 一次，带累计字数）；tool_call/tool_result/state 逐条转发。
+      ⛔ 转发全部包 try/except：总线是旁路，任何失败都不得影响委派本身。"""
     from sidecar.ollama.connector import get_ollama_connector
     conn = connector or get_ollama_connector()
     full_text = ""
     steps: list[dict] = []
     _pe_max_box = [0]  # TS-116：本轮最大 prompt_eval_count（列表包装避免闭包 reassignment）
+    # #15：进度转发开关（两者都给才转发，缺一即静默关闭，向后兼容旧调用）
+    _emit = bool(project_id) and bool(task_id)
+    _last_prog = [0.0]  # 上次 progress 推送时间（monotonic）
+
+    def _push(event: str, data: dict) -> None:
+        if not _emit:
+            return
+        try:
+            from sidecar.agent_engine import delegation_events as _de
+            _de.push(project_id, task_id, event, data)
+        except Exception:
+            pass   # ⛔ 总线失败绝不影响委派
+
     async for ev in run_tool_loop(model, msgs,
                                   # 0.4.9 F2：子 Agent 既不可再委派（防递归），也不可有联网安装权
                                   # （实测事故：子 Agent 擅自 install_skill 去 GitHub 拉取，
@@ -475,9 +494,17 @@ async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
         e, d = ev.get("event"), ev.get("data") or {}
         if e == "token":
             full_text += d.get("delta", "")
+            # #15：token 节流转发（≥2s 一次），面板显示"已生成 N 字"而非逐字刷屏
+            if _emit:
+                _t = time.monotonic()
+                if _t - _last_prog[0] >= 2.0:
+                    _last_prog[0] = _t
+                    _push("progress", {"chars": len(full_text)})
         elif e == "tool_call":
             steps.append({"id": d.get("id", ""), "name": d.get("name", ""),
                           "args": d.get("args", {}), "status": "running"})
+            # #15：面板实时显示"正在调用 X"——这是用户最想看到的中途进度
+            _push("tool_call", {"name": d.get("name", ""), "id": d.get("id", "")})
         elif e == "tool_result":
             entry = {"name": d.get("name", ""), "ok": bool(d.get("ok", True)),
                      "error": d.get("error"), "summary": d.get("summary"),
@@ -488,19 +515,28 @@ async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
                 steps[-1] = entry
             else:
                 steps.append(entry)
+            # #15：工具执行完成，面板把该行从"正在调用"更新为成功/失败
+            _push("tool_result", {"name": entry["name"], "ok": entry["ok"],
+                                  "id": entry.get("id", ""), "summary": entry.get("summary")})
         elif e == "done":
             if isinstance(d.get("content"), str) and d["content"].strip():
                 full_text = d["content"]
+            _push("progress", {"chars": len(full_text), "round_done": True})
         elif e == "error":
+            _push("status", {"state": "error", "detail": str(d.get("detail", "子任务执行出错"))})
             return full_text, steps, str(d.get("detail", "子任务执行出错")), _pe_max_box[0]
         elif e == "cancelled":
             # TS-114（3.25）：loop 检查点检测到取消标志 → 中止子会话
+            _push("status", {"state": "cancelled"})
             return full_text, steps, "已停止", _pe_max_box[0]
         elif e == "state":
             # TS-116（3.20③）：收集 prompt_eval_count 回传给主会话
             pe = d.get("prompt_eval_count")
             if isinstance(pe, int) and pe > 0 and pe > _pe_max_box[0]:
                 _pe_max_box[0] = pe
+            # #15：state 每轮一次，是天然的轮次进度信号（step/max/ctx_chars）
+            _push("progress", {"step": d.get("step"), "max": d.get("max"),
+                               "ctx_chars": d.get("ctx_chars"), "chars": len(full_text)})
         # compact_auto / compact_required / thinking：跳过（子任务不压缩不交互）
     return full_text, steps, None, _pe_max_box[0]
 
@@ -550,14 +586,17 @@ def _task_user_message(task_id: str, task: str, expect: str, image_count: int = 
 async def _run_pass_with_timeout(model: str, msgs: list[dict], sandbox_root: str,
                                authorizer: Any, max_rounds: int, connector: Any,
                                timeout: float, cancel_check: Any = None,
-                               first_round_images: list[str] | None = None) -> tuple[str, list[dict], str | None, int]:
+                               first_round_images: list[str] | None = None,
+                               project_id: str = "", task_id: str = "") -> tuple[str, list[dict], str | None, int]:
     if timeout and timeout > 0:
         return await asyncio.wait_for(
             _run_one_pass(model, msgs, sandbox_root, authorizer, max_rounds, connector,
-                          cancel_check=cancel_check, first_round_images=first_round_images),
+                          cancel_check=cancel_check, first_round_images=first_round_images,
+                          project_id=project_id, task_id=task_id),
             timeout=timeout)
     return await _run_one_pass(model, msgs, sandbox_root, authorizer, max_rounds, connector,
-                               cancel_check=cancel_check, first_round_images=first_round_images)
+                               cancel_check=cancel_check, first_round_images=first_round_images,
+                               project_id=project_id, task_id=task_id)
 
 
 async def run_delegated_task(
@@ -667,11 +706,27 @@ async def run_delegated_task(
     # 排队窗口对任务面板可见；拿到锁后才改 running。
     task_id = create_agent_task(project_id, parent_agent_id, parent_session_id,
                                 target_agent_id, target_name, task, expect)
+    # 0.4.20（#15）：建事件通道并推 queued——面板无需等轮询就能看到任务已排队。
+    # ⛔ 全部包 try/except：总线是旁路，失败绝不影响委派本身。
+    try:
+        from sidecar.agent_engine import delegation_events as _de
+        _de.begin_task(project_id, task_id)
+        _de.push(project_id, task_id, "status",
+                 {"state": "queued", "target_agent_name": target_name})
+    except Exception:
+        pass
 
     try:
         _lock_ctx = _NOOP_LOCK if _concurrent else _DELEGATION_LOCK
         async with _lock_ctx:
             update_agent_task(project_id, task_id, status="running")
+            # 0.4.20（#15）：拿到串行锁、开始执行 → 面板立刻从「等待中」变「进行中」
+            try:
+                from sidecar.agent_engine import delegation_events as _de
+                _de.push(project_id, task_id, "status",
+                         {"state": "running", "target_agent_name": target_name})
+            except Exception:
+                pass
             # TS-114（3.25）检查点1：排队期间被请求停止 → 直接标失败，不再发起模型调用
             if _is_delegation_cancelled(task_id):
                 clear_delegation_cancel(task_id)
@@ -747,7 +802,8 @@ async def run_delegated_task(
                         {"role": "user", "content": user_msg}]
                 full_text, steps, err, pe1 = await _run_pass_with_timeout(
                     model, msgs, sandbox_root, authorizer, max_rounds, connector,
-                    _activity_timeout, cancel_check=_cc, first_round_images=images)
+                    _activity_timeout, cancel_check=_cc, first_round_images=images,
+                    project_id=project_id, task_id=task_id)
                 if pe1: _pe_final_box[0] = pe1
                 # TS-114（3.25）检查点2：第一轮结束后、交卷解析前
                 if _is_delegation_cancelled(task_id):
@@ -793,7 +849,8 @@ async def run_delegated_task(
                                     {"role": "user", "content": retry_msg}]
                     full_text2, steps2, err2, pe2 = await _run_pass_with_timeout(
                         model, msgs2, sandbox_root, authorizer, max_rounds, connector,
-                        _activity_timeout, cancel_check=_cc)
+                        _activity_timeout, cancel_check=_cc,
+                        project_id=project_id, task_id=task_id)
                     if pe2: _pe_final_box[0] = pe2
                     # TS-114（3.25）检查点4：追问结束后
                     if _is_delegation_cancelled(task_id):
@@ -830,6 +887,17 @@ async def run_delegated_task(
                 report = _finalize_summary(project_id, task_id, report, _final_text)
                 clear_delegation_cancel(task_id)  # TS-114：标志残留清理（防误伤后续重试）
                 update_agent_task(project_id, task_id, status="done", report=json.dumps(report, ensure_ascii=False))
+                # 0.4.20（#15）：交卷成功 → 面板立刻显示完成与摘要，不必等下一次轮询。
+                # ⛔ 只推 status=done 这一处；failed 路径不逐个推（14 处 update_agent_task
+                # 里 10 处是 failed，逐个加既冗长又易漏）——统一靠 finally 的 end_task
+                # 推 `task_end` 收口，面板收到后重拉一次快照即可拿到最终 failed 状态与原因。
+                try:
+                    from sidecar.agent_engine import delegation_events as _de
+                    _de.push(project_id, task_id, "status",
+                             {"state": "done", "report_status": report.get("status"),
+                              "summary": (report.get("summary") or "")[:300]})
+                except Exception:
+                    pass
                 # checkpoint-068（3.21 D-2）：委派成功后自动清理子 Agent 与会话。
                 # 前提（用户拍板）：开关开启 + 交卷确实 success（确实委派且确实完成）；
                 # 且仅清理自动新建的 sub 型子 Agent，绝不误删用户的主 Agent。
@@ -877,3 +945,13 @@ async def run_delegated_task(
         except Exception:
             pass
         raise
+    finally:
+        # 0.4.20（#15）：⛔ **必须放 finally**——任何返回/异常/取消路径都要推 task_end
+        # 并回收通道。否则订阅者永远等不到结束信号 → 前端转圈不停
+        # （与 0.4.16 C2 根因③「running 状态未收敛致步骤组永不折叠」同源缺陷）。
+        # task_id 在本 try 之前已由 create_agent_task 创建，进入此处时必定已定义。
+        try:
+            from sidecar.agent_engine import delegation_events as _de
+            _de.end_task(project_id, task_id)
+        except Exception:
+            pass

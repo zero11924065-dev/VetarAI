@@ -1535,6 +1535,69 @@ async def api_list_agent_tasks(project_id: str, limit: int = 50):
     return list_agent_tasks(project_id, limit=lim)
 
 
+@app.get("/api/projects/{project_id}/tasks/stream")
+async def api_stream_agent_tasks(project_id: str, since: int = 0):
+    """0.4.20（#15）：委派任务**实时进度** SSE 端点。
+
+    ⛔ **修的用户可见缺陷**：此前委派任务跑起来后，任务面板要等任务整个结束才看得到结果
+    （`TaskPanel.tsx` 只做 `fetch` 轮询，且现有 SSE 端点只有 chat/stream 与 workflows/run，
+    **没有委派的**）。本端点让面板实时看到子 Agent 正在调哪个工具、跑到第几轮、已生成多少字。
+
+    **协议**（复用 `_sse_format`，与 chat/stream 同格式，前端解析器零改动）：
+      * 连上先推一条 `snapshot`（从 DB 读当前任务列表）——**权威基线**，
+        订阅者中途连上也不会拿着半截状态渲染；
+      * 随后推实时增量：`status` / `progress` / `tool_call` / `tool_result` / `task_end`；
+      * `gap` = 缓冲区断档（错过的 `tool_call` 无从补发）→ 前端应重拉快照；
+      * 每 15s 无事件发 SSE 注释行 `: keepalive`（防代理断连）；
+      * `_subscribed` / `_idle` 是总线内部控制事件，**不下发给前端**。
+
+    `since` = 客户端已收到的最后 seq（断线重连时带上，可补发缓冲区内错过的事件）。
+
+    ⛔ **客户端断开必须干净退出**：`GeneratorExit` / `CancelledError` 时订阅生成器的
+    finally 会归还订阅者计数，否则通道永远"有订阅者"无法回收 → 内存泄漏。
+    """
+    import asyncio
+    from sidecar.agent_engine import delegation_events as _de
+
+    async def gen():
+        try:
+            # ① 先给权威基线：DB 当前任务列表（不依赖缓冲，晚到订阅者也能立刻对齐）
+            try:
+                _snap = list_agent_tasks(project_id, limit=50)
+            except Exception:
+                _snap = []
+            yield _sse_format("snapshot", {"tasks": _snap})
+
+            # ② 再推实时增量
+            async for ev in _de.subscribe(project_id, since_seq=since):
+                _name = ev.get("event", "")
+                if _name in ("_subscribed", "_idle"):
+                    # 内部控制事件不下发；_idle 转为 SSE 注释行做心跳
+                    if _name == "_idle":
+                        yield ": keepalive\n\n"
+                    continue
+                if _name == "_channel_closed":
+                    # 通道被回收（仅 clear_all 时）→ 告知前端重连，不静默挂死
+                    yield _sse_format("stream_end", {"reason": "channel_closed"})
+                    return
+                _payload = dict(ev.get("data") or {})
+                _payload["task_id"] = ev.get("task_id", "")
+                _payload["seq"] = ev.get("seq", 0)
+                yield _sse_format(_name, _payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:            # 兜底：端点异常不得让前端无声等待
+            try:
+                yield _sse_format("stream_error", {"detail": str(exc)})
+            except Exception:
+                pass
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
+
+
 @app.post("/api/projects/{project_id}/tasks/{task_id}/retry")
 async def api_retry_agent_task(project_id: str, task_id: str):
     """TS-108 M3-2 决策 5：一键重试失败任务。
