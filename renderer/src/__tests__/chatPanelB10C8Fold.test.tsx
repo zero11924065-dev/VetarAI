@@ -20,24 +20,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { ChatPanel, AssistantBody } from '../panels/ChatPanel';
+import { ChatPanel } from '../panels/ChatPanel';
 
 import { jsonRes } from './helpers/fetchMock';
 
 /**
- * B10 + C8 遗留（0.4.18）· 正文折叠（附件段落 / 长篇 assistant 正文）。
+ * #11（0.4.19）· 删除正文折叠后的【反向守护】测试。
  *
- *  ⛔ 纯显示层：折叠**不得**改动 content、不得改发给模型的载荷、不得改落库——
- *     agent 仍从落库正文读全文（B10 的核心约束："内容保留让 agent 可读，但界面能折叠"）。
+ * ⛔ 历史：0.4.18（提交 7f577fc）曾加入 B10（附件段折叠）+ C8 遗留（超长 assistant
+ *    正文折叠），本文件当时测的是"折叠存在、点击展开"。用户明确这是**我虚构的需求**
+ *    （"从未要求过折叠，觉得没意义"），2026-09-10 拍板**全部删除**：内容与附件一律铺开。
  *
- *  覆盖：
- *   B10  ① 含附件标记的 user 消息：原话照常显示，附件段默认折叠（治文字墙）
- *        ② 点击展开能看到附件全文
- *        ③ 无附件标记的普通 user 消息：原样显示（不引入折叠控件）
- *   C8   ④ 超长 assistant 正文（流已结束）默认折叠，点击展开
- *        ⑤ 短正文不折叠（不引入无谓点击）
- *        ⑥ ⛔ 流式生成中不折叠（否则用户看不到正在生成的内容）
- *   共用 ⑦ 折叠是显示层：展开前后 content 不变（载荷/落库不受影响）
+ * 本文件现在守护的是**删除后的契约**（反向断言）：
+ *   R1 超长 assistant 正文 → 全文直接铺开，不出现"展开全文/收起全文"折叠控件
+ *   R2 含附件标记的 user 消息 → 原话 + 附件全文都铺开，不出现"附件内容"折叠控件
+ *   R3 短正文 / 无附件消息 → 照常显示（删除折叠不得误伤正常渲染）
+ *   R4 content 不被改动：渲染不截断、落库/载荷仍是完整原文（删的是显示层折叠，不是内容）
+ *   R5 ⛔ B4 工具步骤折叠**保留**（用户拍板）：有工具步骤的消息仍出现"工具调用 N 步"折叠组
+ *   R6 源码层：FoldSection / UserBody / AssistantBody / BODY_FOLD_* 已不存在（防回潮）
+ *
+ * ⛔ 这些是**删除验证**，不是功能验证——断言全是"折叠控件 not.toContain / queryByText 为 null"。
  */
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -51,9 +53,11 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
 
 beforeEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
+// ⛔ ATTACH_MARK 是附件正文注入的分隔标记，早在 B10 折叠之前就存在（与折叠无关，保留）。
+//    注入后正文形如「用户原话\n\n--- 附件内容 ---\n附件全文」。
 const ATTACH_MARK = '--- 附件内容 ---';
 
-// DB 加载的历史消息（流已结束、非活流）—— B10/C8 折叠的主战场就是这种
+// DB 加载的历史消息（流已结束、非活流）—— 折叠曾发生在这种场景，删除后应全文铺开
 function mount(dbMsgs: any[]) {
   const impl: typeof fetch = async (url) => {
     const u = String(url);
@@ -67,13 +71,30 @@ function mount(dbMsgs: any[]) {
   return render(<ChatPanel projectId="p1" agentId="a1" />);
 }
 
-const LONG_BODY = '这是很长的正文内容。'.repeat(80);   // ≈1600 字，超过 BODY_FOLD_CHARS(600)
+const LONG_BODY = '这是很长的正文内容。'.repeat(80);   // ≈1600 字，远超已删除的 BODY_FOLD_CHARS(600)
 const SHORT_BODY = '简短回答。';
 
-describe('B10 + C8 正文折叠 · 显示层', () => {
-  // ── B10 ①② 附件段折叠 ──
-  it('B10-① user 消息含附件标记 → 原话显示、附件段默认折叠', async () => {
-    const attach = '[合同.docx]（原件已保存：/x/合同.docx）\n' + '合同条款正文。'.repeat(50);
+describe('#11 删除正文折叠 · 反向守护', () => {
+  // ── R1 超长 assistant 正文不再折叠 ──
+  it('R1 超长 assistant 正文 → 全文铺开，无"展开全文"折叠控件', async () => {
+    const dbMsgs = [
+      { id: 1, role: 'user', content: '详细讲讲', created_at: 't1' },
+      { id: 2, role: 'assistant', content: LONG_BODY, created_at: 't2' },
+    ];
+    const { unmount } = mount(dbMsgs);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('这是很长的正文内容');
+    }, { timeout: 3000 });
+    // ⛔ 折叠已删：正文尾部内容也直接可见（不需点击展开）
+    expect(document.body.textContent).toContain('这是很长的正文内容');
+    expect(screen.queryByText(/展开全文/)).toBeNull();
+    expect(screen.queryByText(/收起全文/)).toBeNull();
+    unmount();
+  });
+
+  // ── R2 附件段不再折叠 ──
+  it('R2 含附件标记的 user 消息 → 原话+附件全文铺开，无"附件内容"折叠控件', async () => {
+    const attach = '[合同.docx]（原件已保存：/x/合同.docx）\n' + '合同条款正文甲乙丙。'.repeat(50);
     const dbMsgs = [
       { id: 1, role: 'user', content: `请帮我看这份合同\n\n${ATTACH_MARK}\n${attach}`, created_at: 't1' },
     ];
@@ -81,64 +102,17 @@ describe('B10 + C8 正文折叠 · 显示层', () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain('请帮我看这份合同');
     }, { timeout: 3000 });
-    // 用户原话照常显示（折叠只折附件段，不折原话）
+    // 用户原话照常显示
     expect(document.body.textContent).toContain('请帮我看这份合同');
-    // 附件段默认折叠 → 折叠提示出现，附件全文不铺开
-    expect(document.body.textContent).toContain('附件内容');
-    expect(document.body.textContent).not.toContain('合同条款正文');
+    // ⛔ 附件全文直接铺开（折叠已删，不再藏起来需点击）
+    expect(document.body.textContent).toContain('合同条款正文甲乙丙');
+    expect(screen.queryByText(/📄 附件内容/)).toBeNull();
+    expect(screen.queryByText(/收起附件内容/)).toBeNull();
     unmount();
   });
 
-  it('B10-② 点击折叠条 → 展开能看到附件全文', async () => {
-    const attach = '[合同.docx]（原件已保存：/x/合同.docx）\n合同条款正文甲乙丙。';
-    const dbMsgs = [
-      { id: 1, role: 'user', content: `看合同\n\n${ATTACH_MARK}\n${attach}`, created_at: 't1' },
-    ];
-    const { unmount } = mount(dbMsgs);
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('附件内容');
-    }, { timeout: 3000 });
-    expect(document.body.textContent).not.toContain('合同条款正文甲乙丙');
-    // 点折叠条展开
-    const toggle = screen.getByText(/附件内容/);
-    toggle.click();
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('合同条款正文甲乙丙');
-    }, { timeout: 1500 });
-    unmount();
-  });
-
-  it('B10-③ 无附件标记的普通 user 消息 → 原样显示、不引入折叠控件', async () => {
-    const dbMsgs = [{ id: 1, role: 'user', content: '普通提问没有附件', created_at: 't1' }];
-    const { unmount } = mount(dbMsgs);
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('普通提问没有附件');
-    }, { timeout: 3000 });
-    expect(screen.queryByText(/附件内容/)).toBeNull();
-    unmount();
-  });
-
-  // ── C8 ④⑤ 长篇 assistant 正文折叠 ──
-  it('C8-④ 超长 assistant 正文（流已结束）→ 默认折叠，点击展开', async () => {
-    const dbMsgs = [
-      { id: 1, role: 'user', content: '详细讲讲', created_at: 't1' },
-      { id: 2, role: 'assistant', content: LONG_BODY, created_at: 't2' },
-    ];
-    const { unmount } = mount(dbMsgs);
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('展开全文');
-    }, { timeout: 3000 });
-    // 默认折叠：正文开头不该直接铺开（折叠提示在、完整正文藏起）
-    expect(document.body.textContent).toContain('展开全文');
-    // 点击展开
-    screen.getByText(/展开全文/).click();
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('这是很长的正文内容');
-    }, { timeout: 1500 });
-    unmount();
-  });
-
-  it('C8-⑤ 短 assistant 正文 → 不折叠（无折叠控件）', async () => {
+  // ── R3 短正文 / 无附件消息不被误伤 ──
+  it('R3a 短 assistant 正文 → 照常显示（删折叠不误伤正常渲染）', async () => {
     const dbMsgs = [
       { id: 1, role: 'user', content: '问', created_at: 't1' },
       { id: 2, role: 'assistant', content: SHORT_BODY, created_at: 't2' },
@@ -148,71 +122,70 @@ describe('B10 + C8 正文折叠 · 显示层', () => {
       expect(document.body.textContent).toContain('简短回答');
     }, { timeout: 3000 });
     expect(screen.queryByText(/展开全文/)).toBeNull();
-    expect(screen.queryByText(/收起全文/)).toBeNull();
     unmount();
   });
 
-  // ── 共用 ⑦ 折叠是显示层：不改 content ──
-  it('共用-⑦ 折叠/展开不改 content（落库与载荷不受影响）', async () => {
+  it('R3b 无附件标记的普通 user 消息 → 原样显示，无折叠控件', async () => {
+    const dbMsgs = [{ id: 1, role: 'user', content: '普通提问没有附件', created_at: 't1' }];
+    const { unmount } = mount(dbMsgs);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('普通提问没有附件');
+    }, { timeout: 3000 });
+    expect(screen.queryByText(/附件内容/)).toBeNull();
+    unmount();
+  });
+
+  // ── R4 content 不被改动（删的是显示层折叠，不是内容）──
+  it('R4 超长正文渲染不截断 content（缓存/落库仍是完整原文）', async () => {
     const dbMsgs = [
       { id: 1, role: 'user', content: '详细讲讲', created_at: 't1' },
       { id: 2, role: 'assistant', content: LONG_BODY, created_at: 't2' },
     ];
     const { unmount } = mount(dbMsgs);
     await waitFor(() => {
-      expect(document.body.textContent).toContain('展开全文');
-    }, { timeout: 3000 });
-    // 折叠态：缓存里的 content 仍是完整长文（折叠只是显示层，没截断/没改）
-    const cache1 = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')['s1'] || [];
-    const asst1 = cache1.find((m: any) => m.role === 'assistant');
-    expect(asst1 && asst1.content.length).toBe(LONG_BODY.length);
-    // 展开后 content 不变
-    screen.getByText(/展开全文/).click();
-    await waitFor(() => {
       expect(document.body.textContent).toContain('这是很长的正文内容');
-    }, { timeout: 1500 });
-    const cache2 = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')['s1'] || [];
-    const asst2 = cache2.find((m: any) => m.role === 'assistant');
-    expect(asst2 && asst2.content).toBe(LONG_BODY);
+    }, { timeout: 3000 });
+    const cache = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')['s1'] || [];
+    const asst = cache.find((m: any) => m.role === 'assistant');
+    expect(asst && asst.content).toBe(LONG_BODY);
     unmount();
   });
 
-  // ── C8 ⑥ ⛔ 流式生成中绝不折叠（否则用户看不到正在生成的内容）──
-  // ⛔⛔ 这里**不能**用全面板流式测试：jsdom 下 SSE 流不 close 时渲染不 flush，
-  //    而流一 close，sending 立即转 false → streaming 判据无法稳定为真
-  //    （0.4.16 续八同一坑，曾连败 4 次）。故改为**组件级单元测试**：
-  //    直接渲染 AssistantBody 传 streaming，精确测"折叠 vs 原样"的契约；
-  //    streaming 判据本身（与打字机光标一致）由下方 T-src 源码断言守护。
-  it('C8-⑥a AssistantBody streaming=true → 超长正文也不折叠（原样渲染）', () => {
-    const { container } = render(<AssistantBody content={LONG_BODY} streaming={true} />);
-    // 流式中：正文实时可见，且**没有**"展开全文"折叠控件
-    expect(container.textContent).toContain('这是很长的正文内容');
-    expect(container.textContent).not.toContain('展开全文');
+  // ── R5 ⛔ B4 工具步骤折叠保留（用户拍板）──
+  it('R5 有工具步骤的 assistant 消息 → B4 步骤折叠组仍在（用户拍板保留）', async () => {
+    const dbMsgs = [
+      { id: 1, role: 'user', content: '查一下', created_at: 't1' },
+      { id: 2, role: 'assistant', content: '已完成查询。', created_at: 't2',
+        // ⛔ 前端 Message 字段是驼峰 toolSteps（非后端下划线 tool_steps），
+        //    用错字段名步骤不会渲染 → B4 折叠组不出现（对照既有 chatPanelB4Collapse.test.tsx）。
+        toolSteps: [
+          { id: 'tc1', name: 'read_file', args: {}, status: 'ok', summary: 'ok' },
+          { id: 'tc2', name: 'web_search', args: {}, status: 'ok', summary: 'ok' },
+        ] },
+    ];
+    const { unmount } = mount(dbMsgs);
+    await waitFor(() => {
+      // B4 收拢态摘要文案："工具调用 N 步 · 已完成"
+      expect(document.body.textContent).toMatch(/工具调用\s*2\s*步/);
+    }, { timeout: 3000 });
+    unmount();
   });
 
-  it('C8-⑥b AssistantBody streaming=false + 超长 → 折叠（与 ⑥a 互为反证）', () => {
-    const { container } = render(<AssistantBody content={LONG_BODY} streaming={false} />);
-    expect(container.textContent).toContain('展开全文');
-    expect(container.textContent).not.toContain('这是很长的正文内容');
-  });
-
-  it('C8-⑥c AssistantBody streaming=true + 短正文 → 原样（不长本就不折叠）', () => {
-    const { container } = render(<AssistantBody content={SHORT_BODY} streaming={true} />);
-    expect(container.textContent).toContain('简短回答');
-    expect(container.textContent).not.toContain('展开全文');
-  });
-
-  it('C8-⑥-src streaming 判据已收敛为单一变量、三处共用（防漂移）', async () => {
-    // ⛔ 局部去重后：流式判据只在 isStreamingThis 定义处写**一次**，
-    //    工具步骤折叠(done)、正文折叠(streaming)、打字机光标三处引用同一变量。
-    //    钉死这个形态：若将来有人把判据改回字面量重复，或三处不再共用，此断言失败。
+  // ── R6 源码层：折叠组件与阈值常量已彻底移除（防回潮）──
+  it('R6 源码不含 FoldSection/UserBody/AssistantBody/BODY_FOLD_*（折叠不可回潮）', async () => {
     const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
-    // 1) 判据字面量只应出现 1 次（在 isStreamingThis 定义处）——出现 2+ 次=又重复了
-    const cond = 'sending && !msg.stopped && !msg.streamError';
-    expect(src.split(cond).length - 1).toBe(1);
-    // 2) isStreamingThis 被三处消费：done={!isStreamingThis}、streaming={isStreamingThis}、光标 && isStreamingThis
-    expect(src).toContain('done={!isStreamingThis}');
-    expect(src).toContain('streaming={isStreamingThis}');
-    expect(src).toMatch(/msg\.role === 'assistant' && isStreamingThis &&/);
+    // ⛔ 一律匹配【声明形态】（function/const 前缀），不用裸名——
+    //    否则注释里提到旧名（如本文件 R6 标题、ChatPanel 的历史注释）就会误命中、误报。
+    expect(src.includes('function FoldSection')).toBe(false);
+    expect(src.includes('function UserBody')).toBe(false);
+    expect(src.includes('function AssistantBody')).toBe(false);
+    expect(src.includes('const BODY_FOLD_CHARS')).toBe(false);
+    expect(src.includes('const BODY_FOLD_LINES')).toBe(false);
+    // ⛔ 不再用裸文案（"展开全文"等）断言：注释里描述历史时会自然提到这些词，
+    //    裸匹配会被注释误命中。声明形态（function/const）断言已足够守护折叠不回潮。
+    // ⛔ B4 步骤折叠组件必须仍在（与上面被删的三个区分开）
+    expect(src.includes('function ToolStepsGroup')).toBe(true);
+    // ⛔ ATTACH_MARK 必须保留（附件注入标记，与折叠无关）
+    expect(src.includes("const ATTACH_MARK = '--- 附件内容 ---'")).toBe(true);
   });
 });

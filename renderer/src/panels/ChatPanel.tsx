@@ -183,65 +183,17 @@ function ToolStepBar({ step }: { step: ToolStep }) {
   );
 }
 
-// ── B10 + C8 遗留（0.4.18）：正文折叠（附件段落 / 长篇 assistant 正文 共用外壳）──
-// ⛔ ATTACH_MARK 是附件正文注入的**唯一标记**，注入处（handleSend）与折叠处（UserBody）
-//    共用此常量 —— 不可各写一份字面量，否则改一处漏一处（C3/A10 刚清理过双源漂移）。
+// ── 附件正文注入标记 ──
+// ⛔ ATTACH_MARK 是附件正文注入的**唯一标记**（handleSend 注入处使用），
+//    不可在别处写字面量副本，否则改一处漏一处（C3/A10 刚清理过双源漂移）。
+// ⛔ #11（0.4.19）：此前 B10 + C8 遗留（0.4.18，提交 7f577fc）按此标记把附件段
+//    与超长 assistant 正文折叠显示（折叠外壳组件 + 字数/行数阈值常量，阈值约 600 字 / 20 行）。
+//    用户拍板**全部删除**——该折叠从未被要求过（用户原话「我虚构的需求」「没有意义」），
+//    把内容藏起来只会让用户以为信息丢了。现正文一律原样铺开。
+//    ⛔ 标记本身保留：它早在 B10 之前就存在（附件注入的分隔符），与折叠无关。
+//    ⛔ B4 工具步骤折叠（ToolStepsGroup）**保留**：它折叠的是过程条目而非内容，
+//    且解决的正是用户报过的「工具调用步骤一直占着会话窗」痛点（用户 2026-09-10 拍板）。
 const ATTACH_MARK = '--- 附件内容 ---';
-const BODY_FOLD_CHARS = 600;   // C8：正文超此字数才折叠
-const BODY_FOLD_LINES = 20;    // C8：或超此行数（长列表/代码即使字数不多也占屏）
-
-/** 折叠外壳：默认收起，点击展开/收起。⛔ 纯显示层——不碰 content、不落库、不改发给模型的载荷。 */
-function FoldSection({ foldLabel, openLabel, defaultOpen = false, children }:
-    { foldLabel: string; openLabel: string; defaultOpen?: boolean; children: React.ReactNode }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const collapsed = !open;
-  return (
-    <div style={{ marginTop: 6 }}>
-      <div onClick={() => setOpen(o => !o)}
-        style={{ display:'inline-flex', alignItems:'center', gap:5, cursor:'pointer',
-          fontSize:12, color:colors.textTertiary, userSelect:'none' }}>
-        <Icon name={collapsed ? 'chevron-down' : 'chevron-up'} size={12} style={{ flexShrink:0 }} />
-        <span>{collapsed ? foldLabel : openLabel}</span>
-      </div>
-      {!collapsed && <div style={{ marginTop:6 }}>{children}</div>}
-    </div>
-  );
-}
-
-/** B10：user 消息正文。含附件标记 → 用户原话照常显示，附件全文段折叠（默认收起，治文字墙）。 */
-function UserBody({ content }: { content: string }) {
-  const wrapStyle: React.CSSProperties = {
-    whiteSpace:'pre-wrap', overflowWrap:'anywhere', wordBreak:'break-word',
-    fontSize:14, lineHeight:1.65, minWidth:0, maxWidth:'100%' };
-  const idx = content.indexOf(ATTACH_MARK);
-  if (idx < 0) return <div style={wrapStyle}>{content}</div>;
-  const head = content.slice(0, idx).replace(/\s+$/, '');
-  const attach = content.slice(idx + ATTACH_MARK.length).replace(/^\s+/, '');
-  return (
-    <div style={wrapStyle}>
-      {head && <div>{head}</div>}
-      {/* ⛔ 附件全文一律默认折叠（用户拍板）：agent 仍从落库正文读全文，折叠只影响显示 */}
-      <FoldSection foldLabel={`📄 附件内容（${attach.length} 字）`} openLabel="📄 收起附件内容" defaultOpen={false}>
-        <div style={wrapStyle}>{attach}</div>
-      </FoldSection>
-    </div>
-  );
-}
-
-/** C8 遗留：assistant 正文。流式中或不长 → 原样渲染；超长且流已结束 → 默认折叠（治长篇文字墙）。
- *  ⛔ export 仅为组件级单测（流式中 streaming=true 在全面板测试里无法稳定造出：
- *  jsdom 下流不 close 渲染不 flush、流一 close sending 立即转 false，见 test 文件说明）。 */
-export function AssistantBody({ content, streaming }: { content: string; streaming: boolean }) {
-  const tooLong = content.length > BODY_FOLD_CHARS
-    || content.split('\n').length > BODY_FOLD_LINES;
-  // ⛔ 流式生成中绝不折叠（否则用户看不到正在生成的内容）；不长也不折叠（避免无谓的点击）
-  if (streaming || !tooLong) return <StreamingMarkdown text={content} />;
-  return (
-    <FoldSection foldLabel={`展开全文（${content.length} 字）`} openLabel="收起全文" defaultOpen={false}>
-      <StreamingMarkdown text={content} />
-    </FoldSection>
-  );
-}
 
 /**
  * B4（0.4.12）：工具步骤「完成后折叠」。
@@ -2052,9 +2004,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           const isUser = msg.role === 'user';
           const isSystem = msg.role === 'system';
           // ⛔ B10/C8 局部去重（0.4.18）：这个"当前正在流式生成的就是本条"判据，
-          //    原本在渲染循环里**字面量重复 3 次**（工具步骤折叠 done / 正文折叠 streaming /
-          //    打字机光标），注释还写着"复用同一判据"却是各写各的 → 改一处漏两处的漂移隐患。
-          //    提取为单一常量，三处共用：工具步骤折叠用 !isStreamingThis、正文折叠与光标用 isStreamingThis。
+          //    原本在渲染循环里**字面量重复多次**（工具步骤折叠 done / 打字机光标 等），
+          //    注释还写着"复用同一判据"却是各写各的 → 改一处漏一处的漂移隐患。
+          //    提取为单一常量共用：工具步骤折叠用 !isStreamingThis、打字机光标用 isStreamingThis。
+          //    （#11/0.4.19 删正文折叠后，正文不再是消费方，但 B4 步骤折叠与光标仍共用此判据。）
           const isStreamingThis = sending && !msg.stopped && !msg.streamError
             && i === localMessages.length - 1;
           const bubbleBg = isUser ? colors.accent : isSystem ? colors.okBg : colors.bgCard;
@@ -2141,12 +2094,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                     done={!isStreamingThis}
                   />
                 )}
-                {/* 内容：用户消息纯文本（B10：附件段折叠）；assistant 用 Markdown 流式渲染
-                    （C8：超长且流已结束才折叠）。⛔ streaming 与下方打字机光标共用 isStreamingThis，
-                    单一真相源，杜绝"光标还在闪、正文却已折叠"的漂移。 */}
+                {/* 内容：用户消息纯文本原样显示；assistant 用 Markdown 流式渲染。
+                    ⛔ #11（0.4.19）：正文折叠已按用户拍板删除（原 B10 附件段折叠 /
+                    C8 超长正文折叠），内容与附件一律铺开，不再藏进「展开全文」。
+                    ⛔ isStreamingThis 仍被两处消费：上方 B4 工具步骤折叠 done 判据、
+                    下方打字机光标 —— 它不是折叠遗留物，不可随正文折叠一并删掉。 */}
                 {msg.role === 'user'
-                  ? <UserBody content={msg.content} />
-                  : <AssistantBody content={msg.content} streaming={isStreamingThis} />}
+                  ? <div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word',fontSize:14,lineHeight:1.65,minWidth:0,maxWidth:'100%'}}>{msg.content}</div>
+                  : <StreamingMarkdown text={msg.content} />}
                 {/* 流式打字机光标 */}
                 {msg.role === 'assistant' && isStreamingThis && (
                   <span className="ui-caret" style={{height:16,verticalAlign:'middle'}}>&nbsp;</span>
