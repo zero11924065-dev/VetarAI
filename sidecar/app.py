@@ -1061,13 +1061,29 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         if not (_pid and _sid) or _state["saved"]:
             return
         _state["saved"] = True
+        # C2 根因③（0.4.16）：⛔ 落库即**定稿**，定稿消息里不该存在任何"正在进行"的步骤。
+        # 此前 _state["steps"] 里 status="running" 被原样写进 DB（实测确认），
+        # 刷新后该工具**永久显示"正在调用…"**，且前端折叠判据 running===0 永不满足。
+        # 在唯一落库出口统一收敛（比"只在停止路径改"更稳健：done/error 路径若有残留同样纠正）。
+        #
+        # ⛔⛔ 必须收敛到**副本**而非原地改 _state["steps"]：_state 同时是 work/state.json
+        # 诊断快照的数据源（_flush_exec_state 直接引用它），而 state.json 的用途正是
+        # "中断后保留最后现场（status != done 即中断态，可据此续跑）"——running 在那里是
+        # **有诊断价值的真实信息**。第一版原地改，把现场抹成了 interrupted，被 test_state_file
+        # 断言③「中断现场保留最后一步（tool_call running）」抓住（真实回归）。
+        # 故：DB 存定稿态（interrupted），诊断快照保留现场态（running），两者语义各得其所。
+        _steps_final = [
+            ({**_st, "status": "interrupted"}
+             if isinstance(_st, dict) and _st.get("status") == "running" else _st)
+            for _st in (_state["steps"] or [])
+        ]
         try:
             # C8（0.4.16）：stopped=True 标记"用户主动停止"的那条助手回复并落库。
             # ⛔ _state["saved"] 门闩保证每条流只落库一次：C2 的 handleStop 先发 stop
             # 请求再 abort，故取消分支(下方)与 CancelledError 分支存在竞态——但两者都传
             # stopped=True，无论哪条先落库结果一致，竞态自然消解。
             save_message(_pid, _sid, _aid, "assistant", _state["text"],
-                         model_used=req.model, tool_steps=_state["steps"] or None,
+                         model_used=req.model, tool_steps=_steps_final or None,
                          truncated=truncated, stopped=stopped,
                          prompt_eval_count=_state.get("prompt_eval_count"))
         except Exception:

@@ -111,24 +111,59 @@ export function sseResSlow(events: string[], gapMs = 120, status = 200): Respons
 }
 
 /** 可控 SSE：把 enqueue/close 的控制权交给测试，用于精确构造"卸载后才发 done"等时序。 */
+/**
+ * 可控 SSE：把 enqueue/close 的控制权交给测试，用于精确构造"卸载后才发 done"等时序。
+ *
+ * 带**缓冲区**：start() 之前调用的 push 先暂存，start 触发时一次性冲刷。
+ * 这是防御性的（WHATWG 规范下 start 通常在构造期同步执行，故多数情况用不到），
+ * 但可避免不同运行时实现下 start 时机差异导致事件丢失。
+ *
+ * ⛔ 使用方注意（我在此踩过坑，归因一度写错）：push 之后**必须在 act 内 await 一拍**，
+ * 否则 reader 读到数据与 React 重渲染会发生在 act 之外、DOM 不被 flush，
+ * 表现为"事件像没送达"。正确写法：
+ *   await act(async () => { ctl.push(ev); await new Promise(r => setTimeout(r, 50)); });
+ * 真实原因不是本 helper 丢事件——曾误判为此并写进注释，实测（一次性流 sseRes 能正常
+ * 渲染同样的工具步骤）后纠正。
+ */
 export function sseResControllable(status = 200): {
   res: Response;
   push: (event: string) => void;
   close: () => void;
 } {
   const encoder = new TextEncoder();
-  let doPush: (s: string) => void = () => {};
-  let doClose: () => void = () => {};
+  let started = false;
+  let ctrl: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let closed = false;
+  const buffer: string[] = [];
+
+  const flush = () => {
+    if (!ctrl) return;
+    while (buffer.length) {
+      try { ctrl.enqueue(encoder.encode(buffer.shift()!)); }
+      catch { buffer.length = 0; break; }   // 已关闭 → 丢弃剩余
+    }
+  };
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      doPush = (s: string) => { try { controller.enqueue(encoder.encode(s)); } catch { /* 已关闭 */ } };
-      doClose = () => { try { controller.close(); } catch { /* 已关闭 */ } };
+      started = true;
+      ctrl = controller;
+      flush();                               // 冲刷 start 之前积压的事件
+      if (closed) { try { controller.close(); } catch { /* noop */ } }
     },
   });
+
   return {
     res: new Response(stream, { status, headers: { 'Content-Type': 'text/event-stream' } }),
-    push: (e: string) => doPush(e),
-    close: () => doClose(),
+    push: (e: string) => {
+      if (closed) return;
+      buffer.push(e);
+      if (started) flush();
+    },
+    close: () => {
+      closed = true;
+      if (started && ctrl) { try { ctrl.close(); } catch { /* 已关闭 */ } }
+    },
   };
 }
 

@@ -24,7 +24,10 @@ export interface ToolStep {
   id: string;
   name: string;
   args?: any;
-  status: 'running' | 'ok' | 'error';
+  // C2/C8（0.4.16）：新增 'interrupted' —— 用户停止时该工具**尚未跑完**。
+  // ⛔ 不能标 'ok'（谎称成功）也不能标 'error'（谎报失败，会污染失败计数与警示色）；
+  // 也不能留在 'running'（会永久显示"正在调用…"，且令 B4 折叠判据 running===0 永不满足）。
+  status: 'running' | 'ok' | 'error' | 'interrupted';
   summary?: string;
   error?: string;
 }

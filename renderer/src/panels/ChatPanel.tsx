@@ -137,6 +137,8 @@ function ToolStepBar({ step }: { step: ToolStep }) {
   const [open, setOpen] = useState(false);
   const label = step.status === 'running'
     ? `正在调用 ${step.name}…`
+    : step.status === 'interrupted'
+    ? `${step.name}（已中断，未完成）`
     : step.status === 'ok'
       ? `${step.name} 完成（${step.summary || 'ok'}）`
       : `${step.name} 失败：${step.error || 'unknown'}`;
@@ -146,7 +148,11 @@ function ToolStepBar({ step }: { step: ToolStep }) {
        现标签单行省略号截断；完整摘要/错误/参数在展开区查看（信息不丢）。 */
     <div style={{ marginBottom:8, border:`1px solid ${colors.borderSubtle}`, borderRadius:radius.s, background:'#F5F5F7', overflow:'hidden' }}>
       <div onClick={() => setOpen(o=>!o)} style={{ display:'flex', alignItems:'center', gap:6, padding:'0 10px', height:30, cursor:'pointer', color:colors.textPrimary, fontSize:13 }}>
-        {step.status === 'running' ? <Spinner size={12} /> : step.status === 'ok' ? <Icon name="check" size={14} style={{ color:colors.ok }} /> : <Icon name="x" size={14} style={{ color:colors.danger }} />}
+        {/* C2（0.4.16）：interrupted 用中性 stop 图标，不用 ✓（谎称成功）也不用 ✗（谎报失败）*/}
+        {step.status === 'running' ? <Spinner size={12} />
+          : step.status === 'ok' ? <Icon name="check" size={14} style={{ color:colors.ok }} />
+          : step.status === 'interrupted' ? <Icon name="stop" size={12} style={{ color:colors.textTertiary }} />
+          : <Icon name="x" size={14} style={{ color:colors.danger }} />}
         <span style={{ flex:1, minWidth:0, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }} title={label}>{label}</span>
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14} style={{ color:colors.textTertiary }} />
       </div>
@@ -187,6 +193,10 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
   const running = steps.filter(s => s.status === 'running').length;
   const failed = steps.filter(s => s.status === 'error').length;
   const okCount = steps.filter(s => s.status === 'ok').length;
+  // C8（0.4.16）：中断步骤数。⛔ 它既不算 running（否则 running===0 永不满足、步骤组永远展开
+  // = C8"不可折叠"症状），也不算 failed（否则 B4 约束①的警示色会谎报"失败"，
+  // 而用户主动停止并不是工具出错）。
+  const interrupted = steps.filter(s => s.status === 'interrupted').length;
   // 自动收拢条件：外层已告知流结束，且没有仍在跑的步骤
   const shouldCollapse = done && running === 0;
   const [userToggled, setUserToggled] = useState(false);
@@ -203,8 +213,10 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
   const collapsed = shouldCollapse && !open;
   const headLabel = collapsed
     ? (failed > 0
-        ? `工具调用 ${steps.length} 步 · ${okCount} 成功 · ${failed} 失败`
-        : `工具调用 ${steps.length} 步 · 已完成`)
+        ? `工具调用 ${steps.length} 步 · ${okCount} 成功 · ${failed} 失败${interrupted > 0 ? ` · ${interrupted} 中断` : ''}`
+        : interrupted > 0
+          ? `工具调用 ${steps.length} 步 · ${okCount} 成功 · ${interrupted} 中断`
+          : `工具调用 ${steps.length} 步 · 已完成`)
     : running > 0
       ? `正在调用工具（${running}/${steps.length} 进行中）…`
       : `工具调用 ${steps.length} 步`;
@@ -1426,7 +1438,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         closeThinkingPhase();
         const c = accContent; accContent = '';
-        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false }));
+        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
+          // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
+          // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
+          // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
+          // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
+          // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
+          toolSteps: (m.toolSteps || []).map(st => st.status === 'running' ? { ...st, status: 'interrupted' as const } : st) }));
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
         setSending(false);
       }
@@ -1548,7 +1566,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             const c = accContent; accContent = '';
             // 0.4.12（C6）：只有 AbortError 才是**用户手动停止**，故额外置 manualStopped；
             // done/error 路径只置 stopped（"流已终止"），不再被渲染成"已手动停止"。
-            patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false }));
+            patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
+          // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
+          // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
+          // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
+          // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
+          // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
+          toolSteps: (m.toolSteps || []).map(st => st.status === 'running' ? { ...st, status: 'interrupted' as const } : st) }));
             // B07：停止时的已生成部分也同步本地缓存
             setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
             break;
@@ -1581,7 +1605,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         const c = accContent; accContent = '';
         // 0.4.12（C6）：同上，仅此处（用户手动停止）置 manualStopped
-        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false }));
+        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
+          // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
+          // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
+          // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
+          // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
+          // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
+          toolSteps: (m.toolSteps || []).map(st => st.status === 'running' ? { ...st, status: 'interrupted' as const } : st) }));
         // B07：停止时的已生成部分也同步本地缓存
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
       } else {

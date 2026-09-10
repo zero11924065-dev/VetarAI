@@ -113,6 +113,62 @@ def main() -> None:
     check("A-4 错误路径（非用户停止）保持 stopped 默认 False",
           n_err >= 3, f"裸 truncated=True 调用数={n_err}（应≥3：业务/网络/安全网/finally）")
 
+    # ── T：C2 根因③（0.4.16 补漏）落库的 tool_steps 不得残留 running ──
+    # ⛔ 这是**用户可见症状的持久化侧**：工具步骤以 status="running" 加入 _state["steps"]，
+    # 停止时若原样落库，刷新后该工具**永久显示"正在调用…"**，且前端折叠判据
+    # `done && running===0` 永不满足 → 步骤组永远展开（正是 C8 的"不可折叠"）。
+    # app.py 的 _persist_assistant 已在唯一落库出口统一收敛 running→interrupted，
+    # 此处验证收敛后的形态落库/读回都正确，且 interrupted 不被误当 ok/error。
+    SID2 = "s-c8-steps"
+    steps_interrupted = [
+        {"id": "c1", "name": "read_file", "args": {"path": "a.py"}, "status": "interrupted"},
+        {"id": "c2", "name": "list_dir", "status": "ok"},
+        {"id": "c3", "name": "write_file", "status": "error", "error": "权限不足"},
+    ]
+    store.save_message(PID, SID2, AID, "assistant", "部分回答",
+                       tool_steps=steps_interrupted, truncated=True, stopped=True)
+    got = store.load_messages(PID, SID2)[0]
+    ts = got.get("tool_steps") or []
+    check("T-1 落库的 tool_steps 无 running 残留（刷新后不会永久显示正在调用）",
+          not any(st.get("status") == "running" for st in ts), str(ts))
+    check("T-2 interrupted 状态被完整保留（三态并存不串味）",
+          [st.get("status") for st in ts] == ["interrupted", "ok", "error"],
+          str([st.get("status") for st in ts]))
+    check("T-3 interrupted 不计入失败（error 仍单独标记，不污染失败计数）",
+          sum(1 for st in ts if st.get("status") == "error") == 1, str(ts))
+
+    # ── app.py 接线核查：⛔ 用 AST 而非文本子串 ──
+    # 教训：第一版用文本匹配 '_st["status"] = "interrupted"'，当我把原地改修正为
+    # "构造副本"后（为了不抹掉 state.json 的诊断现场），断言就失效了。
+    # 文本匹配对实现细节过度耦合；AST 看结构，改写法不影响判定。
+    import ast as _ast
+    tree = _ast.parse(app_src)
+    conv_ok = False       # _persist_assistant 内把 running 映射为 interrupted
+    uses_copy = False     # 且不是原地改 _state["steps"]（保留诊断现场）
+    save_uses_final = False
+    for fn in _ast.walk(tree):
+        if isinstance(fn, _ast.FunctionDef) and fn.name == "_persist_assistant":
+            body_src = _ast.get_source_segment(app_src, fn) or ""
+            conv_ok = ('"interrupted"' in body_src and '"running"' in body_src)
+            uses_copy = "_steps_final" in body_src
+            save_uses_final = "tool_steps=_steps_final" in body_src
+    check("T-4 _persist_assistant 内做 running→interrupted 收敛（AST 判定）", conv_ok)
+    check("T-5 ⛔ 收敛写入**副本**而非原地改 _state['steps']（否则抹掉 state.json 诊断现场）",
+          uses_copy and save_uses_final,
+          f"uses_copy={uses_copy} save_uses_final={save_uses_final}")
+
+    # ── U：两种快照语义必须并存（这是 T-5 的行为后果，端到端验证）──
+    # DB 存定稿态 interrupted；work/state.json 保留现场态 running（供中断续跑诊断）。
+    # ⛔ 第一版原地改 _state 时两者被强行统一成 interrupted，test_state_file 断言③
+    # 「中断现场保留最后一步（tool_call running）」抓住——那是真实回归，不是测试过时。
+    import subprocess
+    _r = subprocess.run([sys.executable, "-m", "sidecar.test_state_file"],
+                        cwd=str(Path(__file__).resolve().parents[1]),
+                        capture_output=True, text=True, timeout=180,
+                        env={**os.environ, "VETARAI_DATA_ROOT": _TMP})
+    check("U-1 state.json 专项通过（诊断现场未被落库收敛抹掉）",
+          _r.returncode == 0, (_r.stdout or _r.stderr)[-300:])
+
     print(f"\n===== C8 后端专项: PASS={PASS} FAIL={FAIL} =====")
     if FAILURES:
         print("失败项:", FAILURES)
