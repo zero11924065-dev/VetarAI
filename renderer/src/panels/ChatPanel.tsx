@@ -1266,11 +1266,35 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     //    于是那些文件既没内容也没路径 → agent 永远无从得知它的存在，更读不到原件。
     //    现改为：有解析文本 → 文本 + 路径；只有路径（如 .zip/扫描件等解析不出的格式）→ 仅路径，
     //    让 agent 自行决定要不要 read_file。这才是"后续会话读得到"的治本点。
+    // ⛔ 表#6（0.4.19）：附件由【推模式】改为【拉模式】——正文只写路径，agent 自己 read_file。
+    //
+    // 推模式的真实代价：解析全文（后端上限单文件 20 万字符）被拼进 user 消息正文 →
+    // 该正文**落库**，并在此后**每一轮**都随 apiMessages 发给模型。传一个 50 页 PDF，
+    // 之后每次对话都重复携带它，上下文被吃满、prefill 变慢（0.4.8「主 Agent 自读 90KB PDF
+    // 跑 20 分钟」的同类机制，只是发生在附件链路）。
+    //
+    // ⛔ 为什么现在才能改：表#4（commit 8c2daaa）让 read_file 真能解析 docx/xlsx/pptx/pdf
+    // （此前只会返回二进制乱码）→ 给路径 agent 才真读得到。**在此之前给路径等于没给**。
+    // 与表#8（委派 file_paths）同一设计：传路径，把"读"的动作交给真正要用内容的那一方。
+    //
+    // ⛔ 本改动**取代** checkpoint-067 R-2「完整优先，全额注入」的拍板：R-2 当时成立的前提是
+    // agent 读不了附件文件，只能靠注入；该前提已被表#4 消除。完整性不降反升——
+    // read_file 走 doc_reader，含表格与格式概要，且不受 20 万字符注入上限约束。
+    //
+    // ⛔ 退化路径必须保留：拿不到 savedPath 时（会话尚未创建 / 后端落盘失败）仍全额注入，
+    // 否则用户会**彻底失去**让 agent 看到该文件的能力——那是比上下文膨胀严重得多的回归。
     const textFileContents: string[] = textFileItems
       .filter(f => f.parsedText || f.savedPath)
       .map(f => {
-        const head = f.savedPath ? `[${f.name}]（原件已保存：${f.savedPath}）` : `[${f.name}]`;
-        return f.parsedText ? `${head}\n${f.parsedText}` : `${head}\n（此格式无法直接解析为文本，如需内容请用 read_file 读取上述路径）`;
+        // 有落盘路径 → 只给路径 + 明确的读取指令（拉模式）
+        if (f.savedPath) {
+          return `[📄 ${f.name}]（原件已保存：${f.savedPath}）\n`
+               + `⛔ 该文件内容**未**随消息发送。如任务需要其内容，请用 read_file 读取上述绝对路径`
+               + `（docx/xlsx/pptx/pdf 会自动解析为文本+格式概要）；`
+               + `不要凭文件名臆测内容，读不到就如实说明。`;
+        }
+        // 无路径 → 退回全额注入（宁多占上下文，不可让 agent 彻底看不到文件）
+        return `[${f.name}]（⚠️ 原件未能落盘，故全文随消息附上）\n${f.parsedText}`;
       });
 
     const finalMessages = [...apiMessages];
