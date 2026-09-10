@@ -57,6 +57,12 @@ export interface Message {
    *  此前二者共用 stopped → 正常执行完（done 也置 stopped）界面同样显示"已手动停止 重新发送"，
    *  与事实相反（用户真机反馈：agent执行完停止，为什么下方显示也是已手动停止）。 */
   manualStopped?: boolean;
+  /** #13（0.4.19）：缓存恢复的中断气泡的可见说明文案。
+   *  ⛔ 仅由"缓存瞬显/合并恢复"路径置位：该气泡既无 manualStopped（非用户点停），
+   *  也无 completedDuration（没走 done 路径）→ 只能是崩溃/关应用/断连造成的异常中断。
+   *  正常完成（有 completedDuration）与手动停止（有 manualStopped）都不置，
+   *  故此字段不会把"正常完成"误标成中断。 */
+  interruptedNote?: string;
   // TS-102 B13：思考中指示（thinking 事件到达→正文首 token 到达期间为 true）
   thinking?: boolean;
   // 0.4.2 阶段化思考：当前思考阶段已持续秒数（每秒跳动）

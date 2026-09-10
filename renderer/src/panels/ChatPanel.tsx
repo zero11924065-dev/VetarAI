@@ -616,7 +616,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 否则界面永远停在"思考中…已等待 Ns"卡死态）。
         const hasSubstance = (m.content || '').trim().length > 0 || ((m.toolSteps || []).length > 0);
         if (!hasSubstance) continue;
-        extra.push({ ...m, thinking: false, waitingSeconds: 0, stopped: true });
+        // ⛔ #13（0.4.19）：与瞬显路径同一判据补中断标记（见上方缓存瞬显注释）：
+        // 无 manualStopped 且无 completedDuration → 异常中断的半成品，标"已中断执行"。
+        // 不置 manualStopped（不能谎称用户手动停止）；不用 stopped 判（done 也置，会误标正常完成）。
+        extra.push({
+          ...m, thinking: false, waitingSeconds: 0, stopped: true,
+          ...((!m.manualStopped && m.completedDuration == null)
+            ? { interruptedNote: '已中断执行（应用断开或崩溃，内容为半成品）' } : {}),
+        });
       } else if (key && !dbIds.has(key)) {
         extra.push(m); // 本地 id 不在 DB（极端兜底）
       }
@@ -761,7 +768,21 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             // 都得到 true），是逻辑错误写法。本意确为强制置位（缓存恢复的流永不再推进，须清活态），
             // 故直接写 true 并把意图写进注释。⛔ 不置 manualStopped：恢复的缓存流无法判断
             // 究竟是用户手动停止还是崩溃/关闭窗口导致中断，不能谎称"已手动停止"。
-            .map(m => String(m.id ?? '').startsWith('local_') ? { ...m, thinking: false, waitingSeconds: 0, stopped: true } : m);
+            // ⛔ #13（0.4.19）：但"无法区分"不等于"不标记"——此前恢复出的半成品气泡
+            // 没有任何可见标记，用户看不出这条没写完（真机事故：关应用打断后回看，
+            // 半截回复与正常回复长得一样）。用两个实时路径可验证的签名区分：
+            //   · manualStopped=true → 用户自己点的停止 → 走既有"已手动停止"渲染，不重复标；
+            //   · 无 completedDuration → 没走 done 路径（done 必置该字段）→ 异常中断
+            //     （崩溃/关应用/断连）→ 标"已中断执行"。
+            // ⛔ 不能用 stopped 判：done 路径同样置 stopped，会把正常完成误标成中断。
+            .map(m => {
+              if (!String(m.id ?? '').startsWith('local_')) return m;
+              const base = { ...m, thinking: false, waitingSeconds: 0, stopped: true };
+              if (!m.manualStopped && m.completedDuration == null) {
+                return { ...base, interruptedNote: '已中断执行（应用断开或崩溃，内容为半成品）' };
+              }
+              return base;
+            });
           if (view.length > 0) {
             setLocalMessages(view);
             restoreTokenIndicator(view);
@@ -2198,6 +2219,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                   <button className="ui-btn ui-btn-secondary" onClick={resendLast} style={{...btnSecondary, height:22, padding:'0 8px', fontSize:12}}>
                     <Icon name="rotate-cw" size={14} /> 重新发送
                   </button>
+                </div>
+              )}
+              {/* #13（0.4.19）：缓存恢复的异常中断气泡的可见标记。
+                  此前这类气泡（崩溃/关应用打断）恢复后与正常回复长得一样，
+                  用户看不出这条没写完。判据与置位逻辑见 loadSessionMessages/瞬显注释。
+                  ⛔ 与"已手动停止"互斥渲染：manualStopped 的气泡走上面那条，不重复标。 */}
+              {msg.role === 'assistant' && !msg.manualStopped && msg.interruptedNote && (
+                <div style={{ marginTop:8, display:'flex', alignItems:'center', gap:6 }}>
+                  <Icon name="alert-triangle" size={14} style={{color:colors.textTertiary}} />
+                  <span style={{ fontSize:12, color:colors.textTertiary }}>{msg.interruptedNote}</span>
                 </div>
               )}
               {/* M6（TS-112）视觉引导：正文命中多模态降级文案 → 切换视觉模型/一键拉取/知道了 */}

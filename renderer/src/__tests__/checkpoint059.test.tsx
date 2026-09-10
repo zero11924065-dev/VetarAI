@@ -83,4 +83,50 @@ describe('checkpoint-059 僵尸气泡清理', () => {
     }, { timeout: 3000 });
     unmount();
   });
+
+  // #13（0.4.19）：缓存恢复的异常中断气泡必须有可见标记。
+  // 判据：无 manualStopped（非用户点停）且无 completedDuration（没走 done 路径）
+  // → 崩溃/关应用/断连造成的半成品。此前恢复后与正常回复长得一样，用户看不出没写完。
+  it('中断气泡恢复后标"已中断执行"（用户能看出是半成品）', async () => {
+    const { unmount } = mountWithDbAndZombieCache({
+      id: 'local_z3', role: 'assistant', content: '写到一半的回复', thinking: true, waitingSeconds: 5,
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('已中断执行');
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      const cache = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')['s1'] || [];
+      const z = cache.find((m: any) => m.id === 'local_z3');
+      return expect(z && typeof z.interruptedNote === 'string' && z.interruptedNote.includes('已中断执行')).toBeTruthy();
+    }, { timeout: 3000 });
+    unmount();
+  });
+
+  it('正常完成的气泡（有 completedDuration）不得被误标中断', async () => {
+    const { unmount } = mountWithDbAndZombieCache({
+      id: 'local_z4', role: 'assistant', content: '完整回复内容', thinking: false,
+      completedDuration: 12, stopped: true,
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('完整回复内容');
+    }, { timeout: 3000 });
+    await new Promise(r => setTimeout(r, 100));
+    expect(document.body.textContent).not.toContain('已中断执行');
+    const cache = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')['s1'] || [];
+    const z = cache.find((m: any) => m.id === 'local_z4');
+    expect(z && z.interruptedNote === undefined).toBe(true);
+    unmount();
+  });
+
+  it('手动停止的气泡走"已手动停止"渲染，不重复标"已中断执行"', async () => {
+    const { unmount } = mountWithDbAndZombieCache({
+      id: 'local_z5', role: 'assistant', content: '手动停下的半截', thinking: false,
+      manualStopped: true, stopped: true,
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('已手动停止');
+    }, { timeout: 3000 });
+    expect(document.body.textContent).not.toContain('已中断执行');
+    unmount();
+  });
 });
