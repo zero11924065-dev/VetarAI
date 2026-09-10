@@ -21,11 +21,17 @@ import { getApiBase } from '../apiBase';
 import React, { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, btnSecondary, btnGhost, badge, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
+import { SSEStreamParser } from '../lib/sseParser';
 
 // TS-108 M3-2（决策 4/5）：委派任务状态面板。
 // - 状态徽标：等待中(queued) / 执行中(running) / 完成(done) / 异常(failed)
 // - 失败任务提供"重试"（决策 5 一键重试，生成新任务记录）
-// - 手动"刷新"拉取最新状态（后端无任务推送通道，刷新即拉）
+// - 0.4.20（#15）：**实时进度**——订阅 `GET /api/projects/{pid}/tasks/stream`，
+//   显示子 Agent 正在调用的工具、轮次与已生成字数。
+//   ⛔ 原注释写「后端无任务推送通道，刷新即拉」**已失真**：后端此前确实没有委派 SSE 端点，
+//   面板只在 mount 时拉一次、之后全靠手点刷新（连自动轮询都没有），
+//   用户实测即「委派跑起来后中途看不到任何进展，要等任务整个结束」。
+//   手动"刷新"仍保留，作为流断开时的兜底。
 
 interface AgentTask {
   id: string;
@@ -37,6 +43,18 @@ interface AgentTask {
   report?: { status?: string; summary?: string; prompt_eval_count?: number } | null;
   session_id?: string | null;
   created_at?: string;
+}
+
+// 0.4.20（#15）：某任务的实时进度（来自 SSE 增量，DB 里没有这些字段）
+// ⛔ 不再设 `ended` 字段：渲染已用 DB 的 `t.status`（queued/running）门控，
+//   任务结束后进度本就不显示，再存一个布尔是冗余的"只写不读"状态。
+//   收口改为**直接删除该任务的进度记录**（见 task_end 分支），防止反复委派累积。
+interface LiveProgress {
+  toolName?: string;        // 最近一次 tool_call 的工具名
+  toolOk?: boolean;         // 该工具的 tool_result 结果（true/false），未回来则 undefined
+  step?: number;            // 当前轮次
+  max?: number;             // 轮次上限
+  chars?: number;           // 已生成字数
 }
 
 const API = getApiBase();
@@ -68,6 +86,9 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
   // TS-114（3.25）：停止按钮状态
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [stopMsg, setStopMsg] = useState<string | null>(null);
+  // 0.4.20（#15）：实时进度（按 task_id）+ 流连接状态
+  const [live, setLive] = useState<Record<string, LiveProgress>>({});
+  const [streamOn, setStreamOn] = useState(false);
   // M7（TS-113 建议包2）：每秒计时（有进行中任务时才启动）
   const [now, setNow] = useState(() => Date.now());
   const hasActive = tasks.some(t => t.status === 'queued' || t.status === 'running');
@@ -77,8 +98,10 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
     return () => clearInterval(timer);
   }, [hasActive]);
 
-  const fetchTasks = useCallback(async () => {
-    setLoading(true);
+  // silent=true 用于流事件触发的刷新：⛔ 不能走 setLoading(true)，
+  // 否则每条事件都让"刷新"按钮闪一次"刷新中…"（一次委派上百条事件 = 全程闪烁）。
+  const loadTasks = useCallback(async (silent: boolean) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(`${API}/projects/${projectId}/tasks?limit=30`);
@@ -86,13 +109,134 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
       const data = await res.json();
       if (Array.isArray(data)) setTasks(data as AgentTask[]);
     } catch (e) {
-      setError('加载失败: ' + (e as Error).message);
+      if (!silent) setError('加载失败: ' + (e as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [projectId]);
 
+  const fetchTasks = useCallback(() => loadTasks(false), [loadTasks]);
+
   useEffect(() => { fetchTasks(); }, [fetchTasks]);
+
+  // 0.4.20（#15）：订阅委派实时进度流。
+  // ⛔ 卸载/切项目必须 abort：项目已有 chatPanelUnmountLeak 先例——
+  //   卸载后继续写状态会导致内存泄漏与"写已卸载组件"告警。
+  // ⛔ 不叠加定时器：上方每秒计时 setInterval 保持不动，本 effect 只负责流。
+  // ⛔ 断流后自动重连（3s 退避），但**卸载后绝不重连**。
+  useEffect(() => {
+    let cancelled = false;
+    const ctrl = new AbortController();
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const applyEvent = (ev: { event: string; data: Record<string, any> }) => {
+      if (cancelled) return;                       // ⛔ 卸载后不再写任何状态
+      const d = ev.data || {};
+      const tid = String(d.task_id || '');
+      switch (ev.event) {
+        case 'snapshot': {
+          // DB 权威基线：整体替换，并清掉已不在列表里的实时进度
+          const list = Array.isArray(d.tasks) ? d.tasks as AgentTask[] : [];
+          setTasks(list);
+          setLive(prev => {
+            const ids = new Set(list.map(t => t.id));
+            const next: Record<string, LiveProgress> = {};
+            for (const k of Object.keys(prev)) if (ids.has(k)) next[k] = prev[k];
+            return next;
+          });
+          break;
+        }
+        case 'status': {
+          if (!tid) break;
+          const st = String(d.state || '');
+          // ⛔ 这里原先有一行 `setLive(... ended: false)`，删掉 ended 后它成了纯空操作。
+          // 状态本身不在这里改：**终态一律以 DB 为准**（静默重拉拿 report/fail_reason
+          // 等完整字段），避免流事件与 DB 两个真相源打架。
+          if (st === 'done' || st === 'failed') void loadTasks(true);
+          break;
+        }
+        case 'tool_call':
+          if (!tid) break;
+          setLive(prev => ({
+            ...prev,
+            [tid]: { ...prev[tid], toolName: String(d.name || ''), toolOk: undefined },
+          }));
+          break;
+        case 'tool_result':
+          if (!tid) break;
+          setLive(prev => ({ ...prev, [tid]: { ...prev[tid], toolOk: Boolean(d.ok) } }));
+          break;
+        case 'progress':
+          if (!tid) break;
+          setLive(prev => ({
+            ...prev,
+            [tid]: {
+              ...prev[tid],
+              step: typeof d.step === 'number' ? d.step : prev[tid]?.step,
+              max: typeof d.max === 'number' ? d.max : prev[tid]?.max,
+              chars: typeof d.chars === 'number' ? d.chars : prev[tid]?.chars,
+            },
+          }));
+          break;
+        case 'task_end':
+          if (!tid) break;
+          // 收口：删除该任务的实时进度记录。
+          // ⛔ 不是行为变更（渲染已按 DB 的 status 门控，终态本就不显示进度），
+          //    而是**内存清理**：一个长会话里反复委派会不断新增 task_id，
+          //    只增不删会让 live 记录无上限累积。
+          setLive(prev => {
+            if (!(tid in prev)) return prev;        // 无变化则复用原对象，免触发重渲染
+            const next = { ...prev };
+            delete next[tid];
+            return next;
+          });
+          void loadTasks(true);                    // 重拉快照：failed 原因/摘要以 DB 为准
+          break;
+        case 'gap':
+        case 'stream_end':
+        case 'stream_error':
+          // 断档或流结束 → 重拉快照对齐（不静默错乱地拿半截状态渲染）
+          void loadTasks(true);
+          break;
+        default:
+          break;                                    // 未知事件忽略，向前兼容
+      }
+    };
+
+    const run = async () => {
+      try {
+        const res = await fetch(`${API}/projects/${projectId}/tasks/stream`,
+                                { signal: ctrl.signal });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+        if (cancelled) return;
+        setStreamOn(true);
+        const reader = res.body.getReader();
+        const parser = new SSEStreamParser();
+        const dec = new TextDecoder();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          for (const ev of parser.push(dec.decode(value, { stream: true }))) applyEvent(ev);
+        }
+        for (const ev of parser.flush()) applyEvent(ev);
+      } catch {
+        // 静默：流失败不该弹错误条（手动刷新仍可用），只标记未连接
+      } finally {
+        if (!cancelled) setStreamOn(false);
+      }
+      if (!cancelled) {
+        retryTimer = setTimeout(run, 3000);         // 断流退避重连
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+      setStreamOn(false);
+    };
+  }, [projectId, loadTasks]);
 
   const handleRetry = async (taskId: string) => {
     setRetryingId(taskId);
@@ -135,7 +279,21 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
     <div style={{ fontFamily: fonts.base, padding: '8px 12px' }}>
           {/* 面板标题行 */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <span style={typo.panelTitle}>委派任务（最近30条）</span>
+            <span style={typo.panelTitle}>
+              委派任务（最近30条）
+              {/* 0.4.20（#15）：实时流连接指示。⛔ streamOn 此前是只写不读的死状态
+                  （声明 + 3 处 setStreamOn，从未被读取），现接入让用户知道
+                  看到的是实时进度还是已退回手动刷新兜底——流断开时静默降级是最糟的，
+                  用户会以为"没进展"其实是"没连上"。圆点做法沿用状态徽标，不引入新图标名。 */}
+              <span
+                data-testid="stream-indicator"
+                title={streamOn ? '实时进度已连接' : '实时流未连接，请点击刷新'}
+                style={{
+                  display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                  marginLeft: 6, verticalAlign: 'middle',
+                  background: streamOn ? colors.ok : '#C9C9CF',
+                }} />
+            </span>
             <button className="ui-btn ui-btn-ghost" onClick={fetchTasks} disabled={loading}
               style={{ ...btnGhost, height: 22, padding: '0 8px', fontSize: 12, gap: 4 }}>
               {loading ? <Spinner size={12} /> : <Icon name="rotate-cw" size={14} />}
@@ -261,6 +419,34 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
                 <div style={{ ...typo.caption, color: colors.textSecondary, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any }}>
                   {brief}{(t.task || '').length > 40 ? '…' : ''}
                 </div>
+                {/* 0.4.20（#15）：实时进度——只在任务进行中显示，终态交给下方 DB 字段渲染。
+                    ⛔ 数据来自 SSE 增量（DB 里没有），任务结束后由 snapshot/task_end 重拉清除。 */}
+                {(t.status === 'queued' || t.status === 'running') && live[t.id] && (
+                  <div data-testid="live-progress" style={{
+                    display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+                    marginTop: 4, fontSize: 11, color: colors.textTertiary,
+                  }}>
+                    {live[t.id].toolName && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                        {live[t.id].toolOk === undefined
+                          ? <Spinner size={11} />
+                          : <Icon name={live[t.id].toolOk ? 'check' : 'x'} size={12}
+                                  style={{ color: live[t.id].toolOk ? colors.okText : colors.dangerText }} />}
+                        <span data-testid="live-tool" style={{ color: colors.textSecondary }}>
+                          {live[t.id].toolOk === undefined ? '正在调用 ' : ''}{live[t.id].toolName}
+                        </span>
+                      </span>
+                    )}
+                    {typeof live[t.id].step === 'number' && (
+                      <span data-testid="live-step">
+                        第 {live[t.id].step}{typeof live[t.id].max === 'number' ? `/${live[t.id].max}` : ''} 轮
+                      </span>
+                    )}
+                    {typeof live[t.id].chars === 'number' && live[t.id].chars! > 0 && (
+                      <span data-testid="live-chars">已生成 {live[t.id].chars} 字</span>
+                    )}
+                  </div>
+                )}
                 {t.status === 'failed' && t.fail_reason && (
                   <div style={{ fontSize: 12, color: colors.dangerText, marginTop: 4 }}>原因：{t.fail_reason}</div>
                 )}
