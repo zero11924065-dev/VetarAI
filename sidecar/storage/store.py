@@ -626,6 +626,93 @@ def rename_session(project_id: str, session_id: str, title: str) -> bool:
     return ok
 
 
+# ── C7（0.4.18）：聊天附件落盘 ──────────────────────────────────────────
+# 根因：/api/attachments/parse 原本只 base64 解码→解析文本→返回，**全程 0 处写盘**，
+# 于是附件只活在"当轮请求的内存里"：下一轮 agent 想再读原文件必然 not_a_file。
+# 而"去根目录读取"是 resolve_sandboxed_path 对**裸文件名**解析到沙盒根的预期行为
+# （registry.py），不是 bug——真因是前端从没把"文件在哪"告诉过 agent。
+#
+# ⛔ 落盘位置选 data_root 下的项目附件目录，**不选用户工作目录**：
+#   工作目录是用户在 Finder 里看得见、自己管的地方，往里写系统副本属污染；
+#   而 registry.py:392 明确"读取任何位置都不拦截"，故 data_root 下的绝对路径
+#   agent 照样能 read_file。
+# ⛔ 文件名必须净化：req.name 是**用户可控输入**，本项目此前没有任何文件名净化
+#   helper（现有落盘处只 .strip()），直接拼路径会被 "../../" 穿越出附件目录。
+
+_ATTACH_MAX_NAME_LEN = 120
+# 控制字符 + 路径分隔符 + Windows 保留字符（本项目跨平台，两种分隔符都要挡）
+_ATTACH_FORBIDDEN_CHARS = set('/\\\x00') | {chr(c) for c in range(1, 32)} | {chr(127)}
+
+
+def attachments_dir(project_id: str, session_id: str) -> Path:
+    """该会话的附件目录：<data_root>/projects/<project_id>/attachments/<session_id>/"""
+    return PROJECTS_ROOT / str(project_id) / "attachments" / str(session_id)
+
+
+def _sanitize_attachment_name(name: str) -> str:
+    """把用户可控文件名净化为**单层安全文件名**（保留扩展名，供解析器按扩展名分发）。
+
+    ⛔ 必须挡的三类：① 路径分隔符（/ 与 \\）→ 穿越；② 控制字符 → 终端/日志注入；
+    ③ "." 与 ".." → 指向父目录。净化后为空 → 回落 "attachment"（保留扩展名则拼回）。
+    """
+    raw = str(name or "")
+    # 只取最后一段（同时处理两种分隔符：先统一替换再 split）
+    base = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    cleaned = "".join(ch for ch in base if ch not in _ATTACH_FORBIDDEN_CHARS).strip()
+    # 去首尾点与空格（防 "." ".." 与 Windows 结尾点）
+    cleaned = cleaned.strip(". ")
+    if not cleaned:
+        return "attachment"
+    # 限长但**保住扩展名**（C4/A10 靠扩展名分发解析器，截掉扩展名会退化成乱码读取）
+    if len(cleaned) > _ATTACH_MAX_NAME_LEN:
+        dot = cleaned.rfind(".")
+        ext = cleaned[dot:] if dot > 0 else ""
+        cleaned = cleaned[:_ATTACH_MAX_NAME_LEN - len(ext)] + ext
+    return cleaned
+
+
+def save_attachment(project_id: str, session_id: str, name: str, raw: bytes) -> Path:
+    """把上传附件落盘到会话附件目录，返回绝对路径（供回传给前端 → 写进消息正文）。
+
+    ⛔ 同名不覆盖：与浏览器一致，第二次上传同名文件追加 "-<8位uuid>" 后缀，
+    **两份都保留**（用户铁律：遇同名项先保留两边）。
+    """
+    d = attachments_dir(project_id, session_id)
+    d.mkdir(parents=True, exist_ok=True)
+    safe = _sanitize_attachment_name(name)
+    target = d / safe
+    if target.exists():
+        dot = safe.rfind(".")
+        stem, ext = (safe[:dot], safe[dot:]) if dot > 0 else (safe, "")
+        target = d / f"{stem}-{uuid.uuid4().hex[:8]}{ext}"
+    target.write_bytes(raw)
+    return target
+
+
+def delete_session_attachments(project_id: str, session_id: str) -> int:
+    """清理某会话的附件目录（删除会话时连带清理，防无限膨胀）。返回删掉的文件数。
+
+    ⛔ 只做"删会话连带清理"，**不做定期清理**——定期清理无法判断文件是否仍被
+    历史消息引用（消息正文里存着绝对路径），会误删仍在用的副本。
+    """
+    d = attachments_dir(project_id, session_id)
+    if not d.exists():
+        return 0
+    n = 0
+    for f in d.iterdir():
+        try:
+            if f.is_file():
+                f.unlink()
+                n += 1
+        except OSError:
+            pass                       # 单个文件删不掉不阻塞会话删除
+    try:
+        d.rmdir()                       # 目录空了才删（非空说明有子项，保留）
+    except OSError:
+        pass
+    return n
+
+
 def delete_session(project_id: str, session_id: str) -> bool:
     """删除会话及其所有消息和摘要（全清）。"""
     with _write_conn(project_id) as conn:

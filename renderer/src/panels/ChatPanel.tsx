@@ -32,7 +32,9 @@ import { reportBusy } from '../busyState';
 
 interface AgentConfig { id: string; name: string; role?: string; model_name?: string; type_: string; parent_agent_id?: string | null; system_prompt?: string | null; }
 interface Session { id: string; title: string; message_count: number; }
-interface PendingItem { name: string; dataUri: string; isImage: boolean; size: number; parsedText?: string; parsing?: boolean; parseFailed?: boolean; }
+interface PendingItem { name: string; dataUri: string; isImage: boolean; size: number; parsedText?: string; parsing?: boolean; parseFailed?: boolean;
+  /** C7（0.4.18）：后端落盘后的**绝对路径**；写进消息正文使 agent 在后续会话仍可 read_file 原件 */
+  savedPath?: string; }
 
 const API = getApiBase();
 
@@ -1150,15 +1152,22 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       const b64 = item.dataUri.split(',')[1] || '';
       setPendingItems(prev => prev.map(p => p.name === item.name && p.dataUri === item.dataUri ? { ...p, parsing: true } : p));
       try {
+        // C7（0.4.18）：带 project/session 归属 → 后端据此落盘并回传绝对路径。
+        // ⛔ 会话未创建时（currentSessionIdRef 为 null）后端只解析不落盘、不报错，
+        //    不能因此让用户传不了文件（savedPath 缺省 → 正文不写路径，退回旧行为）。
         const res = await fetch(`${API}/attachments/parse`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: item.name, content_base64: b64 }),
+          body: JSON.stringify({ name: item.name, content_base64: b64,
+            project_id: projectId, session_id: currentSessionIdRef.current || '' }),
         });
         const d = await res.json();
         if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
         setPendingItems(prev => prev.map(p =>
           p.name === item.name && p.dataUri === item.dataUri
-            ? { ...p, parsing: false, parsedText: d.text || undefined, parseFailed: !d.text }
+            ? { ...p, parsing: false, parsedText: d.text || undefined, parseFailed: !d.text,
+                // C7：路径独立于"是否解析成功"——无法解析的格式（如 .zip/图片外的二进制）
+                // 同样落盘，agent 后续可自行 read_file，不必因解析失败就彻底丢失原件。
+                savedPath: d.saved_path || undefined }
             : p));
       } catch (err) {
         setPendingItems(prev => prev.map(p =>
@@ -1220,9 +1229,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // checkpoint-067 R-2（用户拍板"完整优先，宁慢勿断"）：律所分析客户材料要求内容完整，
     // 不得截断——附件文字【全额注入】，单文件上限由后端放宽保障；
     // 超时风险改由后端放宽流式读超时承担，前端不再牺牲完整性。
+    // C7（0.4.18）：⛔ 旧实现 `.filter(f => f.parsedText)` 把**解析失败的文件整条丢掉**，
+    //    于是那些文件既没内容也没路径 → agent 永远无从得知它的存在，更读不到原件。
+    //    现改为：有解析文本 → 文本 + 路径；只有路径（如 .zip/扫描件等解析不出的格式）→ 仅路径，
+    //    让 agent 自行决定要不要 read_file。这才是"后续会话读得到"的治本点。
     const textFileContents: string[] = textFileItems
-      .filter(f => f.parsedText)
-      .map(f => `[${f.name}]\n${f.parsedText}`);
+      .filter(f => f.parsedText || f.savedPath)
+      .map(f => {
+        const head = f.savedPath ? `[${f.name}]（原件已保存：${f.savedPath}）` : `[${f.name}]`;
+        return f.parsedText ? `${head}\n${f.parsedText}` : `${head}\n（此格式无法直接解析为文本，如需内容请用 read_file 读取上述路径）`;
+      });
 
     const finalMessages = [...apiMessages];
     if (textFileContents.length && finalMessages.length > 0) {

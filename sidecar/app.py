@@ -42,6 +42,8 @@ from sidecar.storage.store import (
     save_message, load_messages, save_session_summary,
     log_compact, load_compact_log, delete_messages_before,
     list_agent_tasks, get_agent_task,
+    # C7（0.4.18）：聊天附件落盘与会话级清理
+    save_attachment, delete_session_attachments,
     # checkpoint-058：独立 Agent（与项目平级）
     INDEP_NS_PREFIX, independent_agent_dir,
     add_independent_agent, list_independent_agents, get_independent_agent,
@@ -680,7 +682,15 @@ async def api_delete_session(session_id: str, project_id: str):
     ok = delete_session(project_id, session_id)
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
-    return {"deleted": True, "stopped_tasks": stopped}
+    # C7（0.4.18）：会话已删 → 连带清理其附件目录（防膨胀）。
+    # ⛔ 必须放在 delete_session 成功之后：会话不存在（404）时不得删任何文件。
+    # 清理失败不影响删除结果（附件是副本，DB 记录已删才是主语义），如实回传条数。
+    try:
+        removed_files = delete_session_attachments(project_id, session_id)
+    except OSError:
+        removed_files = 0
+    return {"deleted": True, "stopped_tasks": stopped,
+            "removed_attachment_files": removed_files}
 
 @app.get("/api/sessions/{session_id}/messages")
 async def api_load_session_messages(session_id: str, project_id: str):
@@ -841,13 +851,25 @@ class ChatStreamReq(ChatReq):
 class ChatAttachmentParseReq(BaseModel):
     name: str
     content_base64: str
+    # C7（0.4.18）：落盘归属。缺省时**只解析不落盘**（退回旧行为），不报错——
+    # 新会话尚未创建时 session_id 可能为空，不能因此让用户传不了文件。
+    project_id: str = ""
+    session_id: str = ""
 
 @app.post("/api/attachments/parse")
 async def api_parse_chat_attachment(req: ChatAttachmentParseReq):
     """解析聊天上传的附件为文本（PDF/Word/Excel/CSV/文本族）。
     checkpoint-067 R-2（完整优先）：律所分析要求内容完整，聊天附件使用大幅放宽的
     专用上限（单文件 10MB / 文本 20 万字符），不再按圆桌 3000 字截断。
-    无法解析 → text=null，前端仅作为文件名标注。"""
+    无法解析 → text=null，前端仅作为文件名标注。
+
+    C7（0.4.18）：**同时落盘**并回传绝对路径 `saved_path`。
+    ⛔ 此前本端点全程 0 处写盘 → 附件只活在当轮请求的内存里，下一轮 agent 再读
+    原文件必然 not_a_file（用户报告"上传文件只当轮可读，后续会话读不到"）。
+    路径回传给前端后写进消息正文，agent 据此可 read_file 到原件（含图片/无法解析的格式）。
+    ⛔ 文件名经 `_sanitize_attachment_name` 净化（用户可控输入，防 "../../" 穿越）。
+    ⛔ 落盘失败**不得**让解析失败——text 已解析出来才是主价值，路径是增益。
+    """
     import base64 as _b64
     try:
         raw = _b64.b64decode(req.content_base64 or "")
@@ -861,7 +883,19 @@ async def api_parse_chat_attachment(req: ChatAttachmentParseReq):
     if text is not None and len(text) > _CHAT_ATT_MAX_CHARS_EACH:
         text = text[:_CHAT_ATT_MAX_CHARS_EACH]
         truncated = True
-    return {"name": req.name, "kind": kind, "text": text, "truncated": truncated}
+
+    # C7：落盘（仅当归属齐全）；失败降级为"只解析"，如实告知不谎称已保存
+    saved_path = None
+    save_error = None
+    pid = str(req.project_id or "").strip()
+    sid = str(req.session_id or "").strip()
+    if pid and sid and raw:
+        try:
+            saved_path = str(save_attachment(pid, sid, req.name, raw))
+        except OSError as e:
+            save_error = f"{type(e).__name__}: {e}"
+    return {"name": req.name, "kind": kind, "text": text, "truncated": truncated,
+            "saved_path": saved_path, "save_error": save_error}
 
 
 def _sse_format(event: str, data: dict) -> str:
