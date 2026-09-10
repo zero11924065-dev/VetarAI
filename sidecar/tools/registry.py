@@ -473,6 +473,27 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | N
                 return {"ok": True, "_kind": "image", "path": str(target),
                         "image_base64": b64, "size": size,
                         "content": f"[图片文件 {target.name}，{size} 字节，已转为图像输入]"}
+            # ⛔ #4（0.4.19）：Office/PDF 文档不能按字节解码。
+            # .docx/.pptx/.xlsx 是 zip 压缩包、.pdf 是二进制格式、旧式 .doc 是 OLE 复合二进制，
+            # 此前一律走下面的 read_bytes().decode("utf-8", errors="replace") → 模型只能看到
+            # PK\x03\x04 一类的乱码（用户实测：上传的参考律师函完全读不出来）。
+            # 图片早有 base64 特例，文档没有对应通道，这是应用缺口而非模型能力问题
+            # → 改走 doc_reader 解析（旧式 .doc 在 macOS 上由系统自带 textutil 转换后再解析）。
+            from . import doc_reader as _dr
+
+            if _dr.is_parseable(target):
+                # 头部提示语与正文共用 1MB 预算：先算提示长度，剩余给解析内容，
+                # 保证 content 总长仍不超上限（不破坏既有截断契约）。
+                _head = (f"📄 已解析 {target.suffix.lower().lstrip('.')} 文档"
+                         f"（{size} 字节，提取为文本+格式概要）：\n\n")
+                _parsed = _dr.extract(target, MAX_READ_BYTES - len(_head.encode("utf-8")))
+                # ⛔ ok 一律 True：解析器即便读不出内容（损坏/缺库/旧格式无法转换），
+                # 也在 content 里给了**说明性文字**（"这个格式读不了，因为 X，建议 Y"）——
+                # 对模型而言这比抛 error 更有用，且不让 read_file 整体失败。
+                return {"ok": True,
+                        "content": _head + _parsed["content"],
+                        "size": size,
+                        "truncated": bool(_parsed.get("truncated"))}
             # B2（0.4.8）：大文本软提示——在头部嵌入文字提醒，引导模型改委派子 Agent /
             # 工作流处理，而非自行消化全文。提示文案占用 MAX_READ_BYTES 预算的一部分，
             # 正文按剩余预算截取，保证 content 总长仍不超 1MB 上限（不破坏截断契约）。
