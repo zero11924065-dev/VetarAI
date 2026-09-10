@@ -948,6 +948,16 @@ async def run_tool_loop(
     # 次即熔断该工具，直接报错终止而非继续弹窗。
     computer_use_strikes: dict[str, int] = {}
     tool_calls_log: list[dict[str, Any]] = []
+    # ⛔ #3（0.4.19）：full_text 必须在【轮次循环外】累积，不能每轮重置。
+    #   旧实现把 `full_text = ""` 放在 for step 循环体内 → 一个多轮工具调用流里，
+    #   每轮模型说的话只在【本轮】累积，下一轮被清零；而 done 只带【最后一轮】的 full_text。
+    #   后果（用户实测最致命的 bug）：第1~N-1 轮模型已流式输出给用户看的内容
+    #   （如律师函正文、法条引用），在最后一轮 done 时被【整体覆盖】成最后一轮的短文本，
+    #   既从界面消失、也没落库（DB 铁证：id=52 用户 2705 字 → id=53 助手仅 211 字；
+    #   另有 id=34/36 两条 0 字符空回复）。前端 token 已逐字显示过全文，done 一到却缩水。
+    #   修法：全程累积，done 带【完整】文本。前端/app.py 的"done 为准覆盖"契约不变——
+    #   覆盖的目标现在是完整文本，而非最后一轮残片。
+    full_text = ""
     # 2026-08-28 问题2：搜索去重缓存 —— 记录本会话已执行成功的搜索关键词（归一化），
     # 模型用相同/已成功的关键词再搜时直接拦截并引导作答，避免空转重复搜索。
     executed_searches: dict[str, int] = {}   # 归一化 query → 命中次数
@@ -1004,7 +1014,9 @@ async def run_tool_loop(
                 else:
                     yield {"event": "compact_required", "data": {"used": last_pe, "limit": context_limit, "est_rounds_left": est}}
                     return
-        full_text = ""
+        # ⛔ #3（0.4.19）：full_text 在【循环外】累积（见上方声明），此处绝不可每轮重置——
+        #   重置即丢失前几轮已输出给用户的文本（done 只带最后一轮 = 内容消失 bug 的根源）。
+        #   pending_tcs / step_counts / had_done 是每轮局部状态，照常重置。
         pending_tcs: list[dict[str, Any]] = []
         step_counts = {"prompt_eval_count": 0, "eval_count": 0}
         had_done = False
