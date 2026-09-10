@@ -95,8 +95,11 @@ def test_a_registry_structure():
                                      action_needs_confirm, build_module_catalog_text)
 
     actions = list_actions()
-    check("A1 注册表暴露 7 个动作", len(actions) == 7, str(actions))
+    # ⛔ A6（0.4.18）：7 → 10。新增 workflow create/update/delete 三个写动作
+    #    （此前写类只有 roundtable_create，Agent 能跑工作流却不能建/改/删）。
+    check("A1 注册表暴露 10 个动作", len(actions) == 10, str(actions))
     expected = {"workflow_list", "workflow_run", "workflow_get_runs",
+                "workflow_create", "workflow_update", "workflow_delete",
                 "knowledge_search", "knowledge_inject", "knowledge_groups",
                 "roundtable_create"}
     check("A2 动作名与预期一致", set(actions) == expected, str(set(actions) ^ expected))
