@@ -165,18 +165,26 @@ def resolve_simple_mode(images: list[str] | None, model: str,
 
 
 def _task_user_message_simple(task_id: str, task: str, expect: str,
-                              image_count: int = 0) -> str:
+                              image_count: int = 0,
+                              file_paths: list[str] | None = None) -> str:
     """简单模式任务消息：只保留任务书本身 + 最小交付要求。
     不拼执行须知/防幻觉硬约束/交卷契约提醒（这些会压垮 OCR 类小模型，
     且违背用户"只发图片不发文字"的意图）。"""
     img_hint = (f"附图 {image_count} 张已随任务书发送，请直接识别，无需 read_file。\n\n"
                 if image_count > 0 else "")
+    # ⛔ #15（0.4.19）：简单模式也支持必读文件，但措辞从简（小模型注意力有限），
+    # 只列路径 + 一句"先读再做"，不拼防幻觉长段。
+    file_hint = ""
+    if file_paths:
+        _lines = "\n".join(f"  - {p}" for p in file_paths)
+        file_hint = (f"【必读文件】请先用 read_file 读取以下文件再处理：\n{_lines}\n\n")
     return (
         "【委派任务】\n"
         f"任务ID：{task_id}\n"
         f"任务目标与输入：\n{task}\n\n"
         f"交卷标准：\n{expect}\n\n"
         f"{img_hint}"
+        f"{file_hint}"
         "完成后直接输出结果本身（纯内容，不要包装成 JSON、不要附加格式说明）。"
     )
 
@@ -497,10 +505,24 @@ async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
     return full_text, steps, None, _pe_max_box[0]
 
 
-def _task_user_message(task_id: str, task: str, expect: str, image_count: int = 0) -> str:
+def _task_user_message(task_id: str, task: str, expect: str, image_count: int = 0,
+                       file_paths: list[str] | None = None) -> str:
     # TS-114（3.27）：附图提示——图片已随任务书进入视觉流，子 Agent 直接看，无需 read_file
     img_hint = (f"附图 {image_count} 张已随任务书发送，请直接识别，无需 read_file。\n\n"
                 if image_count > 0 else "")
+    # ⛔ #15（0.4.19）：必读文件清单。给出【绝对路径】并要求子 Agent 自己 read_file。
+    # 路径已由 loop._resolve_delegation_files 校验存在，故直接列清单、不再要求先 list_dir
+    # （与下方"凭猜测文件名"的执行须知不冲突：那些路径是系统解析确认过的，不是模型猜的）。
+    file_hint = ""
+    if file_paths:
+        _lines = "\n".join(f"  - {p}" for p in file_paths)
+        file_hint = (
+            "【必读文件】（路径已由系统校验存在，请逐个用 read_file 读取；"
+            "docx/xlsx/pptx/pdf 会自动解析为文本+格式概要）：\n"
+            f"{_lines}\n"
+            "⛔ 任务依赖这些文件的内容，必须先 read_file 读到真实内容再处理，"
+            "禁止凭文件名臆测内容；读不到或解析失败要如实交卷 status=failed 并说明。\n\n"
+        )
     return (
         "【委派任务】\n"
         f"任务ID：{task_id}\n"
@@ -509,6 +531,7 @@ def _task_user_message(task_id: str, task: str, expect: str, image_count: int = 
         "交卷标准：\n"
         f"{expect}\n\n"
         f"{img_hint}"
+        f"{file_hint}"
         "【执行须知】读取文件前必须先用 list_dir 列出目录确认文件真实存在，"
         "禁止凭猜测的文件名直接 read_file；找不到文件就如实说明，不要编造。\n"
         "【防幻觉硬约束】\n"
@@ -543,6 +566,7 @@ async def run_delegated_task(
     sandbox_root: str, authorizer: Any = None, max_rounds: int = 200,
     connector: Any = None,
     images: list[str] | None = None,
+    file_paths: list[str] | None = None,
     simple_mode: bool | None = None,
     model_override: str | None = None,
 ) -> dict:
@@ -554,6 +578,11 @@ async def run_delegated_task(
       - 复用已有子 Agent → 本任务临时用指定模型（不改其持久配置，角色身份优先）；
       - 指定模型在本地不存在 → 直接报错并列出可用模型，不静默回退（否则模型分工失效）。
     TS-114（3.27）：images=委派附着图片（base64 列表），传入子会话视觉流。
+    ⛔ #15（0.4.19）：file_paths=要交给子 Agent 阅读的【文档/文本文件】绝对路径列表
+      （已由 loop._resolve_delegation_files 解析校验）。⛔ 本函数**不读这些文件的内容**——
+      只把路径写进任务书【必读文件】段，由子 Agent 自己 read_file（#4 已让 read_file
+      能解析 docx/xlsx/pptx/pdf 为文本+格式）。代读会把整篇文档塞回主 Agent 上下文，
+      正是 0.4.8「主 Agent 自读 90KB PDF、委派前空耗约 20 分钟」的病根。
     0.1.71（TS-118）：simple_mode=简单委派模式（带图自动启用，见
     resolve_simple_mode）；带图委派遇无视觉能力模型直接拦截报错。
 
@@ -696,11 +725,15 @@ async def run_delegated_task(
 
             # 0.1.71（TS-118）：简单模式任务消息只留任务书本身（不拼执行须知/
             # 防幻觉约束/契约提醒），符合用户"只发图片不发文字"的委派意图
+            # ⛔ #15（0.4.19）：file_paths 一并传入两种模板 → 任务书带【必读文件】绝对路径清单，
+            # 由子 Agent 自己 read_file；本函数不读内容（读的动作交给子 Agent，主 Agent 不自读）。
             user_msg = (_task_user_message_simple(task_id, task, expect,
-                                                  image_count=len(images) if images else 0)
+                                                  image_count=len(images) if images else 0,
+                                                  file_paths=file_paths or None)
                         if _simple else
                         _task_user_message(task_id, task, expect,
-                                           image_count=len(images) if images else 0))
+                                           image_count=len(images) if images else 0,
+                                           file_paths=file_paths or None))
             # 0.1.71（TS-118）：委派附着的图片落库存档，子会话回看可见
             save_message(project_id, child_sid, target_agent_id, "user", user_msg,
                          images=images or None)

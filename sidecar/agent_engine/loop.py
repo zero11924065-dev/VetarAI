@@ -380,6 +380,23 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
                             "description": "要随委派传给子 Agent 的图片文件路径列表（相对沙盒根或绝对路径，如 'images/a.png'）。"
                                            "适用场景：批量图片识别/转写等。不填时仅传聊天附着图。",
                         },
+                        # ⛔ #15（0.4.19）：文档路径通道。此前委派只有 image_paths，
+                        # 主 Agent 想把 docx/pdf 交给子 Agent，唯一办法是自己先 read_file
+                        # 再把全文塞进任务书 → 90KB PDF 自读、大 prompt prefill 极慢
+                        # （0.4.8 实测一次委派前空耗约 20 分钟）。有了本参数：
+                        # 传【路径】，由子 Agent 自己读，主 Agent 上下文不被文档撑爆。
+                        "file_paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "要交给子 Agent 阅读的【文档/文本文件】路径列表"
+                                           "（相对沙盒根或绝对路径，如 '证据/律师函.docx'）。"
+                                           "⛔ 子 Agent 会自己 read_file 读取这些文件"
+                                           "（docx/xlsx/pptx/pdf 均能解析为文本+格式），"
+                                           "所以【你绝不要自己先读文件再把内容抄进任务书】"
+                                           "——那样会把整篇文档塞进你的上下文、极慢且容易截断。"
+                                           "你只需在任务书里说明要对这些文件做什么。"
+                                           "图片请用 image_paths（直接注入视觉流），不要用本参数。",
+                        },
                         "simple_mode": {
                             "type": "boolean",
                             "description": "简单委派模式：子 Agent 直接输出结果本身，不要求 JSON 交卷、不追问重交。"
@@ -665,6 +682,11 @@ def build_system_prompt(
             "不要声称“无法把图片发给子 Agent”；任务书里直接引用附图（如“将附图逐张转写为文字”）。"
             "若图片在文件夹中（不在聊天里），先用 list_dir 拿到清单，再通过 image_paths 参数"
             "把图片路径列表传入，子 Agent 将直接看到图片，无需自己逐张 read_file。\n"
+            "- 【文档传递·强制】委派涉及文档（docx/xlsx/pptx/pdf/doc 等）时，⛔ 必须用 "
+            "file_paths 参数传【文件路径】，由子 Agent 自己 read_file 读取"
+            "（它能把这些格式解析为文本+格式概要）。【绝不要自己先 read_file 再把全文抄进任务书】"
+            "——那会把整篇文档塞进你的上下文，既慢（大文档 prefill 可达数分钟）又易截断，"
+            "违背委派分工的意义。只有当你【不委派、自己直接处理】某文档时，才自己 read_file。\n"
             "- 不要委派自己，也不要把整个任务原样转丢给子 Agent。"
         )
     return base
@@ -757,6 +779,105 @@ def _load_delegation_images(image_paths: list, sandbox_root: str) -> tuple[list[
     if len(paths) > _MAX_DELEGATION_IMAGES:
         skipped.extend(paths[_MAX_DELEGATION_IMAGES:])  # 超 50 张的部分标记跳过
     return loaded, skipped
+
+
+# ── #15（0.4.19）：委派文档路径通道 ──────────────────────────────
+# 背景：delegate_task 此前只有 image_paths（图片由后端代读注入视觉流），**没有文档通道**。
+# 主 Agent 想把 docx/pdf 交给子 Agent，唯一办法是自己先 read_file 再把全文抄进任务书
+# → 90KB PDF 自读、大 prompt prefill 极慢（0.4.8 实测委派前空耗约 20 分钟），
+# 且长文易被截断。用户明确要求："我要的不是他不读，而是把读的动作交给子 Agent"。
+#
+# 设计：与 image_paths **不同**——图片是后端代读后注入视觉流（模型无法自己读图字节），
+# 而文档子 Agent 能用 read_file 真正解析（#4 已实现 docx/xlsx/pptx/pdf → 文本+格式）。
+# 故这里只做【路径解析与校验】，把**绝对路径清单**写进任务书，由子 Agent 自己读。
+# 不代读文件内容：代读等于把文档塞回主 Agent 上下文，正是要消灭的病根。
+_MAX_DELEGATION_FILES = 20      # 单次委派最多传 20 个文档（子 Agent 逐个读也要时间）
+# 可经 file_paths 传递的扩展名：read_file 能解析的文档 + 纯文本类
+# （与 doc_reader.DOC_EXTS/LEGACY_EXTS 保持一致，另含纯文本；图片走 image_paths）
+_DELEGATION_FILE_EXTS = {
+    ".docx", ".xlsx", ".xlsm", ".pptx", ".pdf", ".doc", ".xls", ".ppt",
+    ".txt", ".md", ".markdown", ".csv", ".json", ".log", ".html", ".htm", ".xml",
+}
+
+
+def _resolve_delegation_files(file_paths: list, sandbox_root: str) -> tuple[list[str], list[str]]:
+    """把委派文档路径解析为绝对路径 → (解析成功列表, 跳过列表)。
+
+    ⛔ 只做路径解析，**不读文件内容**（读的动作交给子 Agent，见上方设计说明）。
+
+    与 _load_delegation_images 同一套自纠正纪律（模型常只写裸文件名，而文件在子目录）：
+    - 相对路径按 sandbox_root 解析；绝对路径直接校验
+    - 解析落空且非绝对路径 → 建一次裸文件名索引，**唯一命中**才采用（多处同名不猜）
+    - 不存在 / 是目录 / 扩展名不在白名单 / 超数量上限 → 跳过并如实报告
+    """
+    from pathlib import Path as _Path
+    from sidecar.tools.registry import resolve_sandboxed_path
+
+    resolved_ok: list[str] = []
+    skipped: list[str] = []
+    paths = [p for p in (file_paths or []) if isinstance(p, str) and p.strip()]
+
+    _name_index: dict[str, list] = {}
+    _index_built = False
+
+    def _build_index() -> None:
+        nonlocal _index_built
+        if _index_built:
+            return
+        _index_built = True
+        try:
+            for h in _Path(sandbox_root).expanduser().rglob("*"):
+                try:
+                    if h.is_file():
+                        _name_index.setdefault(h.name, []).append(h)
+                except OSError:
+                    continue
+        except (OSError, RuntimeError):
+            pass
+
+    for rel in paths[:_MAX_DELEGATION_FILES]:
+        rel = rel.strip()
+        resolved = resolve_sandboxed_path(rel, sandbox_root)
+        if (resolved is None or not resolved.is_file()) and not _Path(rel).is_absolute():
+            _build_index()
+            _hits = _name_index.get(_Path(rel).name) or []
+            if len(_hits) == 1:
+                resolved = _hits[0]
+        if resolved is None or not resolved.exists() or not resolved.is_file():
+            skipped.append(rel)
+            continue
+        if resolved.suffix.lower() not in _DELEGATION_FILE_EXTS:
+            skipped.append(rel)   # 非文档/文本（图片应走 image_paths）
+            continue
+        resolved_ok.append(str(resolved))
+
+    if len(paths) > _MAX_DELEGATION_FILES:
+        skipped.extend(paths[_MAX_DELEGATION_FILES:])
+    return resolved_ok, skipped
+
+
+def _real_docs_hint(sandbox_root: str, limit: int = 30) -> str:
+    """列出工作目录下真实存在的文档/文本文件（绝对路径），供报错时让主 Agent 自纠正。
+
+    与 _real_images_hint 同一用意：模型常写错/臆造文件名，把真实清单塞进错误文本，
+    下一轮就能照抄正确路径，无需再猜。
+    """
+    from pathlib import Path as _P
+    try:
+        root = _P(sandbox_root).expanduser()
+        hits = sorted(
+            (h for h in root.rglob("*")
+             if h.is_file() and h.suffix.lower() in _DELEGATION_FILE_EXTS),
+            key=lambda x: str(x))
+    except (OSError, RuntimeError):
+        return "（无法列出工作目录）"
+    if not hits:
+        return f"（工作目录 {root} 下未找到任何文档/文本文件）"
+    shown = hits[:limit]
+    lines = "\n".join(f"  - {h}" for h in shown)
+    more = (f"\n  …（另有 {len(hits) - len(shown)} 个未列出，可 list_dir 查看）"
+            if len(hits) > limit else "")
+    return f"\n共 {len(hits)} 个：\n{lines}{more}"
 
 
 def _real_images_hint(sandbox_root: str, limit: int = 30) -> str:
@@ -1422,6 +1543,25 @@ async def run_tool_loop(
                                     "委派已中止——若继续，子 Agent 将收不到任何图片而只能编造识别结果。"
                                     "请改用【完整绝对路径】重试；以下是工作目录下真实存在的图片："
                                     + _real_images_hint(sandbox_root))}
+                        # ⛔ #15（0.4.19）：文档路径通道。解析为绝对路径后写进任务书，
+                        # 由【子 Agent 自己 read_file】——主 Agent 不代读、不把内容抄进上下文。
+                        # 与图片同纪律：全部落空则拦截并附真实文档清单，让主 Agent 自纠正，
+                        # 绝不放它带着"一个文件都找不到"的委派继续跑（那样子 Agent 只能编造）。
+                        _file_paths = _args_d.get("file_paths") or []
+                        _resolved_files = []
+                        _skipped_files = []
+                        if _file_paths and not _f1_blocked:
+                            _resolved_files, _skipped_files = _resolve_delegation_files(
+                                _file_paths, sandbox_root)
+                            if not _resolved_files:
+                                _f1_blocked = True
+                                result = {"ok": False, "error": (
+                                    "files_not_found: 你传入的 file_paths 一个都没找到，"
+                                    f"已跳过 {len(_skipped_files)} 个（{_skipped_files[:5]}"
+                                    f"{'…' if len(_skipped_files) > 5 else ''}）。"
+                                    "委派已中止——若继续，子 Agent 将读不到任何文件而只能编造内容。"
+                                    "请改用【完整绝对路径】重试；以下是工作目录下真实存在的文档："
+                                    + _real_docs_hint(sandbox_root))}
                         _agent = None
                         _terr = ""
                         _auto_created = False
@@ -1495,6 +1635,10 @@ async def run_tool_loop(
                                     # TS-114（3.27）+ TS-117（3.31）：主会话附着图片 + image_paths 图片
                                     # 随委派传给子 Agent 视觉流
                                     images=_deleg_images if _deleg_images else None,
+                                    # ⛔ #15（0.4.19）：文档路径清单（已解析为绝对路径）。
+                                    # 传的是【路径】不是【内容】——由子 Agent 自己 read_file，
+                                    # 主 Agent 上下文不被文档撑爆（这正是 0.4.8 慢 20 分钟的病根）。
+                                    file_paths=_resolved_files or None,
                                     # 0.1.71（TS-118）：简单委派模式（主模型显式声明；带图时执行层强制启用）
                                     simple_mode=bool(_args_d.get("simple_mode") or False) or None,
                                     # 0.4.9（3.47.2）：委派模型自选
@@ -1512,6 +1656,12 @@ async def run_tool_loop(
                                 result["images_loaded"] = len(first_round_images or []) + len(_loaded_images)
                                 if _skipped_paths:
                                     result["images_skipped"] = _skipped_paths
+                            # #15：同样报告文档路径解析结果，跳过项必须让主 Agent 知道，
+                            # 否则它会以为子 Agent 读到了全部文件（静默丢失比报错更危险）。
+                            if isinstance(result, dict) and (_resolved_files or _skipped_files):
+                                result["files_passed"] = len(_resolved_files)
+                                if _skipped_files:
+                                    result["files_skipped"] = _skipped_files
 
             # ---- authorizer 分工（2026-08-28 权限宽松化重构）----
             # loop 层不再执行前询问（避免每个操作都弹窗骚扰用户）；
