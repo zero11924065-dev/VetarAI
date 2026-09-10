@@ -1276,8 +1276,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     const finalMessages = [...apiMessages];
     if (textFileContents.length && finalMessages.length > 0) {
       const lastIdx = finalMessages.length - 1;
-      // B10（0.4.18）：注入标记复用模块常量 ATTACH_MARK —— UserBody 折叠时按同一标记切分，
-      // 两处必须是同一字符串，否则折叠找不到分段点（⛔ 不可各写字面量）。
+      // 附件正文注入：用模块常量 ATTACH_MARK 作分隔标记，把用户原话与附件全文分开。
+      // ⛔ #11（0.4.19）更正过时注释：此处原写「UserBody 折叠时按同一标记切分」，
+      //    但 UserBody/FoldSection 已随正文折叠一并删除（用户拍板全删），**折叠消费方已不存在**。
+      //    标记本身保留——它早于折叠功能存在，作用是让落库正文里"哪段是附件"可读可辨，
+      //    且 agent 仍从落库正文读全文。⛔ 表#6（附件改走路径）落地后本段注入逻辑会被重做。
       finalMessages[lastIdx] = { ...finalMessages[lastIdx], content: finalMessages[lastIdx].content + `\n\n${ATTACH_MARK}\n` + textFileContents.join('\n\n') };
     }
 
