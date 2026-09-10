@@ -1413,10 +1413,15 @@ async def api_chat_stop(session_id: str):
     **完全没通知后端**。后果：后端对"客户端不听了"毫不知情，把剩余轮次与 token
     全部跑完（本地大模型上可达数分钟），用户看到的"停止"只是前端不再显示而已。
 
-    工作方式：置取消标志 → `run_tool_loop` 的 `cancel_check` 在**下一轮边界**读到 →
+    工作方式（⛔ 0.4.17 更正：以下描述曾停留在"轮次边界才生效"的旧实现，与实际不符）：
+    置取消 Event → `gen()` 把该 Event 的 waiter 一并放进 `asyncio.wait` 的 wait_set
+    → 点停止**立即被唤醒**（不等心跳，心跳基础 15s 且会放大到 60s）→ 随即
+    `next_task.cancel()` **硬取消在飞的模型请求**（可中断 prefill：本地大模型首 token 前
+    一个字节都不吐，只靠"写下一字节时发现断连"根本察觉不到 abort）→
     yield {"event":"cancelled"} 并干净退出。
-    ⚠️ 因此停止**不是瞬时的**：若模型正在生成本轮回复，需等本轮结束才停
-    （轮内中断需 connector 层配合，见 C5）。返回体如实说明这一点，不谎称"已立即停止"。
+    `run_tool_loop` 的 `cancel_check`（轮次边界轮询）是**第二道兜底**，覆盖
+    "本轮已正常结束、进入下一轮"的场景，不是唯一路径。
+    ✅ 因此停止是**即时的**（同 C5 工作流停止，实测延迟 0.000s）。
     """
     sid = str(session_id or "").strip()
     if not sid:
@@ -1425,7 +1430,7 @@ async def api_chat_stop(session_id: str):
     if not newly:
         # 该会话本无活流（或已置位）——如实告知，不谎称停止成功
         return {"ok": False, "detail": "该会话当前没有进行中的生成，无需停止"}
-    return {"ok": True, "detail": "已请求停止：将在本轮模型输出结束、下一轮开始前中止"}
+    return {"ok": True, "detail": "已请求停止：正在中止本轮生成"}
 
 
 class ChatInjectReq(BaseModel):

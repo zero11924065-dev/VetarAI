@@ -149,4 +149,97 @@ describe('C8 停止气泡 · 前端合并', () => {
     expect(screen.queryByText('已手动停止')).toBeNull();
     unmount();
   });
+
+  // ── C8 补漏（0.4.17）：正文为空 + 有工具步骤 ──
+  // ⛔ 场景：模型"只调了工具、还没吐任何正文"时用户点停止。这恰是 C2 根因③针对的情形。
+  // 旧判据 `if (m.content && matchesDb(...))` 与 `matchesDb` 内的 `if (!content) return false`
+  // 都以 content 为前提 → content 为空串时**整个去重被短路跳过** → 缓存副本进 extra
+  // → 追加到末尾且重复（探针实测 assistant 由 1 条变 2 条、local_x 残留）。
+  // ⚠️ mock 必须用**端点输出形态**（toolSteps，app.py:688 已做 tool_steps→toolSteps 转换），
+  //    用存储层形态（tool_steps）会因字段名不符而假失败——本文件曾因此得出错误结论。
+  const EMPTY_BODY_STEPS = [
+    { id: 'c1', name: 'read_file', args: { path: 'a.py' }, status: 'interrupted' },
+    { id: 'c2', name: 'list_dir', args: { path: '.' }, status: 'ok' },
+  ];
+
+  it('空正文 + 工具步骤：DB 与缓存同一条 → 不重复、不挪到末尾', async () => {
+    const dbMsgs = [
+      { id: 1, role: 'user', content: '请读一下这个文件', created_at: 't1' },
+      { id: 2, role: 'assistant', content: '', created_at: 't2', stopped: true,
+        toolSteps: EMPTY_BODY_STEPS },
+    ];
+    const cache = [
+      { id: 1, role: 'user', content: '请读一下这个文件', created_at: 't1' },
+      { id: 'local_x', role: 'assistant', content: '', stopped: true, manualStopped: true,
+        thinking: false, toolSteps: EMPTY_BODY_STEPS },
+    ];
+    const { unmount } = mount(dbMsgs, cache);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('请读一下这个文件');
+    }, { timeout: 3000 });
+    await new Promise(r => setTimeout(r, 150));
+
+    const after = readCache();
+    // ⛔ 核心：副本被去重（旧实现在此得到 2 条 + local_x 残留）
+    expect(after.filter((m: any) => m.role === 'assistant').length).toBe(1);
+    expect(after.some((m: any) => m.id === 'local_x')).toBe(false);
+    unmount();
+  });
+
+  it('空正文去重：缓存仍是收敛前的 running、DB 已收敛为 interrupted → 判为同一条', async () => {
+    // DB 定稿由 _persist_assistant 把 running 收敛成 interrupted；缓存副本可能是收敛前的
+    // running（或旧版本写入的缓存）。签名归一（running≡interrupted）保证不误判为两条。
+    const dbMsgs = [
+      { id: 1, role: 'user', content: '请读一下这个文件', created_at: 't1' },
+      { id: 2, role: 'assistant', content: '', created_at: 't2', stopped: true,
+        toolSteps: [{ id: 'c1', name: 'read_file', args: {}, status: 'interrupted' }] },
+    ];
+    const cache = [
+      { id: 1, role: 'user', content: '请读一下这个文件', created_at: 't1' },
+      { id: 'local_x', role: 'assistant', content: '', stopped: true, manualStopped: true,
+        thinking: false, toolSteps: [{ id: 'c1', name: 'read_file', args: {}, status: 'running' }] },
+    ];
+    const { unmount } = mount(dbMsgs, cache);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('请读一下这个文件');
+    }, { timeout: 3000 });
+    await new Promise(r => setTimeout(r, 150));
+
+    const after = readCache();
+    expect(after.filter((m: any) => m.role === 'assistant').length).toBe(1);
+    expect(after.some((m: any) => m.id === 'local_x')).toBe(false);
+    // ⛔ 屏上必须是 DB 的定稿态（interrupted），不能是缓存的 running（那会永久转圈）。
+    // B4 折叠态下渲染的是**收拢摘要**「工具调用 N 步 · M 成功 · K 中断」，不是展开态的
+    // 「已中断，未完成」——故断言对准摘要。⚠️ 这条断言同时证明 running 没赢：
+    // 若用的是缓存的 running 副本，B4 判据 `done && running===0` 不满足 → 组收不拢 →
+    // 摘要不会出现，且会渲染"正在调用…"。
+    const body = document.body.textContent || '';
+    expect(body).toContain('中断');
+    expect(body).not.toContain('正在调用');
+    unmount();
+  });
+
+  it('空正文但工具步骤**不同** → 不得过度去重（仍保留副本，防丢消息）', async () => {
+    // 反向约束：签名去重不能宽到把"另一条不同消息"也吞掉（那会丢用户可见内容）
+    const dbMsgs = [
+      { id: 1, role: 'user', content: '第一个问题', created_at: 't1' },
+      { id: 2, role: 'assistant', content: '', created_at: 't2', stopped: true,
+        toolSteps: [{ id: 'c1', name: 'read_file', args: {}, status: 'interrupted' }] },
+    ];
+    const cache = [
+      { id: 1, role: 'user', content: '第一个问题', created_at: 't1' },
+      { id: 'local_y', role: 'assistant', content: '', stopped: true, manualStopped: true,
+        thinking: false, toolSteps: [{ id: 'c9', name: 'web_search', args: {}, status: 'interrupted' }] },
+    ];
+    const { unmount } = mount(dbMsgs, cache);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('第一个问题');
+    }, { timeout: 3000 });
+    await new Promise(r => setTimeout(r, 150));
+
+    const after = readCache();
+    // 步骤签名不同 → 视为两条不同消息，副本必须保留（宁可多显示，不可丢内容）
+    expect(after.filter((m: any) => m.role === 'assistant').length).toBe(2);
+    unmount();
+  });
 });

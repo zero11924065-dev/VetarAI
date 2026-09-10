@@ -510,12 +510,33 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       const list = dbContentsByRole[role] || [];
       return list.some(db => db.length > content.length && db.startsWith(content));  // 前缀
     };
+    // C8 补漏（0.4.17）：**正文为空**的定稿按「工具步骤签名」去重。
+    // ⛔ 上面 matchesDb 与下面的判据都以 content 为前提（`if (!content) return false` /
+    //    `if (m.content && ...)`），于是"模型只调了工具、还没吐任何正文"时用户点停止
+    //    → 缓存副本 content 为空串 → **整个去重被短路跳过** → 副本追加到末尾且重复，
+    //    C8 的"挪末尾+重复"症状原样复发（探针实测：assistant 由 1 条变 2 条）。
+    //    这恰恰是 C2 根因③针对的场景（停止时工具仍在 running，正文往往为空），
+    //    故必须与 running→interrupted 收敛配套。
+    // 签名归一：running 视同 interrupted —— DB 定稿由 _persist_assistant 收敛为 interrupted，
+    // 而缓存副本可能是收敛前的 running（或旧版本写入的缓存），二者应判为同一条。
+    const stepSig = (steps: ToolStep[]): string => steps.map(s =>
+      `${s?.id ?? ''}|${s?.name ?? ''}|${s?.status === 'running' ? 'interrupted' : (s?.status ?? '')}`).join(';');
+    const dbEmptyBodySteps = new Set<string>();
+    for (const m of dbMsgs) {
+      if ((m.content || '').trim()) continue;                 // 有正文的走前缀匹配
+      const st = m.toolSteps || [];
+      if (st.length > 0) dbEmptyBodySteps.add(`${m.role}::${stepSig(st)}`);
+    }
     const extra: Message[] = [];
     for (const m of local) {
       const key = String(m.id ?? '');
       if (key.startsWith('local_')) {
         // 流式气泡：若 DB 已有同角色、内容相同或以其为前缀的定稿（流式期间已落盘），以 DB 为准不重复追加
         if (m.content && matchesDb(m.role, m.content)) continue;
+        // C8 补漏（0.4.17）：正文为空时改按工具步骤签名去重（见上 dbEmptyBodySteps 注释）
+        const _steps = m.toolSteps || [];
+        if (!(m.content || '').trim() && _steps.length > 0
+            && dbEmptyBodySteps.has(`${m.role}::${stepSig(_steps)}`)) continue;
         // 活流（该会话仍有进行中的流）→ 原样保留，流会继续推进（H16 语义）
         if (live) { extra.push(m); continue; }
         // checkpoint-059：僵尸气泡清理——空内容（且无工具步骤）的进行态气泡不恢复
