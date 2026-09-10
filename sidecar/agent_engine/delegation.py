@@ -48,6 +48,9 @@ from sidecar.agent_engine.loop import run_tool_loop, build_system_prompt, tools_
 REPORT_STATUSES = ("success", "partial", "failed")
 SUMMARY_MAX_LEN = 1000
 ARTIFACTS_MAX_ITEMS = 20
+# ⛔ #7（0.4.19）：JSON 交卷块【外】正文的最小保留长度。低于此视为噪声（如"好的""完成"）
+#   不并入 summary，避免污染。实测子 Agent 的真实成果（律师函正文等）远超此值。
+_OUTSIDE_BODY_MIN_LEN = 20
 
 # 串行锁（决策 4）：同一时刻只有一个子任务在推理。
 # 整个委派主体（含落库与追问）都在锁内，保证执行时间区间不重叠。
@@ -251,6 +254,38 @@ def _extract_json_candidate(text: str) -> str | None:
     return t[start:end + 1]
 
 
+def _extract_outside_body(text: str, candidate: str | None) -> str:
+    """提取 JSON 交卷块【之外】的实质正文（子 Agent 常把成果写在 JSON 外面）。
+
+    ⛔ #7（0.4.19）根因：`parse_report` 只取 JSON 块，块外正文【全部丢弃】。
+    实测三次委派丢失 89%/67%/29%——本次子 Agent 产出 1959 字符（含完整律师函+法条），
+    主 Agent 只收到 213 字符的 JSON 壳，artifacts 里"修改后的律师函文本"是【字符串标签】
+    既非内容也非路径。后果：主 Agent 拿不到成果 → 只能重写 → 用户看到"重复执行"。
+    返回块外正文（已剥离 ``` 围栏与 --- 分隔线），无实质内容返回 ""。
+    """
+    if not text:
+        return ""
+    t = text.strip()
+    # 用换行替换 JSON 块（而非切片拼接），避免块前后文字粘连成一行
+    if candidate and candidate in t:
+        outside = t.replace(candidate, "\n", 1)
+    else:
+        outside = t
+    # ⛔ 只剥离【独占整行】的围栏标记与分隔线（``` / ```json / --- / *** / ===）。
+    #   绝不用全局 replace —— 实测会破坏正文 markdown：表格分隔行 |---|---| 被打散成
+    #   |\n|\n|、粗斜体 ***重要*** 被拆成三行、正文 2024---2025 被切断。
+    #   判据：一行 strip 后【全部】由同一种 -/*/ = 组成且长度≥3 才算分隔线。
+    kept: list[str] = []
+    for line in outside.split("\n"):
+        s = line.strip()
+        if s in ("```", "```json", "```JSON"):
+            continue                       # JSON 交卷的围栏标记行（内容已被替换掉）
+        if len(s) >= 3 and (set(s) <= {"-"} or set(s) <= {"*"} or set(s) <= {"="}):
+            continue                       # 独占整行的分隔线
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def parse_report(text: str, task_id: str) -> dict | None:
     """解析并校验子 Agent 交卷。合法返回归一化 report dict，否则 None。
 
@@ -295,6 +330,14 @@ def parse_report(text: str, task_id: str) -> dict | None:
         artifacts_raw = []
         corrected = True
     artifacts = [str(a) for a in artifacts_raw][:ARTIFACTS_MAX_ITEMS]
+    # ⛔ #7（0.4.19）核心修复：把 JSON 块【外】的实质正文并入 summary。
+    #   为什么必须并入 summary 而非新字段：主 Agent 只读 summary（loop.py:885
+    #   `body = f"[{status}] {summary}"`），放新字段它看不到 = 白修。
+    #   并入后 summary 通常 >1000 字 → _finalize_summary 自动落盘 full_text 并回传路径，
+    #   主 Agent 既能在 summary 里看到成果正文、也能按路径读交卷全文，成果不再蒸发。
+    outside = _extract_outside_body(text, candidate)
+    if len(outside) >= _OUTSIDE_BODY_MIN_LEN and outside not in summary:
+        summary = (summary.rstrip() + "\n\n" + outside) if summary.strip() else outside
     report = {"task_id": task_id, "status": status, "summary": summary, "artifacts": artifacts}
     if corrected:
         report["format_corrected"] = True
