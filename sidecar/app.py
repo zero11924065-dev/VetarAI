@@ -2263,8 +2263,15 @@ async def api_knowledge_inject(req: KnowledgeInjectReq):
 
 @app.post("/api/knowledge/rebuild-index")
 async def api_knowledge_rebuild():
-    """重建索引（扫描全部 .md 重建，容灾）。"""
-    n = _wh.rebuild_index()
+    """重建索引（扫描知识目录内全部**可索引文档**重建，容灾）。
+
+    ⛔ A10（0.4.18）：不再只扫 .md —— 用户丢进知识目录的 docx/pdf/xlsx/pptx/.doc 等
+    也会被解析并索引（供 search_knowledge 检索；⛔ 拉模式铁律不变，不自动注入上下文）。
+    ⛔ rebuild_index 解析多个文档是 **CPU 密集 sync** 调用，而本端点是 async →
+    必须 run_in_executor，否则阻塞事件循环（心跳/SSE/取消全卡住，与 C4 工作流节点同一个坑）。
+    """
+    loop = asyncio.get_running_loop()
+    n = await loop.run_in_executor(None, _wh.rebuild_index)
     return {"ok": True, "entries": n}
 
 

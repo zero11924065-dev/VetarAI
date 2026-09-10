@@ -45,6 +45,32 @@ GLOBAL_SCOPE = "global"
 PROJECT_SCOPE = "project"
 PROJECT_DIR_NAME = "知识库"  # 用户拍板：明目录，不隐藏，方便直接找文件
 
+# ---------- A10（0.4.18）：知识目录可索引的文档格式 ----------
+# ⛔ **从 parser 推导，不另写一份清单**：C3 刚清理过"前端 PARSEABLE_EXTS 与后端
+#    SUPPORTED_EXTS 双源漂移"（前端缺 .pptx 致其永不解析），此处不能重犯。
+#    可索引 = 解析器支持的全部 − 图片（无语义文本可索引，走视觉链路）− .md
+#    （.md 是本模块自己的条目格式，走 frontmatter 路径而非解析器）。
+#    → parser 将来加格式（如 .odt），知识索引自动跟上，无需改这里。
+try:
+    from sidecar.attachments.parser import (SUPPORTED_EXTS as _P_SUPPORTED_EXTS,
+                                            IMAGE_EXTS as _P_IMAGE_EXTS)
+    INDEXABLE_DOC_EXTS = frozenset(_P_SUPPORTED_EXTS - _P_IMAGE_EXTS - {".md"})
+except Exception:                                # pragma: no cover - 导入失败兜底
+    INDEXABLE_DOC_EXTS = frozenset({".pdf", ".docx", ".doc", ".xlsx", ".xlsm",
+                                    ".pptx", ".txt", ".csv", ".json"})
+
+# ⛔ 源文件字节上限：解析必须**整读**（二进制容器截断即坏），需内存保护阈值。
+#    与工作流 file_read 节点的 _FILE_READ_MAX_SOURCE_BYTES 同量级（同一理由）。
+_KNOWLEDGE_MAX_SOURCE_BYTES = 20 * 1024 * 1024
+# ⛔ 索引正文字符上限：超长正文进 FTS/向量既无检索收益（分词后噪声压过信号），
+#    又拖慢重建与编码。与聊天附件 _CHAT_ATT_MAX_CHARS_EACH 同量级。
+_KNOWLEDGE_MAX_INDEX_CHARS = 200_000
+
+# ⛔ A10 新增 source 取值：**用户自己丢进知识目录的外部文件**。
+#    与 'chat'（会话转移生成）/'manual'（面板手动创建）的关键区别 ——
+#    文件本体属用户，⛔ **删条目时绝不能 unlink 它**（见 delete_entry 的守卫）。
+SOURCE_IMPORTED_FILE = "file"
+
 # 测试钩子：覆盖数据根（生产环境为 None，走 data_root()）
 _DATA_ROOT_OVERRIDE: Path | None = None
 
@@ -94,6 +120,40 @@ def _index_db_path() -> Path:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
+    # ⛔ A10（0.4.18）：source 的 CHECK 原为 IN ('chat','manual')，导入的外部文件需
+    #    写入 'file'（语义不同：文件本体属用户，删条目时不得 unlink）。
+    #    SQLite 的 CHECK 约束**不能 ALTER**，而真实用户库里已存在旧约束的表 →
+    #    必须检测并重建表迁移（索引可从文件重建，但迁移时**保留现有行**更安全，
+    #    免去用户重建索引的等待）。
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='knowledge_entries'"
+    ).fetchone()
+    if row and row[0] and "'chat','manual'" in row[0].replace(" ", ""):
+        # 旧表：重建迁移（事务内完成，失败回滚不留半截）
+        conn.executescript("""
+            PRAGMA foreign_keys=off;
+            BEGIN;
+            CREATE TABLE knowledge_entries_new (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK(scope IN ('project','global')),
+                project_id TEXT,
+                category TEXT,
+                keywords TEXT,
+                source TEXT NOT NULL DEFAULT 'chat' CHECK(source IN ('chat','manual','file')),
+                file_path TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO knowledge_entries_new
+                SELECT id, title, scope, project_id, category, keywords, source,
+                       file_path, created_at FROM knowledge_entries;
+            DROP TABLE knowledge_entries;
+            ALTER TABLE knowledge_entries_new RENAME TO knowledge_entries;
+            CREATE INDEX IF NOT EXISTS idx_ke_scope ON knowledge_entries(scope, project_id);
+            COMMIT;
+            PRAGMA foreign_keys=on;
+        """)
+
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS knowledge_entries (
             id TEXT PRIMARY KEY,
@@ -102,7 +162,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             project_id TEXT,
             category TEXT,
             keywords TEXT,
-            source TEXT NOT NULL DEFAULT 'chat' CHECK(source IN ('chat','manual')),
+            source TEXT NOT NULL DEFAULT 'chat' CHECK(source IN ('chat','manual','file')),
             file_path TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
@@ -270,11 +330,25 @@ def get_entry(entry_id: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         entry["keywords"] = []
     # 读正文
-    try:
-        _, body = _parse_md(Path(row[7]).read_text(encoding="utf-8"))
-        entry["body"] = body
-    except OSError:
-        entry["body"] = ""
+    # ⛔ A10（0.4.18）：source='file' 是用户导入的二进制文档（docx/pdf/xlsx…），
+    #    不能走 read_text+_parse_md —— 对二进制会抛 UnicodeDecodeError（不是 OSError，
+    #    原 except 捕不到 → get_entry 崩溃，用户点开导入条目详情即报错）。
+    #    改按 source 分流：file 条目用 parse_attachment（与 _reindex_doc 索引时同源），
+    #    md/manual/chat 仍走 _parse_md（行为不变）。
+    fp = Path(row[7])
+    if entry.get("source") == SOURCE_IMPORTED_FILE:
+        try:
+            from sidecar.attachments.parser import parse_attachment
+            text, _kind = parse_attachment(fp.name, fp.read_bytes())
+            entry["body"] = (text or "")[:_KNOWLEDGE_MAX_INDEX_CHARS]
+        except Exception:
+            entry["body"] = ""           # 文件已删/损坏 → 空正文，不崩溃
+    else:
+        try:
+            _, body = _parse_md(fp.read_text(encoding="utf-8"))
+            entry["body"] = body
+        except (OSError, UnicodeDecodeError):
+            entry["body"] = ""
     return entry
 
 
@@ -311,7 +385,15 @@ def list_entries(scope: str | None = None, project_id: str | None = None) -> lis
 
 
 def delete_entry(entry_id: str) -> bool:
-    """删除条目：删 .md 文件 + 索引 + FTS + 向量（阶段二）。"""
+    """删除条目：删**本模块生成的** .md 文件 + 索引 + FTS + 向量（阶段二）。
+
+    ⛔ A10（0.4.18）数据安全守卫：source='file' 的条目是**用户自己丢进知识目录的
+    外部文件**（.docx/.pdf/.xlsx…），文件本体属用户、不是本模块的产物。
+    若照旧 unlink，用户在面板删一条索引就会**永久删掉自己的原始文档**（不可恢复）。
+    故这类条目只删索引记录，⛔ 绝不动磁盘文件 —— 用户想删文件请自己在 Finder 删
+    （删后 prune_missing 会自动清掉失效索引，语义一致）。
+    'chat'/'manual' 条目仍删文件（那是本模块生成的 .md，删条目=删本体，语义正确）。
+    """
     entry = get_entry(entry_id)
     conn = _iconn()
     try:
@@ -321,7 +403,7 @@ def delete_entry(entry_id: str) -> bool:
         conn.commit()
     finally:
         conn.close()
-    if entry and entry.get("file_path"):
+    if entry and entry.get("file_path") and entry.get("source") != SOURCE_IMPORTED_FILE:
         try:
             Path(entry["file_path"]).unlink(missing_ok=True)
         except OSError:
@@ -537,9 +619,32 @@ def _remove_embedding(entry_id: str) -> None:
         conn.close()
 
 
+def _iter_indexable(kdir: Path):
+    """⛔ A10 局部去重：rebuild_index 原本对全局/项目两处各写一遍 `.glob("*.md")` 循环，
+    且现在要从"只 md"扩到"全部可索引文档"——两处必须同步改，否则漏一处。
+    收敛为单一迭代器：列出目录内**顶层**可索引文件（.md + INDEXABLE_DOC_EXTS）。
+    ⚠️ 保持非递归（与改造前 glob("*.md") 一致）：知识目录是用户明目录，约定平铺放置；
+    递归会意外吞进用户自建子目录里的无关文件，属行为变更，不在 A10 范围。"""
+    if not kdir.is_dir():
+        return
+    allowed = INDEXABLE_DOC_EXTS | {".md"}
+    for f in sorted(kdir.iterdir()):
+        if f.is_file() and f.suffix.lower() in allowed:
+            yield f
+
+
 def rebuild_index() -> int:
-    """重建索引：扫描作用域目录内全部 .md，清空索引后重新写入。返回条目数。
-    阶段二：同时清空并重建向量表（模型不可用时向量留空，检索降级）。"""
+    """重建索引：扫描作用域目录内全部**可索引文档**（.md + docx/pdf/xlsx/pptx/.doc/txt/csv/json…），
+    清空索引后重新写入。返回条目数。
+    阶段二：同时清空并重建向量表（模型不可用时向量留空，检索降级）。
+
+    ⛔ A10（0.4.18）：原本只 glob("*.md")，用户把 docx/pdf 丢进知识目录索引不到。
+    现按扩展名分发：.md 走 frontmatter 路径（行为不变），其余走 attachments/parser.py
+    解析（与聊天附件、工作流 file_read 同一解析链）。
+    ⛔ **拉模式铁律**：本函数只是把文本索引进 FTS/向量供 search_knowledge **检索**，
+    ⛔ 绝不自动注入任何上下文（防重蹈 0.4.8"主 Agent 自读 90KB PDF 跑 20 分钟"覆辙）。
+    ⛔ 本函数现为 CPU 密集（解析多个文档）→ 调用方（app.py 端点）必须 run_in_executor，
+    否则阻塞事件循环（与 C4 工作流节点同一个坑）。"""
     from sidecar.storage.store import list_projects
     conn = _iconn()
     try:
@@ -551,7 +656,7 @@ def rebuild_index() -> int:
         conn.close()
     count = 0
     # 全局
-    for f in global_knowledge_dir().glob("*.md"):
+    for f in _iter_indexable(global_knowledge_dir()):
         if _reindex_file(f, GLOBAL_SCOPE, ""):
             count += 1
     # 各项目
@@ -564,15 +669,21 @@ def rebuild_index() -> int:
         if not wd:
             continue
         kdir = Path(str(wd)).expanduser() / PROJECT_DIR_NAME
-        if not kdir.is_dir():
-            continue
-        for f in kdir.glob("*.md"):
+        for f in _iter_indexable(kdir):
             if _reindex_file(f, PROJECT_SCOPE, proj.get("id")):
                 count += 1
     return count
 
 
 def _reindex_file(fpath: Path, scope: str, project_id: str) -> bool:
+    """索引单个文件：.md 走 frontmatter 路径，其余文档走解析器路径（A10）。"""
+    if fpath.suffix.lower() == ".md":
+        return _reindex_md(fpath, scope, project_id)
+    return _reindex_doc(fpath, scope, project_id)
+
+
+def _reindex_md(fpath: Path, scope: str, project_id: str) -> bool:
+    """索引本模块生成的 .md 条目（带 frontmatter）—— 行为与 A10 改造前逐字一致。"""
     try:
         text = fpath.read_text(encoding="utf-8")
     except OSError:
@@ -600,4 +711,56 @@ def _reindex_file(fpath: Path, scope: str, project_id: str) -> bool:
         conn.close()
     # 阶段二：重建向量（模型不可用时 _embed_entry 内部静默降级）
     _embed_entry(entry_id, str(meta.get("title") or ""), body, kw)
+    return True
+
+
+def _reindex_doc(fpath: Path, scope: str, project_id: str) -> bool:
+    """A10（0.4.18）：索引用户丢进知识目录的**外部文档**（非 .md）。
+
+    ⛔ 与 .md 的三个关键区别（无 frontmatter 可依赖）：
+      * 标题 = 文件名 stem；关键词 = 空（无 frontmatter）。
+      * id 用**路径派生的稳定值**（uuid5），重建多次不漂移——.md 用 frontmatter id 或
+        uuid4，而外部文件没有 id 字段，用 uuid4 会让每次重建都生成新 id（虽 rebuild 先
+        清表不致堆积，但稳定 id 让增量/对账更可预期）。
+      * source='file' —— ⛔ 删条目时 delete_entry 据此**不 unlink**（文件属用户，见守卫）。
+    ⛔ 解析不出文本（损坏/加密/扫描件）→ 返回 False 不索引垃圾；超大文件跳过不阻塞整次重建。
+    ⛔ 拉模式铁律同 rebuild_index：只索引供检索，不自动注入上下文。
+    """
+    try:
+        size = fpath.stat().st_size
+        if size == 0 or size > _KNOWLEDGE_MAX_SOURCE_BYTES:
+            return False
+        raw = fpath.read_bytes()
+    except OSError:
+        return False
+    try:
+        from sidecar.attachments.parser import parse_attachment
+        text, _kind = parse_attachment(fpath.name, raw)
+    except Exception:
+        return False
+    if not text or not text.strip():
+        return False
+    body = text[:_KNOWLEDGE_MAX_INDEX_CHARS]
+    entry_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"knowledge-file://{fpath.resolve()}"))
+    title = fpath.stem
+    # created_at 用文件 mtime（外部文件无 frontmatter 时间）→ list_entries 的"新→旧"排序有意义
+    try:
+        created_at = datetime.fromtimestamp(fpath.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    except OSError:
+        created_at = ""
+    conn = _iconn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO knowledge_entries (id, title, scope, project_id, category, "
+            "keywords, source, file_path, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (entry_id, title, scope, project_id or "", "",
+             json.dumps([], ensure_ascii=False), SOURCE_IMPORTED_FILE,
+             str(fpath), created_at))
+        conn.execute(
+            "INSERT INTO knowledge_fts (entry_id, title, keywords, body) VALUES (?,?,?,?)",
+            (entry_id, _tokenize(title), _tokenize(""), _tokenize(body)))
+        conn.commit()
+    finally:
+        conn.close()
+    _embed_entry(entry_id, title, body, [])
     return True
