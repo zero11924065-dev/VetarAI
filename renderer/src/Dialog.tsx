@@ -60,6 +60,7 @@ function ensureMount() {
       <>
         <DialogHost state={current} />
         <PromptHost state={promptCurrent} />
+        <ChoiceHost state={choiceCurrent} />
       </>
     );
   };
@@ -108,6 +109,39 @@ export function promptDialog(opts: {
   ensureMount();
   return new Promise<string | null>((resolve) => {
     promptCurrent = { ...opts, resolve };
+    listeners.forEach((l) => l());
+  });
+}
+
+// ── choiceDialog（A13/A11 0.4.22）：多按钮选择弹窗 ──
+// ⛔ confirmDialog 只有"确认/取消"两态，撑不起"覆盖 / 改名并存 / 跳过"这类三选一。
+// 与既有弹窗共用同一套单例挂载、遮罩、Esc 语义（Esc/点遮罩 = 取消 → resolve(null)）。
+// 返回被点按钮的 value（string）；取消返回 null。调用方据 value 分派后续动作。
+export interface ChoiceOption {
+  /** 点这个按钮时 resolve 的值。 */
+  value: string;
+  /** 按钮文字。 */
+  label: string;
+  /** true = 用危险色（如"覆盖原文件"这类破坏性动作）。 */
+  danger?: boolean;
+}
+
+interface ChoiceState {
+  title?: string;
+  message?: React.ReactNode;
+  options: ChoiceOption[];
+  cancelText?: string;
+  resolve: (v: string | null) => void;
+}
+let choiceCurrent: ChoiceState | null = null;
+
+export function choiceDialog(opts: {
+  title?: string; message?: React.ReactNode;
+  options: ChoiceOption[]; cancelText?: string;
+}): Promise<string | null> {
+  ensureMount();
+  return new Promise<string | null>((resolve) => {
+    choiceCurrent = { ...opts, resolve };
     listeners.forEach((l) => l());
   });
 }
@@ -268,3 +302,77 @@ function DialogHost({ state }: { state: DialogState | null }) {
 }
 
 export { Icon };
+
+function ChoiceHost({ state }: { state: ChoiceState | null }) {
+  // ⛔ hooks 必须在任何条件 return 之前调用（React Hooks 规则，同 DialogHost/PromptHost）：
+  // 放在 `if (!state) return null` 之后会让本组件在"有弹窗/无弹窗"两种渲染间 hooks 数量不一致
+  // → React 抛 "Rendered more hooks than during the previous render" 直接崩。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!choiceCurrent) return;
+      if (e.key === 'Escape') {
+        const r = choiceCurrent.resolve;
+        choiceCurrent = null;
+        listeners.forEach((l) => l());
+        r(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  if (!state) return null;
+  const close = (v: string | null) => {
+    const r = choiceCurrent?.resolve;
+    choiceCurrent = null;
+    listeners.forEach((l) => l());
+    r?.(v);
+  };
+
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) close(null); }}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+        zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontFamily: fonts.base,
+      }}
+    >
+      <div role="dialog" aria-modal="true"
+        style={{
+          width: 440, maxWidth: '90vw', background: colors.bgCard,
+          borderRadius: radius.l, boxShadow: shadow.l, padding: '20px 24px',
+          color: colors.textPrimary,
+        }}>
+        {state.title && (
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: state.message ? 12 : 0 }}>
+            {state.title}
+          </div>
+        )}
+        {state.message && (
+          <div style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {state.message}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <button className="ui-btn ui-btn-secondary" style={btnSecondary} onClick={() => close(null)}>
+            {state.cancelText || '取消'}
+          </button>
+          {state.options.map((opt) => (
+            <button
+              key={opt.value}
+              className={opt.danger ? 'ui-btn ui-btn-danger' : 'ui-btn ui-btn-primary'}
+              style={opt.danger
+                ? { ...btnPrimary, background: colors.danger, color: '#FFFFFF' }
+                : btnPrimary}
+              onClick={() => close(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
