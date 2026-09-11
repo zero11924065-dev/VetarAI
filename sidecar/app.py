@@ -209,6 +209,7 @@ async def api_update_config(body: dict):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"保存配置失败: {e}")
+    _notify_change(RESOURCE_INFERENCE, ACTION_UPDATE)   # A13
     return cfg
 
 
@@ -247,7 +248,9 @@ async def api_create_project(req: ProjectCreateReq):
         raise HTTPException(status_code=400, detail="工作目录不能为空")
     # checkpoint-050 查虫修复 B-4：工作目录创建失败（非法路径/无权限）→ 400 用户可懂错误
     try:
-        return {"project_id": create_project(req.name, req.working_dir)}
+        _pid = create_project(req.name, req.working_dir)
+        _notify_change(RESOURCE_PROJECT, ACTION_CREATE, project_id=_pid)   # A13
+        return {"project_id": _pid}
     except (PermissionError, OSError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -257,7 +260,10 @@ async def api_list_projects():
 
 @app.delete("/api/projects/{project_id}")
 async def api_delete_project(project_id: str):
-    return {"deleted": delete_project(project_id)}
+    _deleted = delete_project(project_id)
+    if _deleted:
+        _notify_change(RESOURCE_PROJECT, ACTION_DELETE, project_id=project_id)   # A13
+    return {"deleted": _deleted}
 
 # ── checkpoint-058：独立 Agent（与项目平级的一等公民）──────────────────
 # 不属于任何项目：全局注册表 + 独立数据目录（ia-<id>/）。删除任何项目不影响它；
@@ -277,8 +283,10 @@ async def api_add_independent_agent(req: IndepAgentCreateReq):
     name = req.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="名称不能为空")
-    return {"agent_id": add_independent_agent(
-        name, model_name=req.model_name, system_prompt=req.system_prompt)}
+    _aid = add_independent_agent(
+        name, model_name=req.model_name, system_prompt=req.system_prompt)
+    _notify_change(RESOURCE_AGENT, ACTION_CREATE, agent_id=_aid)   # A13
+    return {"agent_id": _aid}
 
 @app.get("/api/independent-agents")
 async def api_list_independent_agents():
@@ -290,12 +298,14 @@ async def api_update_independent_agent(agent_id: str, req: IndepAgentUpdateReq):
         agent_id, name=req.name, system_prompt=req.system_prompt, model_name=req.model_name)
     if not ok:
         raise HTTPException(status_code=404, detail="独立 Agent 不存在或无有效更新字段")
+    _notify_change(RESOURCE_AGENT, ACTION_UPDATE, agent_id=agent_id)   # A13
     return {"updated": True}
 
 @app.delete("/api/independent-agents/{agent_id}")
 async def api_delete_independent_agent(agent_id: str):
     if not delete_independent_agent(agent_id):
         raise HTTPException(status_code=404, detail="独立 Agent 不存在")
+    _notify_change(RESOURCE_AGENT, ACTION_DELETE, agent_id=agent_id)   # A13
     return {"deleted": True}
 
 @app.post("/api/agents")
@@ -739,6 +749,7 @@ async def api_update_agent(project_id: str, agent_id: str, req: AgentUpdateReq):
     ok = update_agent_config(project_id, agent_id, **req.model_dump(exclude_none=True))
     if not ok:
         raise HTTPException(status_code=404, detail="Agent 不存在")
+    _notify_change(RESOURCE_AGENT, ACTION_UPDATE, project_id=project_id, agent_id=agent_id)   # A13
     return {"updated": True}
 
 # ── Project rename ───────────────────────────
@@ -751,6 +762,7 @@ async def api_rename_project(project_id: str, req: ProjectRenameReq):
     ok = rename_project(project_id, req.name)
     if not ok:
         raise HTTPException(status_code=404, detail="项目不存在")
+    _notify_change(RESOURCE_PROJECT, ACTION_UPDATE, project_id=project_id)   # A13
     return {"renamed": True}
 
 
@@ -773,6 +785,7 @@ loader = PluginLoader()
 async def api_plugin_install(req: PluginInstallReq):
     try:
         result = await loader.install_from_github(req.repo_url)
+        _notify_change(RESOURCE_PLUGIN, ACTION_CREATE)   # A13
         return {"success": True, **result}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -793,6 +806,7 @@ async def api_plugin_uninstall(name: str):
     ok = loader.uninstall(name)
     if not ok:
         raise HTTPException(status_code=404, detail=f"插件 {name} 未安装")
+    _notify_change(RESOURCE_PLUGIN, ACTION_DELETE, plugin_name=name)   # A13
     return {"deleted": True}
 
 @app.post("/api/plugins/{name}/toggle")
@@ -801,6 +815,7 @@ async def api_plugin_toggle(name: str):
     new_state = loader.toggle_enabled(name)
     if new_state is None:
         raise HTTPException(status_code=400, detail="切换失败（插件不存在）")
+    _notify_change(RESOURCE_PLUGIN, ACTION_UPDATE, plugin_name=name)   # A13
     return {"ok": True, "enabled": new_state}
 
 class PluginNoteReq(BaseModel):
@@ -815,6 +830,7 @@ async def api_plugin_note_get(name: str):
 async def api_plugin_note_set(name: str, req: PluginNoteReq):
     """问题5（0.4.1）：设置插件备注（空串=清除）。"""
     note = loader.set_note(name, req.note)
+    _notify_change(RESOURCE_PLUGIN, ACTION_UPDATE, plugin_name=name)   # A13
     return {"ok": True, "name": name, "note": note}
 
 @app.post("/api/plugins/{name}/hooks/{hook_name}")
@@ -902,6 +918,32 @@ async def api_parse_chat_attachment(req: ChatAttachmentParseReq):
 
 def _sse_format(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _notify_change(resource: str, action: str,
+                   project_id: str | None = None, **extra) -> None:
+    """A13（0.4.22）：资源写成功后推一条「资源变更」事件给前端（经全局 SSE）。
+
+    ⛔ **端点级单点接入**：Agent 经 app_modules/registry.py 的 handler 直接调本文件的
+    `api_*` 端点函数（如 `_workflow_create` → `api_create_workflow`），用户经前端 fetch
+    也调同一批端点 → 在端点成功 return 前 notify，**一处覆盖 Agent 与用户双路径**，
+    且 store.py 保持纯存储、不耦合事件总线。
+    ⛔ **绝不抛异常**：变更可视化是旁路，前端没连上也不能让用户的写操作失败。
+    ⛔ 局部 import：app_events 是轻量进程内总线，缓存后开销可忽略；自包含不依赖顶部 import。
+    """
+    try:
+        from sidecar.agent_engine import app_events as _ae
+        _ae.notify(resource, action, project_id, **(extra or {}))
+    except Exception:
+        pass
+
+
+# A13（0.4.22）：资源/动作常量（供各写端点 notify 用，避免硬编码字符串漂移）
+from sidecar.agent_engine.app_events import (
+    RESOURCE_WORKFLOW, RESOURCE_PROJECT, RESOURCE_PLUGIN,
+    RESOURCE_KNOWLEDGE, RESOURCE_INFERENCE, RESOURCE_AGENT,
+    ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE,
+)
 
 
 def compute_heartbeat_interval(event_times: list, base: float,
@@ -1598,6 +1640,66 @@ async def api_stream_agent_tasks(project_id: str, since: int = 0):
                                       "Connection": "keep-alive"})
 
 
+@app.get("/api/events/stream")
+async def api_stream_app_events(since: int = 0):
+    """A13（0.4.22）：应用级「资源变更」实时 SSE 端点（单一全局通道）。
+
+    ⛔ **修的用户可见缺陷**：Agent 在工作时直接写库（创建/修改工作流等），但前端 6 个面板
+    （Workflow / Project / IndependentAgents / Knowledge / Plugin / Inference）没有刷新机制——
+    App.tsx 用 `display` 切换做保活（不卸载组件），各面板 `useEffect` 只在首次挂载拉一次，
+    Agent 改完库后用户切回面板看到的还是旧数据，**必须重启应用**才更新。
+
+    **协议**（复用 `_sse_format`，与 tasks/stream 同格式，前端解析器零改动）：
+      * 连上先推一条 `connected`（带当前 seq）——握手基线，前端据此初始化游标；
+      * 随后推实时增量：`resource_changed`（data 含 resource/action/project_id）；
+      * `gap` = 缓冲区断档（错过的变更无从补发）→ 前端应重拉对应面板；
+      * 每 15s 无事件发 SSE 注释行 `: keepalive`（防代理断连）；
+      * `_subscribed` / `_idle` 是总线内部控制事件，**不下发给前端**；
+      * `_bus_closed`（仅 clear_all/侧车关闭）→ 发 `stream_end` 告知前端，不静默挂死。
+
+    `since` = 客户端已收到的最后 seq（断线重连时带上，可补发缓冲区内错过的变更）。
+
+    ⛔ **客户端断开必须干净退出**：订阅生成器的 finally 会摘掉自己的队列，
+    否则订阅者计数泄漏。⛔ 前端 App 级常驻订阅，卸载时必须关连接（不重连）。
+    """
+    import asyncio
+    from sidecar.agent_engine import app_events as _ae
+
+    async def gen():
+        try:
+            # ① 握手基线：当前 seq（前端据此初始化游标；变更无"快照列表"概念，
+            #    各面板自己 fetch 当前数据，这里只告知"从哪个 seq 开始监听增量"）
+            yield _sse_format("connected", {"seq": _ae.latest_seq()})
+
+            # ② 推实时增量
+            async for ev in _ae.subscribe(since_seq=since):
+                _name = ev.get("event", "")
+                if _name in ("_subscribed", "_idle"):
+                    # 内部控制事件不下发；_idle 转为 SSE 注释行做心跳
+                    if _name == "_idle":
+                        yield ": keepalive\n\n"
+                    continue
+                if _name == "_bus_closed":
+                    # 总线被清空（仅 clear_all/侧车关闭）→ 告知前端，不静默挂死
+                    yield _sse_format("stream_end", {"reason": "bus_closed"})
+                    return
+                _payload = dict(ev.get("data") or {})
+                _payload["seq"] = ev.get("seq", 0)
+                yield _sse_format(_name, _payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:            # 兜底：端点异常不得让前端无声等待
+            try:
+                yield _sse_format("stream_error", {"detail": str(exc)})
+            except Exception:
+                pass
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
+
+
 @app.post("/api/projects/{project_id}/tasks/{task_id}/retry")
 async def api_retry_agent_task(project_id: str, task_id: str):
     """TS-108 M3-2 决策 5：一键重试失败任务。
@@ -1898,12 +2000,14 @@ async def api_write_knowledge(project_id: str, req: KnowledgeWriteReq):
         raise HTTPException(status_code=400, detail="文件名必须以 .md 结尾")
     if not _k_write(project_id, name, req.content):
         raise HTTPException(status_code=400, detail="保存失败（文件名非法或项目工作目录不可写）")
+    _notify_change(RESOURCE_KNOWLEDGE, ACTION_UPDATE, project_id=project_id, name=name)   # A13
     return {"ok": True, "name": name}
 
 @app.delete("/api/projects/{project_id}/knowledge/{name}")
 async def api_delete_knowledge(project_id: str, name: str):
     if not _k_delete(project_id, name):
         raise HTTPException(status_code=404, detail="知识文件不存在或文件名非法")
+    _notify_change(RESOURCE_KNOWLEDGE, ACTION_DELETE, project_id=project_id, name=name)   # A13
     return {"ok": True}
 
 @app.post("/api/projects/{project_id}/knowledge/{name}/toggle")
@@ -1911,6 +2015,7 @@ async def api_toggle_knowledge(project_id: str, name: str):
     new_name = _k_toggle(project_id, name)
     if new_name is None:
         raise HTTPException(status_code=400, detail="切换失败（文件不存在或同名冲突）")
+    _notify_change(RESOURCE_KNOWLEDGE, ACTION_UPDATE, project_id=project_id, name=new_name)   # A13
     return {"ok": True, "name": new_name}
 
 @app.get("/api/memory")
@@ -1930,6 +2035,7 @@ async def api_write_memory(req: MemoryWriteReq):
         raise HTTPException(status_code=400, detail="scope 必须是 global 或 project")
     if not _mem_write(req.scope, req.content, req.project_id or None):
         raise HTTPException(status_code=400, detail="保存失败（项目记忆需要有效的项目工作目录）")
+    _notify_change(RESOURCE_KNOWLEDGE, ACTION_UPDATE, project_id=req.project_id or None)   # A13
     return {"ok": True}
 
 @app.get("/api/skills")
@@ -2058,6 +2164,7 @@ async def api_create_workflow(req: WorkflowCreateReq):
     if errors:
         raise HTTPException(status_code=422, detail="；".join(errors[:5]))
     wf_id = create_workflow(req.name.strip() or "未命名工作流", req.definition, req.description)
+    _notify_change(RESOURCE_WORKFLOW, ACTION_CREATE, workflow_id=wf_id)   # A13
     return {"ok": True, "id": wf_id}
 
 
@@ -2084,6 +2191,8 @@ async def api_update_workflow(wf_id: str, req: WorkflowUpdateReq):
             raise HTTPException(status_code=422, detail="；".join(errors[:5]))
     ok = update_workflow(wf_id, name=req.name, definition=req.definition,
                          description=req.description)
+    if ok:
+        _notify_change(RESOURCE_WORKFLOW, ACTION_UPDATE, workflow_id=wf_id)   # A13
     return {"ok": ok}
 
 
@@ -2095,6 +2204,8 @@ async def api_delete_workflow(wf_id: str):
     if wf.get("built_in"):
         raise HTTPException(status_code=403, detail="内置工作流不可删除")
     ok = delete_workflow(wf_id)
+    if ok:
+        _notify_change(RESOURCE_WORKFLOW, ACTION_DELETE, workflow_id=wf_id)   # A13
     return {"ok": ok}
 
 
@@ -2387,6 +2498,37 @@ async def api_knowledge_open_dir(req: OpenKnowledgeDirReq):
     except subprocess.TimeoutExpired:
         return {"ok": False, "dir": str(kdir), "detail": "打开超时"}
     return {"ok": True, "dir": str(kdir)}
+
+
+class ImportFilesReq(BaseModel):
+    """A11（0.4.22）：导入文件到知识仓库的请求体。"""
+    scope: str = "global"
+    project_id: str | None = None
+    # ⛔ 文件路径列表（来自 chooseInputFile 文件对话框，用户主动选）——非递归，不接目录路径
+    paths: list[str] = []
+    # ⛔ A11 同名冲突策略（用户 2026-09-12 拍板"弹窗问我"）：
+    #   ask=默认，不碰已存在文件，把它们列入 conflicts 返回，前端弹窗问完再带策略重调；
+    #   overwrite/rename/skip=用户已明确选定的处置方式。
+    on_conflict: str = "ask"
+
+
+@app.post("/api/knowledge/import-files")
+async def api_knowledge_import_files(req: ImportFilesReq):
+    """A11（0.4.22）：导入用户选中的文件到知识仓库（复制+解析+索引）。
+
+    ⛔ 拉模式铁律：只导入并索引供检索，不自动注入上下文（用户须在对话中 @ 引用）。
+    ⛔ 路径由用户通过 chooseInputFile 文件对话框主动选择——非递归、不遍历目录。
+    ⛔ 同名冲突不擅自处置：默认 `ask` 只报告冲突，由前端弹窗问用户后带策略重调。
+    ⛔ 走 run_in_executor（同 A10 重建端点）：import_files 含文件 IO+解析+embedding，
+       CPU/IO 密集，async 端点直接 await 会阻塞事件循环。
+    """
+    if req.on_conflict not in ("ask", "overwrite", "rename", "skip"):
+        raise HTTPException(status_code=400,
+                            detail=f"无效的 on_conflict: {req.on_conflict}"
+                                   "（可用 ask/overwrite/rename/skip）")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _wh.import_files, req.scope, req.project_id,
+                                      req.paths, req.on_conflict)
 
 
 class OpenProjectDirReq(BaseModel):

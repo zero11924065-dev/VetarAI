@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ProjectPanel } from './panels/ProjectPanel';
 import { AgentPanel } from './panels/AgentPanel';
 import { ChatPanel } from './panels/ChatPanel';
@@ -30,6 +30,7 @@ import { WorkflowPanel } from './panels/WorkflowPanel';
 import { ModuleNav, ModuleKey } from './panels/ModuleNav';
 import { TipPortal } from './TipPortal';
 import { getApiBase } from './apiBase';
+import { startAppEventStream } from './appEvents';
 import { colors, fonts } from './theme';
 import { Icon, Spinner } from './Icon';
 import { alertDialog } from './Dialog';
@@ -49,6 +50,14 @@ export default function App() {
   const [showSettingsPage, setShowSettingsPage] = useState(false);
   // checkpoint-051：手风琴头悬停态（内联样式写不了伪类）
   const [hoverPanel, setHoverPanel] = useState<string | null>(null);
+
+  // A13（0.4.22）：App 级常驻订阅「资源变更」流。空依赖 → 整个应用生命周期只启停一次，
+  // 与下方各面板的保活（display 切换、不卸载）无关。Agent 写库后经此广播 → 各面板按需重拉，
+  // 用户切回面板立即看到最新数据（无需重启）。⛔ 卸载时 stop：不重连、无幽灵请求。
+  useEffect(() => {
+    const stop = startAppEventStream();
+    return stop;
+  }, []);
 
   const openLogsFolder = async () => {
     const bridge = (window as any).subagent;

@@ -18,10 +18,12 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { colors, fonts, radius, shadow, typo, badge, btnPrimary, btnSecondary, btnGhost, input, textarea as textareaStyle, select as selectStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog, alertDialog } from '../Dialog';
+import { on } from '../events';
+import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
 
 interface IndepAgent { id: string; name: string; model_name?: string; system_prompt?: string | null; }
 
@@ -75,6 +77,18 @@ export function IndependentAgentsPanel({ selectedAgentId, onSelect, onAgentDelet
   }
 
   useEffect(() => { fetchAgents(); fetchModels(); }, [refreshKey]);
+
+  // A13（0.4.22）：Agent 增删改独立 Agent 后实时重拉列表，无需重启应用。
+  // ⛔ fetchAgents 是函数声明（每次渲染重建）→ 用 ref 持最新版，订阅只建一次。
+  const fetchAgentsRef = useRef(fetchAgents);
+  fetchAgentsRef.current = fetchAgents;
+  useEffect(() => {
+    const off = on(APP_RESOURCE_CHANGED, (ev: AppResourceEvent) => {
+      if (!ev.gap && ev.resource !== 'agent') return;
+      void fetchAgentsRef.current();
+    });
+    return off;                            // 卸载注销（不重连、无幽灵监听）
+  }, []);
 
   async function handleCreate() {
     if (creating) return;

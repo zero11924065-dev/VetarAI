@@ -18,11 +18,13 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, btnGhost, input, textarea, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog } from '../Dialog';
 import { WarehouseManager } from './WarehouseManager';
+import { on } from '../events';
+import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
 
 // TS-110 M4：知识/记忆/技能管理面板（三标签页）。
 // 知识库：<项目工作目录>/knowledge/*.md（_ 前缀=禁用）；记忆：全局/项目两份；技能：启用开关+增删改+仓库安装。
@@ -146,6 +148,22 @@ function KnowledgeTab({ projectId }: { projectId: string | null }) {
     } catch (e) { console.error('knowledge list:', e); }
   }, [projectId]);
   useEffect(() => { refresh(); }, [refresh]);
+
+  // A13（0.4.22）：Agent 改项目知识库（.md 增删改）后实时重拉，无需重启。
+  // ⛔ editing 守卫：正在编辑某条时跳过重拉，避免列表跳动干扰编辑（重拉只更新 items，
+  //    本就不碰 editContent 草稿，守卫纯为体验）。
+  // ⛔ MemoryTab/SkillsTab 不订阅：记忆草稿直接绑 state（重拉会冲掉未保存编辑），
+  //    且技能/记忆的后端写操作 Agent 不触及（registry 的 knowledge 动作只读）。
+  const editingRef = useRef(editing);
+  useEffect(() => { editingRef.current = editing; }, [editing]);
+  useEffect(() => {
+    const off = on(APP_RESOURCE_CHANGED, (ev: AppResourceEvent) => {
+      if (!ev.gap && ev.resource !== 'knowledge') return;
+      if (editingRef.current) return;
+      void refresh();
+    });
+    return off;                            // 卸载注销（不重连、无幽灵监听）
+  }, [refresh]);
 
   if (!projectId) {
     return (

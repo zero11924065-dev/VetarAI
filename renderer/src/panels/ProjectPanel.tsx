@@ -18,10 +18,12 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { colors, fonts, radius, shadow, typo, btnPrimary, btnSecondary, btnGhost, input, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog } from '../Dialog';
+import { on } from '../events';
+import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
 
 interface Project { id: string; name: string; working_dir: string; }
 
@@ -80,6 +82,18 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
       return false;
     }
   }
+
+  // A13（0.4.22）：Agent 建/删/改项目后实时重拉列表，无需重启应用。
+  // ⛔ fetchProjects 是函数声明（每次渲染重建）→ 用 ref 持最新版，订阅只建一次。
+  const fetchProjectsRef = useRef(fetchProjects);
+  fetchProjectsRef.current = fetchProjects;
+  useEffect(() => {
+    const off = on(APP_RESOURCE_CHANGED, (ev: AppResourceEvent) => {
+      if (!ev.gap && ev.resource !== 'project') return;
+      void fetchProjectsRef.current();
+    });
+    return off;                            // 卸载注销（不重连、无幽灵监听）
+  }, []);
 
   // checkpoint-064：封装后侧车是独立二进制，首启需数秒；首屏加载做退避重试
   // （最多 ~30s），避免"前端先于侧车就绪"导致的永久连接错误提示。

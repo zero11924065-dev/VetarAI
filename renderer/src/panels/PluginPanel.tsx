@@ -22,6 +22,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, btnDangerSoft, btnGhost, input, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog } from '../Dialog';
+import { on } from '../events';
+import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
 
 interface Plugin {
   name: string;
@@ -86,6 +88,15 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
   }, []);
 
   useEffect(() => { fetchPlugins(); }, [fetchPlugins]);
+
+  // A13（0.4.22）：Agent/用户装删改插件后实时重拉，无需重启应用。
+  useEffect(() => {
+    const off = on(APP_RESOURCE_CHANGED, (ev: AppResourceEvent) => {
+      if (!ev.gap && ev.resource !== 'plugin') return;
+      void fetchPlugins();
+    });
+    return off;                            // 卸载注销（不重连、无幽灵监听）
+  }, [fetchPlugins]);
 
   async function handleInstall() {
     if (!repoUrl.trim()) return;
