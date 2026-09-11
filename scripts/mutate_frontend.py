@@ -99,6 +99,61 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/taskPanel.test.tsx",
         "expect_fail": ["S8"],
     },
+    # ── B12（0.4.21）整轮进行计时 ──────────────────────────────────────────
+    {
+        "id": 5,
+        "name": "B12 撤掉 runElapsed 每秒更新（核心功能）",
+        "why": "runElapsed 是 B12 的全部意义——思考结束后任务仍进行时，界面靠它显示跳动的"
+               "「进行中 Ns」。撤掉更新则它恒为 undefined，渲染判据 runElapsed!=null 不成立，"
+               "用户回到「时间不跳」的原始缺陷。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "          runElapsed: mm.startedAt ? Math.round((now - mm.startedAt) / 1000) : mm.runElapsed,",
+        "mutant": "          runElapsed: mm.runElapsed,  // MUTATE-5：不更新整轮进行计时",
+        "test": "src/__tests__/chatPanelB12RunElapsed.test.tsx",
+        "expect_fail": ["R1", "R3", "R7"],
+    },
+    {
+        "id": 6,
+        "name": "B12 让定格的「思考 Ns」继续跳（语义谎报）",
+        "why": "⛔ B12 语义底线：思考结束后 thinkingDuration 必须定格（思考确实结束了，再跳＝谎报，"
+               "且会击穿 C6「正常完成/手动停止/异常中断」三态区分）。本变异在流级计时器里额外更新"
+               "thinkingDuration，模拟「手滑把定格值也接进每秒跳动」的错误实现。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """          thinkingElapsed: (mm.thinking && thinkingStartedAt)
+            ? Math.round((now - thinkingStartedAt) / 1000) : mm.thinkingElapsed,""",
+        "mutant": """          thinkingElapsed: (mm.thinking && thinkingStartedAt)
+            ? Math.round((now - thinkingStartedAt) / 1000) : mm.thinkingElapsed,
+          thinkingDuration: thinkingStartedAt ? Math.round((now - thinkingStartedAt) / 1000) : mm.thinkingDuration,  // MUTATE-6：谎报，定格值也跳""",
+        "test": "src/__tests__/chatPanelB12RunElapsed.test.tsx",
+        "expect_fail": ["R2"],
+    },
+    {
+        "id": 7,
+        "name": "B12 撤掉卸载 cleanup 的计时器清理",
+        "why": "⛔ 卸载 cleanup 不 abort 流 → handleSend 的 finally 不执行；若这里不清计时器，"
+               "卸载后它每秒空转（幽灵计时器）。R8 同时用运行时 clearInterval 计数 + 源码契约断言守护。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """      // B12（0.4.21）：⛔ 卸载 cleanup **不 abort 流**，所以 handleSend 的 finally 不会执行
+      //   → 流级计时器必须在这里也清一次，否则卸载后它每秒空转（无害但白耗）。
+      if (runElapsedTimerRef.current) { clearInterval(runElapsedTimerRef.current); runElapsedTimerRef.current = null; }""",
+        "mutant": "      // MUTATE-7：撤掉卸载 cleanup 的计时器清理",
+        "test": "src/__tests__/chatPanelB12RunElapsed.test.tsx",
+        "expect_fail": ["R8", "finally"],
+    },
+    {
+        "id": 8,
+        "name": "B12 撤掉 finally 的计时器清理",
+        "why": "finally 是流的正常结束出口（done/error/abort/重连耗尽都经此）。撤掉清理则流结束后"
+               "计时器仍空转。由源码契约断言守护（运行时 R3 因 isStreamingThis 已转 false 不渲染，"
+               "故本变异主要靠源码契约那条 it 抓住）。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """      // B12（0.4.21）：流结束（done/error/abort/重连耗尽都经此出口）→ 清流级计时器，
+      //   runElapsed 停止跳动，界面改由 completedDuration 的「完成 Ns」接管。
+      if (runElapsedTimerRef.current) { clearInterval(runElapsedTimerRef.current); runElapsedTimerRef.current = null; }""",
+        "mutant": "      // MUTATE-8：撤掉 finally 的计时器清理",
+        "test": "src/__tests__/chatPanelB12RunElapsed.test.tsx",
+        "expect_fail": ["finally"],
+    },
 ]
 
 

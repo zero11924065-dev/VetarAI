@@ -81,6 +81,12 @@ export interface Message {
   completedDuration?: number;
   // TS-116（3.29）：气泡出现时间戳（ms，Date.now()）
   startedAt?: number;
+  /** B12（0.4.21）：整轮进行计时（秒）= 气泡出现（startedAt）→ 流结束，全程每秒跳动。
+   *  ⛔ 存在的理由：思考结束后「思考 Ns」定格（正确，思考已结束），但任务仍在进行
+   *  （工具执行/正文输出/下轮思考未开始）时，界面原本无任何跳动计时 → 用户无法判断是否还活着。
+   *  ⛔ **瞬态字段，不落库**（同 thinkingElapsed/waitingSeconds）：历史消息无活流，不显示。
+   *  ⛔ 仅在 isStreamingThis 时渲染；流结束（done/error/abort/停止）即停，由 completedDuration 接管。 */
+  runElapsed?: number;
   // TS-120（0.3.0）：已移入知识仓库 → 脱离模型上下文（占位显示）
   archived?: boolean;
 }

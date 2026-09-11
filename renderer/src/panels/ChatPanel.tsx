@@ -473,6 +473,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   // 0.4.12 附带修复：节流计时器提升为组件级 ref，卸载时 clearTimeout（无害卫生）。
   // 原实现是 handleSend 的闭包局部变量，卸载后外部无从清理。
   const cacheSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // B12（0.4.21）：流级计时器同样提升为组件级 ref —— ⛔ **卸载 cleanup 不 abort 流**（实测：
+  // `:659` 那处 cleanup 只置 mountedRef=false 并清 cacheSyncTimer，不调 abort），
+  // 因此组件卸载时 handleSend 的 `finally` **根本不会执行**。若只在 finally 清理，
+  // 卸载后这个每秒计时器会继续空转。故必须在 finally 与卸载 cleanup **两处**都 clearInterval。
+  // 📌 注：它不会造成"幽灵写入"——patchStreamMsg 走 setLocalMessages(prev=>...) 的 updater，
+  //   React 18 卸载后 updater 不被调用（同上方 cacheSyncTimer 的变异测试结论）；
+  //   清理它属"无害卫生"（停掉空转 timer），但仍必须做。
+  const runElapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // 0.4.12 附带修复（**真实根因**）：卸载守卫。
   // ⛔ 定位纠错——最初以为泄漏来自上面的节流 timer，但**变异测试证伪**：把卸载清理删掉，
   // 回归测试照样全绿。原因是节流 timer 的写缓存动作在
@@ -659,6 +667,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     return () => {
       mountedRef.current = false;
       if (cacheSyncTimerRef.current) { clearTimeout(cacheSyncTimerRef.current); cacheSyncTimerRef.current = null; }
+      // B12（0.4.21）：⛔ 卸载 cleanup **不 abort 流**，所以 handleSend 的 finally 不会执行
+      //   → 流级计时器必须在这里也清一次，否则卸载后它每秒空转（无害但白耗）。
+      if (runElapsedTimerRef.current) { clearInterval(runElapsedTimerRef.current); runElapsedTimerRef.current = null; }
     };
   }, []);
   // M2 溢出预警
@@ -1377,7 +1388,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // 思考计时停跳。改为"阶段化"：思考指示随每个思考阶段开/关，任意一轮思考都可见、
     // 计时持续跳动，并附简版思考预览（让你实时知道 agent 在想什么、不是空转）。
     let thinkingStartedAt: number | null = null;
-    let thinkingElapsedTimer: ReturnType<typeof setInterval> | null = null;
     // B05：工具事件也按 id 定位（防止数组变化时落到错误气泡）
     const patchStreamMsg = (patch: (m: Message) => Message) => {
       if (currentSessionIdRef.current !== streamSid) return;
@@ -1390,27 +1400,51 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       });
       scheduleStreamCacheSync();
     };
+    // ⛔⛔ B12（0.4.21）：**流级计时器**（取代原"思考阶段计时器"）。
+    //
+    // 原缺陷：计时器只在思考态运行，首个正文 token 到达即被 closeThinkingPhase 清除，
+    //   思考用时定格进 thinkingDuration（这是**正确的**——思考确实已结束，再跳就是谎报）；
+    //   而"等待首条正文"的 waitTimer 按 H19 设计同样在首正文即清。于是
+    //   「正文已出 + 工具执行中 + 下轮思考未开始」这一区间界面上**没有任何跳动计时**，
+    //   用户无从判断任务是否还活着（用户 2026-09-11 报告并附截图：步骤 4/200 时只剩定格的「思考 22s」）。
+    //
+    // 现设计：**一个**计时器覆盖整轮流的生命周期（流开始建、流结束清），每秒**一次** patchStreamMsg
+    //   同时写两个字段：runElapsed（整轮已耗时，全程跳）+ thinkingElapsed（仅思考态更新）。
+    //   ⛔ **不新增第二个计时器**：否则思考态期间每秒两次 setLocalMessages → 消息列表重渲染翻倍
+    //     （ChatPanel 2400+ 行、正是 B6/B7 待治理的性能瓶颈区，不能再加压）。
+    //   ⛔ runElapsed 用**被 patch 的那条气泡自己的 startedAt** 计算，故插入点分裂后自动跟随段2
+    //     （streamMsgId 已重指向段2、段2 有自己的 startedAt），无需任何特判；
+    //     段1 因定格时被置 stopped=true → isStreamingThis 为 false → 不渲染进行计时（天然正确）。
+    //   ⛔ **不得**在此更新 thinkingDuration/completedDuration：前者是思考定格值（语义="思考已结束"），
+    //     后者是 C6「正常完成/手动停止/异常中断」三态判据的一半，两者都由各自路径专职写入。
+    const startRunElapsedTimer = () => {
+      if (runElapsedTimerRef.current) clearInterval(runElapsedTimerRef.current);
+      runElapsedTimerRef.current = setInterval(() => {
+        const now = Date.now();
+        patchStreamMsg(mm => ({
+          ...mm,
+          runElapsed: mm.startedAt ? Math.round((now - mm.startedAt) / 1000) : mm.runElapsed,
+          thinkingElapsed: (mm.thinking && thinkingStartedAt)
+            ? Math.round((now - thinkingStartedAt) / 1000) : mm.thinkingElapsed,
+        }));
+      }, 1000);
+    };
+    startRunElapsedTimer();   // ⛔ 流一开始就跑，不等到思考阶段（工具先跑/直接出正文的场景也要有计时）
     // 阶段化思考：开/关当前思考阶段（可多次开闭）
     // B1（0.4.8）修复：thinking 增量连续到达（间隔常<1s），此前每次都无条件重置
     // thinkingStartedAt 并重建计时器 → 计时器"创建即清除"永不触发，界面恒显 0s。
-    // 改为"阶段开一次"语义：仅当不在思考态时才记录开始时间并建计时器；已在思考态
-    // 则直接返回，让计时器继续跑。closeThinkingPhase 复位标记，下阶段重新计时。
+    // 改为"阶段开一次"语义：仅当不在思考态时才记录开始时间；已在思考态则直接返回。
+    // ⛔ B12：计时器已上移为流级，本函数**不再创建/清除计时器**，只负责置思考态与记录起点。
     let thinkingPhaseOpen = false;
     const startThinkingPhase = () => {
-      if (thinkingPhaseOpen && thinkingElapsedTimer) return; // 阶段已开，计时器继续跑
+      if (thinkingPhaseOpen) return; // 阶段已开
       thinkingPhaseOpen = true;
       thinkingStartedAt = Date.now();
-      if (thinkingElapsedTimer) clearInterval(thinkingElapsedTimer);
-      thinkingElapsedTimer = setInterval(() => {
-        patchStreamMsg(mm => mm.thinking
-          ? { ...mm, thinkingElapsed: Math.round((Date.now() - (thinkingStartedAt || Date.now())) / 1000) }
-          : mm);
-      }, 1000);
       patchStreamMsg(m => m.thinking ? m : { ...m, thinking: true, thinkingElapsed: 0 });
     };
     const closeThinkingPhase = () => {
-      if (thinkingElapsedTimer) { clearInterval(thinkingElapsedTimer); thinkingElapsedTimer = null; }
       thinkingPhaseOpen = false; // B1：复位，下一个思考阶段重新计时
+      // ⛔ B12：**此处不再 clearInterval** —— 流级计时器要跑完整轮（它还在驱动 runElapsed）。
       patchStreamMsg(m => {
         if (!m.thinking) return m;
         const duration = thinkingStartedAt ? Math.round((Date.now() - thinkingStartedAt) / 1000) : undefined;
@@ -1830,6 +1864,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       }
     } finally {
       abortRef.current = null;
+      // B12（0.4.21）：流结束（done/error/abort/重连耗尽都经此出口）→ 清流级计时器，
+      //   runElapsed 停止跳动，界面改由 completedDuration 的「完成 Ns」接管。
+      if (runElapsedTimerRef.current) { clearInterval(runElapsedTimerRef.current); runElapsedTimerRef.current = null; }
       setSending(false);
       activeStreamSidRef.current = null; // checkpoint-059：流结束，清除活流标记
       setReconnectNotice(null);
@@ -2201,6 +2238,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                     {msg.thinkingDuration != null && msg.thinkingDuration > 0 && (
                       <span style={{display:'inline-flex',alignItems:'center',gap:4}}>
                         <Icon name="clock" size={12} /> 思考 {msg.thinkingDuration}s
+                      </span>
+                    )}
+                    {/* B12（0.4.21）：整轮进行计时 —— 补上「思考已结束但任务仍在进行」的空白区间。
+                        ⛔ 判据用 isStreamingThis（= sending && !stopped && !streamError）：
+                          · 思考态不显示（此时上方「思考中… Ns」在跳，避免两个数字同时跳成噪音）
+                          · 段1（分裂定格，stopped=true）不显示 · 手动停止/出错/历史消息（无活流）不显示
+                        ⛔ 流一结束（finally 置 sending=false）自动消失，由右侧「完成 Ns」接管。 */}
+                    {isStreamingThis && msg.runElapsed != null && msg.runElapsed > 0 && (
+                      <span style={{display:'inline-flex',alignItems:'center',gap:4}}>
+                        <Icon name="clock" size={12} /> 进行中 {msg.runElapsed}s
                       </span>
                     )}
                     {msg.completedDuration != null && msg.completedDuration > 0 && (

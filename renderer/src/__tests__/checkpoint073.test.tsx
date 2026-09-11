@@ -108,19 +108,29 @@ describe('completedDuration 契约（TS-116 3.29）', () => {
 });
 
 describe('ChatPanel 源码契约（TS-116 3.28/3.29）', () => {
-  it('ChatPanel.tsx 含 formatTime + 时间戳显示 + completedDuration', async () => {
-    // 静态断言：验证实现契约存在（避免完整渲染 mock）
-    const contract = {
-      formatTimeFn: 'formatTime',
-      timestampDisplay: 'msg.created_at && <span',
-      completedDurationField: 'completedDuration',
-      startedAtField: 'startedAt',
-      doneCalculation: 'm.startedAt',
-      displayLabel: '完成',
-    };
-    expect(contract.formatTimeFn).toBeTruthy();
-    expect(contract.completedDurationField).toBeTruthy();
-    expect(contract.startedAtField).toBeTruthy();
-    expect(contract.displayLabel).toBe('完成');
+  // ⛔⛔ 2026-09-11（B12 加固）修正一处**完全空转的断言**：
+  //   原实现构造了一个字符串常量对象（`const contract = { formatTimeFn: 'formatTime', ... }`）
+  //   再断言这些字符串 `toBeTruthy()` —— **它从未读取 ChatPanel.tsx 源码**，
+  //   把 formatTime / completedDuration / startedAt 全部删掉，本测试照样全绿。
+  //   而它声称守护的 completedDuration/startedAt 正是 C6 三态判据的一半、也是 B12 紧邻改动的区域。
+  //   ✅ 改为真读源码（范式同 chatPanelC2ToolSteps / chatPanelB10C8Fold 的 `?raw` 导入）。
+  //   📌 这是本项目第 4 次踩"空转断言"（前 3 次见验证纪律第 19 条：0.4.18 三处、#15 T14b/S4、test_loop 10d3）。
+  it('ChatPanel.tsx 真实包含 formatTime + 时间戳显示 + completedDuration 契约', async () => {
+    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    expect(src.length).toBeGreaterThan(10000);           // 确实读到了源码，不是空串
+
+    // ① formatTime 函数真实存在（且被调用，不是死代码）
+    expect(src.includes('function formatTime(')).toBe(true);
+    expect(src.includes('formatTime(msg.created_at)')).toBe(true);
+
+    // ② 时间戳显示：created_at 存在才渲染（锚定完整条件表达式，非单词匹配）
+    expect(src.includes('msg.created_at && <span')).toBe(true);
+
+    // ③ completedDuration 由 startedAt 计算得出（锚定真实计算形态）
+    expect((src.match(/m\.startedAt\s*\?\s*Math\.round\(\(Date\.now\(\) - m\.startedAt\) \/ 1000\)/g) || []).length)
+      .toBeGreaterThanOrEqual(1);
+
+    // ④ 「完成 {N}s」标签真实渲染（C6 三态判据的可见出口）
+    expect(src.includes('完成 {msg.completedDuration}s')).toBe(true);
   });
 });
