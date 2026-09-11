@@ -196,8 +196,20 @@ async def amain():
     check("T8a app.py 落库用 done 的完整 content（覆盖语义无需改，因内容已完整）",
           '_state["text"] = _d["content"]' in app_src)
     fe = (Path(__file__).resolve().parents[2] / "renderer" / "src" / "panels" / "ChatPanel.tsx").read_text(encoding="utf-8")
-    check("T8b 前端 done 分支仍以 d.content 为准（内容已完整，不双重拼接）",
-          "if (typeof d.content === 'string') content = d.content;" in fe)
+    # ⛔ 本断言曾用【文本子串精确匹配】`if (typeof d.content === 'string') content = d.content;`，
+    #   0.4.20 #1 把该行改成三元块（按 break_at 切分段2）后**假失败**——但覆盖语义完全没变。
+    #   这是静态断言过度耦合实现细节（C5/C8 已踩过两次同源坑）。
+    # ✅ 改为锚定**意图**：done 分支① 以 d.content 为准覆盖（不是累加），② 绝不双重拼接。
+    _fe_done = fe[fe.index("if (ev.event === 'done')"):]
+    _fe_done = _fe_done[:_fe_done.index("if (typeof d.content") + 400] if "if (typeof d.content" in _fe_done else _fe_done[:600]
+    check("T8b 前端 done 分支以 d.content 为准覆盖（不双重拼接）",
+          # ① 从 d.content 取值覆盖（三元或直接赋值都算）
+          "content = d.content" in _fe_done or "d.content.slice(" in _fe_done
+          # ② ⛔ 不得把 d.content 拼到已有 content 上（那才是 T8b 要防的双重拼接）
+          and "content += d.content" not in fe
+          and "content = content + d.content" not in fe
+          and "content = m.content + d.content" not in fe,
+          _fe_done[:200])
 
     print(f"\n===== #3 多轮文本累积专项: PASS={PASS} FAIL={FAIL} =====")
     if FAILURES:

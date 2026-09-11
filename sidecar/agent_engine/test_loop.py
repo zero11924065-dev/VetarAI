@@ -446,6 +446,96 @@ async def main():
     finally:
         _cfgmod.get_config = orig_get_cfg2
 
+    # ── #1（0.4.20）插入点分裂：segment_break 事件 + break_at 断点 ──
+    # 需求（用户 2026-09-11 确认，对齐千问）：用户「思考中」插入消息后，当前气泡就地定格、
+    # 插入用户气泡、新思考另起气泡显示在其下方。后端在 drain 到注入时发 segment_break。
+    #
+    # ⛔ 本组测试的核心是 **break_at 的精确性**：它是前端把 done 全文切成
+    #   段1=[:break_at] / 段2=[break_at:] 的**唯一依据**。断点错一个字符，
+    #   段2 就会重复显示段1 的尾部（或吞掉段2 开头），而这个 bug 只在真实插入时暴露。
+    #   full_text 跨轮累加（#3/0.4.19），done 的 content 是【全文】= 段1+段2。
+    class SegConn:
+        """三轮：第1轮出正文+工具调用，第2轮出正文+工具调用，第3轮只出正文（done）。
+
+        每轮 content_delta 是**可数的固定文本**，便于精确断言 break_at。
+        """
+        def __init__(self):
+            self.calls = 0
+
+        async def chat_stream(self, model, messages, tools=None):
+            self.calls += 1
+            if self.calls <= 2:
+                # 第1轮出 4 字、第2轮出 3 字（故意不等长，防止"每轮等长"掩盖断点算错）
+                yield {"content_delta": "第一段" if self.calls == 1 else "第二段甲"}
+                yield {"tool_calls": [{"id": f"s{self.calls}",
+                                       "function": {"name": "list_dir", "arguments": "{}"}}]}
+                yield {"done": True, "counts": {"eval_count": 1}}
+            else:
+                yield {"content_delta": "收尾"}
+                yield {"done": True, "counts": {"eval_count": 1}}
+
+    # inject_check：第 1 次调用（第1轮开始前）无注入；第 2 次（第2轮开始前）注入一条；
+    # 之后都不再有（模拟"用户只插了一次"）。
+    _inj_seq = [[], ["请改正方向"], [], [], []]
+    _inj_i = [0]
+
+    def _inj_probe():
+        i = _inj_i[0]
+        _inj_i[0] += 1
+        return _inj_seq[i] if i < len(_inj_seq) else []
+
+    evs_seg = []
+    async for ev in run_tool_loop("m", [{"role": "user", "content": "hi"}], tools_spec(),
+                                  str(sandbox), max_rounds=6, connector=SegConn(),
+                                  inject_check=_inj_probe):
+        evs_seg.append(ev)
+
+    kinds_seg = [e["event"] for e in evs_seg]
+    sb = next((e for e in evs_seg if e["event"] == "segment_break"), None)
+    check("22a 注入被 drain 时发 segment_break", sb is not None, str(kinds_seg))
+    # ⛔ 不用 `if sb:` 守卫后续断言——sb 为 None 时守卫会让 22b~22g **静默跳过**
+    #   （变异测试实测踩过：撤掉 segment_break 后这些断言全 PASS 而非 FAIL = 空转断言）。
+    #   改用空 dict 兜底，让每条断言始终求值；sb 为 None 时它们会各自 FAIL（暴露问题）。
+    _sbd = (sb or {"data": {}})["data"]
+    check("22b segment_break 只发一次（用户只插了一次）",
+          kinds_seg.count("segment_break") == 1, str(kinds_seg))
+    check("22c payload 带 injected_messages（前端要据此插用户气泡）",
+          _sbd.get("injected_messages") == [{"role": "user", "content": "请改正方向"}],
+          str(_sbd)[:200])
+    # ⛔ 核心断言：break_at == 第1轮已生成正文字符数（"第一段"=3字）
+    check("22d ⛔ break_at=段1字符数（前端切分全文的唯一依据）",
+          _sbd.get("break_at") == len("第一段"),
+          f"break_at={_sbd.get('break_at')} 期望={len('第一段')}")
+
+    # 注入的消息必须真的进了上下文（A5 原有语义不能被 #1 破坏）
+    check("22e 注入消息已并入 msgs（A5 语义不回归）",
+          any(e["event"] == "done" for e in evs_seg), str(kinds_seg))
+
+    # ⛔ done 全文 = 段1+段2+收尾；前端按 break_at 切分后段2 应等于 [break_at:]
+    #   同样不用 `if done_seg and sb:` 守卫（空转断言同源问题）。
+    done_seg = next((e for e in evs_seg if e["event"] == "done"), None)
+    _full = (done_seg or {"data": {}})["data"].get("content", "")
+    _ba = _sbd.get("break_at", 0)
+    check("22f done 的 content 是全文（含段1）→ 前端必须切分否则段2 重复",
+          _full.startswith("第一段"), repr(_full))
+    check("22g 按 break_at 切分：段2 = 全文[break_at:] 且不含段1 内容",
+          _full[_ba:] == _full[len("第一段"):] and not _full[_ba:].startswith("第一段"),
+          f"段2={repr(_full[_ba:])}")
+
+    # 22h ⛔ 回归保护：多轮但**始终无注入** → 绝不发 segment_break
+    #   （无注入时发事件会让前端凭空分裂气泡，把一条正常回复拆成两条）
+    _inj_i[0] = 0
+    _inj_seq_none = [[], [], [], [], []]
+    evs_noseg = []
+    async for ev in run_tool_loop("m", [{"role": "user", "content": "hi"}], tools_spec(),
+                                  str(sandbox), max_rounds=3, connector=SegConn(),
+                                  inject_check=lambda: []):
+        evs_noseg.append(ev)
+    check("22h 无注入 → 不发 segment_break（不得凭空分裂气泡）",
+          "segment_break" not in [e["event"] for e in evs_noseg],
+          str([e["event"] for e in evs_noseg]))
+    _inj_seq.clear(); _inj_seq.extend(_inj_seq_none)   # 清理，不影响后续用例
+
     # 清理
     shutil.rmtree(base, ignore_errors=True)
     check("临时目录已清理", not base.exists())

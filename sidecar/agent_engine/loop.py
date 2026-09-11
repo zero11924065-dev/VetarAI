@@ -1125,6 +1125,21 @@ async def run_tool_loop(
                 _injected = inject_check() or []
             except Exception:
                 _injected = []          # 注入失败不能拖垮推理主流程
+            # #1（0.4.20）插入点分裂：drain 到注入消息时，先 yield segment_break，
+            # 让前端把「当前正在生成的气泡」就地定格、插入用户气泡、为新 assistant
+            # 气泡开新的 streamMsgId，再把注入消息并入上下文（A5 原有逻辑不变）。
+            # ⛔ 只在真有新消息时发（空列表不打扰前端）；payload 只带文本，
+            #    过滤空白，与下面 append 的判据保持一致。
+            _inj_payload = [{"role": "user", "content": str(_t)}
+                            for _t in _injected if str(_t).strip()]
+            if _inj_payload:
+                # ⛔ break_at = 截至此刻已生成的正文字符数（full_text 长度）。
+                #    full_text 跨轮累加（#3/0.4.19），done 的 content 是【全文】。
+                #    前端据此把 done 全文切成「段1=[:break_at] / 段2=[break_at:]」，
+                #    否则 done 用全文覆盖段2 会让段2 重复显示段1 的全部内容。
+                yield {"event": "segment_break",
+                       "data": {"injected_messages": _inj_payload,
+                                "break_at": len(full_text)}}
             for _txt in _injected:
                 if str(_txt).strip():
                     msgs.append({"role": "user", "content": str(_txt)})
