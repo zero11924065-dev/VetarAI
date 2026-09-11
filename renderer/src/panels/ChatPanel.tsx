@@ -1226,15 +1226,22 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   // M2：警告条未处理前禁止发送
   const inputDisabled = !!compactWarning;
 
-  async function handleSend() {
+  async function handleSend(explicitText?: string) {
     // A5（0.4.16）：思考中（sending）点发送/回车 → 走"插入新消息"，不打断当前轮。
     // 用户拍板语义：模型先做完手上这一轮，下一轮开始前读到这条新消息，再自行
     // 纠偏或补充——正如助手处理用户在其工作时发来的消息的方式。
-    if (sending) { handleInject(); return; }
+    if (sending) { handleInject(explicitText); return; }
+    // B13（0.4.22）：explicitText 用于"压缩后自动续发"等程序化重发——
+    // ⛔ 不能依赖 input state：setTimeout/异步回调里的 handleSend 闭包捕获的是调度时刻的旧 input
+    // （点击压缩瞬间 input 为空），导致 hasSendableText('') 为 false、重发静默无效（原意图从未生效）。
+    // ⛔⛔ **必须 typeof==='string' 判断**：发送按钮 `onClick={handleSend}` 会把 **click 事件对象**
+    // 作为首参传入（React 惯例），若用 `!= null` 判断会把 MouseEvent 当文本 → String(e)='[object Object]'
+    // 污染正文（2026-09-11 回归实测：8 用例红、气泡首行 '[object Object]'）。
+    const src = typeof explicitText === 'string' ? explicitText : input;
     // checkpoint-067 R-1 + B1（0.4.12）：判空与内容一律走模块级 normalizeInputText/hasSendableText，
     // 与发送按钮的 disabled 共用同一判据（详见那两个函数上方的注释——它们各自记录了一个真实缺陷）。
-    const hasText = hasSendableText(input);
-    const contentText = normalizeInputText(input).trim();
+    const hasText = hasSendableText(src);
+    const contentText = normalizeInputText(src).trim();
     const hasImages = pendingItems.some(p => p.isImage);
     if (!hasText && !hasImages) return;
 
@@ -1898,11 +1905,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
   // A5（0.4.16）：把"思考中"输入的新消息投进后端待注入队列（不打断当前流）。
   // 乐观显示用户气泡（与正常发送一致），后端先落库再入队，loop 下一轮 drain 读到。
-  async function handleInject() {
+  async function handleInject(explicitText?: string) {
     const sid = activeStreamSidRef.current || currentSessionIdRef.current;
     if (!sid) return;
-    if (!hasSendableText(input)) return;
-    const text = normalizeInputText(input).trim();
+    // B13（0.4.22）：explicitText 供程序化重发（压缩续发等）使用。⛔ 不能依赖闭包 input：
+    // 异步回调（setTimeout）里的 handleInject 捕获的是调度时刻的旧 input（常为空），会静默无效。
+    // ⛔ typeof==='string' 防护：防止误绑 onClick 时把事件对象当文本（'[object Object]' 污染）。
+    const src = typeof explicitText === 'string' ? explicitText : input;
+    if (!hasSendableText(src)) return;
+    const text = normalizeInputText(src).trim();
     // 乐观追加用户气泡并写穿缓存（与 handleSend 的即时反馈一致）
     const userMsg: Message = { id: newLocalMsgId(), role: 'user', content: text };
     setLocalMessages(prev => { const next = [...prev, userMsg]; syncSessionLocal(sid, next); return next; });
@@ -1922,6 +1933,23 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // M5 做指数退避自动重连；本任务：手动重发上一条 user 消息
     const lastUser = [...localMessages].reverse().find(m => m.role === 'user');
     if (lastUser) { setInput(lastUser.content); }
+  }
+
+  // B13（0.4.22）：显式 content 的重发入口。⛔ 与 resendLast/handleSend 不同，它不依赖
+  // 闭包里的 input state —— 压缩回调在 setTimeout 里调用时 input 已变（或本就是空），
+  // 用参数传 content 才能保证"压缩后让模型继续任务"的原意图真的生效。
+  async function resendWithContent(content: string) {
+    const text = String(content || '').trim();
+    if (!text) return;
+    const sid = activeStreamSidRef.current || currentSessionIdRef.current || currentSessionId;
+    if (!sid) return;
+    // 流仍在进行 → 走注入（A5 语义）；流已结束 → 走正常发送。二者都显式传文本。
+    if (sending) {
+      await handleInject(text);
+      return;
+    }
+    // ⛔ 直接传参给 handleSend（显式文本通道），⛔ 不走 setInput+setTimeout 旧路（闭包空 input 静默无效）
+    await handleSend(text);
   }
 
   const modelUsed = getEffectiveModel();
@@ -2046,13 +2074,40 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             <button className="ui-btn ui-btn-primary" onClick={async () => {
               try {
+                // B13（0.4.22）修复前记录压缩前的消息 id 集合，用于判断最后一条 user 是否被压缩掉。
+                const idsBefore = new Set((localMessagesRef.current || []).map((m: any) => m.id));
                 await fetch(`${API}/sessions/${currentSessionId}/compact`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({}) });
                 setCompactWarning(null);
                 setToast('已压缩，继续任务中...');
                 setTimeout(() => setToast(null), 3000);
-                const msgs = localMessagesRef.current;
-                const lastUser = [...msgs].reverse().find((m:any) => m.role === 'user');
-                if (lastUser) { setInput(lastUser.content); setTimeout(() => handleSend(), 500); }
+                // ⛔⛔ B13 修复（2026-09-11，两条真实 bug）：
+                //   旧实现 `setInput(lastUser.content); setTimeout(()=>handleSend(),500)` 有两个缺陷：
+                //   ① **回填输入框**＝播下重复种子：用户看到输入框里出现刚发过的消息，任何后续回车
+                //      （含 B14 场景里"想清掉残留换行"的回车）都会把它**再发一遍**（走 A5 inject →
+                //      界面出现第二条一模一样的用户气泡 = 用户截图现象）。
+                //   ② **自动重发静默无效**：setTimeout 捕获的 handleSend 闭包里 input 是点击瞬间的空串，
+                //      `hasSendableText('')` 为 false → 直接 return，"压缩后让模型继续任务"的原意图从未生效。
+                //   ✅ 新实现：压缩成功后重新拉消息，判断最后一条 user 消息**是否还在保留区**：
+                //      - 还在（默认 keep_recent=10，通常如此）→ **什么都不做**（它已在上下文里，模型看得到；
+                //        回填输入框只会造成重复）。仅保留 toast 提示。
+                //      - 已被压缩掉 → 用**显式 content 参数**重发（不依赖闭包 input），保原设计意图。
+                try {
+                  const after = await fetch(`${API}/sessions/${currentSessionId}/messages?project_id=${encodeURIComponent(projectId)}`).then((r: any) => r.ok ? r.json() : []);
+                  const afterList = Array.isArray(after) ? after : [];
+                  const lastUser = [...(localMessagesRef.current || [])].reverse().find((m: any) => m.role === 'user');
+                  // ⛔⛔ 不能用 id 比较：localMessages 里的 id 是 **local_ 临时 id**（流未结束时
+                  //   alignLocalIdsWithDb 还没把它换成 DB 数字 id），与 messages 接口返回的 DB id
+                  //   **永不相等** → has() 恒 false → 永远误判"已被压缩掉" → 永远重发（=bug 复现）。
+                  //   ✅ 改用 **content+role 比较**：只要保留区里还有"同内容的 user 消息"，
+                  //   就说明模型上下文里看得到它 → 不重发（重复内容无意义且会造成重复气泡）。
+                  const retained = lastUser && afterList.some((m: any) =>
+                    m.role === 'user' && String(m.content || '') === String(lastUser.content || ''));
+                  if (lastUser && !retained) {
+                    // 最后一条 user 确实已被压缩掉 → 显式重发（content 作参数，避免旧闭包空 input）
+                    resendWithContent(String(lastUser.content || ''));
+                  }
+                  void idsBefore;
+                } catch { /* 判断失败则不重发（保守：宁可少发不可重复） */ }
               } catch (e) { setToast('压缩失败: ' + (e as Error).message); }
             }} style={{...btnPrimary, height:28}}>智能压缩</button>
             <button className="ui-btn ui-btn-secondary" onClick={async () => {
@@ -2424,7 +2479,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             // 仅依赖 composing/isComposing/keyCode229 判断是否在输入法组合中（这些为真时回车是选词确认，不发送）。
             // 去掉原 80ms 时间窗的粗暴拦截（它会把用户"想发送的回车"吞掉变成换行）。
             if (composingRef.current || e.nativeEvent.isComposing || e.keyCode===229) return;
-            if (e.key==='Enter' && !e.shiftKey) handleSend();
+            if (e.key==='Enter' && !e.shiftKey) {
+              // B14（0.4.22）：⛔ 必须 preventDefault。handleSend 会 setInput('') 清空输入框，
+              // 但浏览器对回车键的**默认行为**是往 textarea 插入一个换行——不阻止的话，
+              // 清空后又被插入 '\n' → 值非空 → placeholder 中文提示消失、看似"残留一个换行"，
+              // 用户需再按一次回车才恢复空白（用户 2026-09-11 报告）。
+              // ⛔ 不影响 Shift+Enter（换行，走浏览器默认）与输入法选词（上面已 return）。
+              e.preventDefault();
+              handleSend();
+            }
           }}
           placeholder={pendingItems.length ? '输入文字描述，或直接发送...' : '输入消息（可先上传附件，再输入文字，一起发送）...'}
           style={{padding:'8px 10px',borderRadius:radius.s,border:`1px solid ${colors.borderStrong}`,background:colors.bgCard,color:colors.textPrimary,fontSize:14,flex:1,minHeight:38,maxHeight:120,resize:'none',fontFamily:fonts.base,lineHeight:1.6,boxSizing:'border-box'}} />
@@ -2432,7 +2495,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           <>
             {/* A5（0.4.16）：思考中也能发送——插入新消息（不打断当前轮，下一轮被读到）。
                 无文本时禁用，与正常发送按钮同一判据。 */}
-            <button className="ui-btn ui-btn-primary" onClick={handleSend} data-tip="发送新消息（模型完成当前这一步后会读到）"
+            <button className="ui-btn ui-btn-primary" onClick={() => handleSend()} data-tip="发送新消息（模型完成当前这一步后会读到）"
               disabled={!hasSendableText(input)}
               style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:hasSendableText(input)?1:0.5}}>
               <Icon name="send" size={16} style={{color:colors.onAccent}} />
@@ -2443,7 +2506,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             </button>
           </>
         ) : (
-          <button className="ui-btn ui-btn-primary" onClick={handleSend} data-tip="发送" disabled={inputDisabled || (!hasSendableText(input) && pendingItems.length===0)}
+          <button className="ui-btn ui-btn-primary" onClick={() => handleSend()} data-tip="发送" disabled={inputDisabled || (!hasSendableText(input) && pendingItems.length===0)}
             style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:(!hasSendableText(input) && pendingItems.length===0) ? 0.5 : 1}}>
             <Icon name="send" size={16} style={{color:colors.onAccent}} />
           </button>
