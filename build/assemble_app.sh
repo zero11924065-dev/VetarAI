@@ -1,12 +1,14 @@
 #!/bin/bash
-# checkpoint-063 封装：组装 VetarAI.app（无签名版）
-# 用本地 Electron 外壳 + 应用资源 + 侧车二进制组装标准 .app 包
+# checkpoint-063 封装：组装 VetarAI.app；0.4.20 起末尾追加签名步骤（[7/7]）
+# 用本地 Electron 外壳 + 应用资源 + 侧车二进制组装标准 .app 包，并签名
 set -e
 
 BASE="/Users/vetar/Desktop/beta/subagent"
-OUT="$BASE/build/VetarAI.app"
+# OUT/VERSION 支持环境变量覆盖：便于在临时路径上验证组装+签名链路，
+# 而不必覆盖正式产物（正式产物是已备份 DMG 的来源，覆盖后两者会分叉）。
+OUT="${OUT:-$BASE/build/VetarAI.app}"
 ELECTRON="$BASE/node_modules/electron/Electron.app"
-VERSION="0.4.20"
+VERSION="${VERSION:-0.4.20}"
 
 echo "[1/6] 清理旧产物..."
 rm -rf "$OUT"
@@ -61,6 +63,30 @@ PLIST="$OUT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile VetarAI" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string VetarAI" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable VetarAI" "$PLIST"
+
+# ── [7/7] 签名（0.4.20 新增）──────────────────────────────────────
+# ⛔⛔ 为什么必须在**改完 Info.plist、写完所有资源之后**才签名：
+#   codesign 是对整个 bundle 内容做哈希封印的。此前 assemble_app.sh 复制 Electron
+#   外壳后改了 Info.plist、换了图标、写入侧车与 565M 模型，却**从未重新签名**
+#   → 2026-09-11 实测 `codesign -v` 报
+#     `code has no resources but signature indicates they must be present`
+#   即代码封印已损坏（8 处），且主程序 identifier 仍是通用的 `Electron`。
+#   后果：① 公证必被拒 ② TCC 权限匹配不到稳定身份 → Computer Use 每次更新都失效。
+echo ""
+echo "[7/7] 签名（从内到外，固定 identifier）..."
+# ⛔ 用 `|| rc=$?` 捕获退出码而非让它触发 set -e 中断：
+#   sign_app.sh 在**无证书**时返回 3（ad-hoc 降级，签名有效但 TCC 目标未达成），
+#   这是开发期的正常状态，不该让组装流程失败。只有 1（真实失败）才中断。
+SIGN_RC=0
+APP_PATH="$OUT" bash "$BASE/build/sign_app.sh" || SIGN_RC=$?
+case "$SIGN_RC" in
+  0) echo "✅ 签名完成（Developer ID，权限可跨版本保留）" ;;
+  3) echo "⚠️  签名完成但为 ad-hoc 降级（无 Developer ID 证书）"
+     echo "   → 封印完整、identifier 已固定，但 TCC 权限仍会每次更新失效、且无法公证。"
+     echo "   → 拿到证书后重跑：SIGN_IDENTITY=\"Developer ID Application: ... (TEAMID)\" bash build/sign_app.sh" ;;
+  *) echo "⛔ 签名失败（退出码 $SIGN_RC）—— 产物不可分发，中止组装"
+     exit "$SIGN_RC" ;;
+esac
 
 echo ""
 echo "✓ 组装完成: $OUT"

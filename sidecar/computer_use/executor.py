@@ -205,8 +205,18 @@ def _process_identity() -> dict[str, Any]:
     侧车进程依然不被信任 → AXIsProcessTrusted 仍为 False → 事件被静默丢弃。
     故必须把【实际发事件的那个二进制路径】告诉用户。
 
-    另：本应用当前为 **ad-hoc 签名**（未做 Developer ID 签名），每次重新打包签名指纹都会变，
-    TCC 授权会失效需重新授予——这是"明明授权过却又没了"的常见原因。
+    ⚠️ **签名状态与权限持久化（2026-09-11 更新）**：
+    本函数**动态检测**签名状态（`adhoc` / `identifier` 字段），故此处不写死结论——
+    一切以返回值为准。相关事实：
+      · `build/sign_app.sh`（0.4.20 新建）会把侧车 identifier 固定为 **com.vetarai.sidecar**，
+        此前 PyInstaller 的 ad-hoc 签名生成的是 `vetarai-sidecar-<40位内容哈希>`，
+        **每次构建都变** → 这正是"明明授权过却又没了"的根因。
+      · ⛔ 但**仅固定 identifier 还不够**：TCC 按 designated requirement（DR）匹配，
+        ad-hoc 签名下 DR 只能退化为 `cdhash H"..."`（每次构建变）；
+        必须用 **Developer ID Application 证书**签名，DR 才变成
+        `identifier + anchor apple generic + certificate leaf` → 权限才能跨版本保留。
+      · 故 sign_app.sh 在无证书时以**退出码 3**（降级）结束并明确告知"核心目标未达成"，
+        防止把 ad-hoc 误判成"签名已完成"。
     """
     out: dict[str, Any] = {"exe": "", "adhoc": None}
     try:

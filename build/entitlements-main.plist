@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  VetarAI 主程序与 Electron Helper 的 entitlements（0.4.20 新建）
+
+  ⛔ 为什么必须有这个文件：公证（notarization）强制要求 hardened runtime，
+  而 hardened runtime **默认禁止 JIT 与可写可执行内存** —— Electron 的 V8 引擎
+  依赖这两者，不加 entitlements 的话【签名能成功、公证能过，但应用一启动就崩】。
+  这是 Electron 公证的头号坑（签名链路全绿、运行时才炸）。
+
+  ⛔ 不需要 app-sandbox：本项目走 Developer ID 分发（非 Mac App Store），
+  沙盒会禁掉侧车 spawn、真实键鼠控制（Computer Use）、任意路径文件读写等核心能力，
+  与产品定位直接冲突（用户明确要求 Computer Use 真实占用键鼠）。
+
+  ⛔ 不需要 inherit：主程序用 child_process.spawn 启动侧车是**独立进程**，
+  不是 dlopen 进本进程；非沙盒应用可自由 spawn 子进程。
+
+  适用范围：主程序 VetarAI + 4 个 Electron Helper + Electron Login Helper。
+  ⛔ 不适用于侧车（Python 二进制需另一套，见 entitlements-sidecar.plist）。
+-->
+<plist version="1.0">
+<dict>
+    <!-- V8 的 JIT 编译需要可写+可执行内存页。hardened runtime 默认禁止，
+         不加这条 Electron 主进程与渲染进程启动即崩（EXC_BAD_ACCESS）。 -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- 同上：V8 与部分原生模块需要 MAP_JIT 之外的可写可执行内存。
+         Electron 官方分发指南要求与 allow-jit 成对出现。 -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- 允许加载非同 Team ID 签名的动态库。
+         ⚠️ 本项目主程序并不 dlopen 侧车（是 spawn 独立进程），此条主要为
+         Electron 自身加载 Frameworks 下的 dylib 兜底；若实测证明不需要可移除
+         （移除更安全，但会导致启动崩溃时难以定位，故先保留）。 -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- 允许通过 DYLD_* 环境变量调试。⛔ 生产环境本可去掉，但保留它可让
+         用户侧出问题时我们能远程指导排查（PyInstaller 产物常需 DYLD_LIBRARY_PATH）。 -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

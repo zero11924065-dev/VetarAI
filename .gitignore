@@ -27,6 +27,11 @@ build/*
 !build/*.js
 !build/*.icns
 !build/*.iconset/
+# ⚠️ 0.4.20 新增例外：entitlements plist 是**签名的源文件**（不是构建产物），
+#   漏了它 sign_app.sh 会进 git 而它依赖的两个 plist 不会 → 换环境重新构建
+#   必然报「⛔ 缺少 build/entitlements-main.plist」。与上面 0.4.11 那次
+#   「build/ 被整目录忽略导致 spec 丢失」是**同一类事故**，故一并放行。
+!build/*.plist
 # 构建产物仍忽略（.app 目录 / dist / work / 历史 DMG）
 build/VetarAI.app/
 build/dist/

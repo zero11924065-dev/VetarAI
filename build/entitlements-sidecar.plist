@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  VetarAI 侧车（PyInstaller 冻结的 Python 二进制）的 entitlements（0.4.20 新建）
+
+  ⛔ 为什么与主程序分开：侧车是**独立进程**（main.js 用 child_process.spawn 启动），
+  有自己的代码封印与 designated requirement，entitlements 必须单独给。
+
+  ⛔ disable-library-validation 对侧车是**必需**的（与主程序不同，那里是兜底）：
+  PyInstaller 产物在运行时 dlopen 86 个 Python C 扩展（.so）与 libonnxruntime.dylib。
+  hardened runtime 的 library validation 要求被加载库与主程序同 Team ID 签名；
+  虽然我们确实全部用同一证书签，但 PyInstaller 的 bootloader 与部分预编译轮子
+  （onnxruntime / numpy / PIL 等来自 PyPI 的二进制）**可能带自己的 adhoc 签名残留**，
+  重签后仍会触发 validation 失败 → 侧车启动即崩、应用显示"服务未就绪"。
+
+  ⛔ 不需要 allow-jit：CPython 是解释执行，无 JIT。
+     （若将来引入 numba/pypy 类 JIT 依赖需补上。）
+
+  📌 关于 Computer Use 权限（TCC）：辅助功能与屏幕录制权限是按
+  **签名的 designated requirement**（identifier + certificate leaf）匹配的。
+  固定 identifier 为 com.vetarai.sidecar + 用 Developer ID 签名后，
+  DR 不再含 cdhash → 权限可跨版本保留（这是本次签名工作的主要动机）。
+-->
+<plist version="1.0">
+<dict>
+    <!-- dlopen Python C 扩展（86 个 .so）与 onnxruntime 必需，见上方说明 -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- PyInstaller 产物可能需要 DYLD_LIBRARY_PATH 定位 _internal 下的库 -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- ⛔ 曾在此误加 com.apple.security.cs.allow-unsigned-executable-memory，
+         注释还写成"允许 fork/exec" —— 双重错误：
+         ① 该键管的是【可写+可执行内存】，与 fork/exec 毫无关系；
+         ② CPython 是解释执行、无 JIT，**不需要**这条（需要它的是 V8，见 main.plist）。
+         已移除。⛔ entitlements 只能加真正需要的：每多一条都是放宽安全边界，
+         且 Apple 审核会关注异常宽泛的 entitlements。
+         📌 若将来侧车引入 JIT 类依赖（numba/llvmlite 等），再补 allow-jit。 -->
+</dict>
+</plist>
