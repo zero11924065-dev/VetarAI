@@ -1319,7 +1319,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       startedAt: Date.now(), // TS-116（3.29）：气泡出现时间
     };
     setLocalMessages(prev => [...prev, assistantMsg]);
-    const streamMsgId = assistantMsg.id!;
+    // #1（0.4.20）插入点分裂：streamMsgId 从 const 改 let —— 用户「思考中」插入消息后，
+    // 后端发 segment_break，前端把当前气泡定格、插入用户气泡、为新 assistant 气泡开新 id。
+    // flushAcc(1353)/patchStreamMsg(1372) 两个闭包捕获的是【变量绑定】不是值，
+    // 分裂时给 streamMsgId 重新赋值，后续 token/工具事件自动写入新气泡。
+    let streamMsgId = assistantMsg.id!;
+    // #1：记录最近一次 segment_break 的断点（后端回传的 break_at = 已生成正文字符数）。
+    //   done 的 content 是【全文】（loop.py full_text 跨轮累加），前端据此把全文切成
+    //   段1=[:break_at] / 段2=[break_at:]，否则 done 用全文覆盖段2 会让段2 重复段1 内容。
+    //   -1 = 本流尚未发生过分裂。
+    let lastBreakAt = -1;
+    // #1：记录因分裂而定格的各段 assistant 气泡 id。done 写缓存时排除它们，
+    //   使缓存与 DB（_persist_assistant 只落一条合并消息）对齐 —— 否则刷新后
+    //   段2 作为 DB 全文的「后缀」匹配不上 matchesDb（前缀匹配），会被重复追加。
+    const frozenSegIds: string[] = [];
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -1437,6 +1450,63 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         }
         patchStreamMsg(m => ({ ...m, step: d.step, maxStep: d.max, tokensUsed: d.tokens_used,
           ...(typeof d.prompt_eval_count === 'number' ? { prompt_eval_count: d.prompt_eval_count } : {}) }));
+      } else if (ev.event === 'segment_break') {
+        // #1（0.4.20）插入点分裂：用户「思考中」插入消息后，后端在轮次边界 drain 到注入、
+        // 先发此事件。前端把【当前正在生成的气泡】就地定格、插入用户气泡、为新 assistant
+        // 气泡开新 id，并把 streamMsgId 重指向新气泡（flushAcc/patchStreamMsg 闭包捕获变量
+        // 绑定，后续 token/工具事件自动写入新气泡）。对齐千问：插入消息上方的旧气泡定格，
+        // 针对插入消息的新思考显示在其下方。
+        if (currentSessionIdRef.current !== streamSid) return; // 已切走：归属保护
+        // ① 先把 rAF 里挂起的 token 增量 flush 进【当前段】，避免定格时丢尾部正文
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+        closeThinkingPhase();               // 停掉当前段的思考计时器
+        const pending = accContent; accContent = '';
+        const frozenId = streamMsgId;       // 定格前捕获旧 id（updater 闭包用）
+        frozenSegIds.push(frozenId);
+        lastBreakAt = (typeof d.break_at === 'number' && d.break_at >= 0) ? d.break_at : -1;
+        const injected = Array.isArray(d.injected_messages) ? d.injected_messages : [];
+        const newId = newLocalMsgId();
+        setLocalMessages(prev => {
+          const idx = prev.findIndex(m => m.id === frozenId);
+          if (idx < 0) return prev;
+          const next = [...prev];
+          // 定格段1：⛔ 必须给 completedDuration —— 否则刷新恢复时会被
+          //   `!manualStopped && completedDuration==null` 判据误标成"已中断执行（半成品）"，
+          //   但段1 是【正常完成】的段，不是异常中断。stopped 停掉打字机光标。
+          const frozenDur = next[idx].startedAt
+            ? Math.round((Date.now() - next[idx].startedAt) / 1000) : undefined;
+          // ⛔ 这里**不做** running→interrupted 收敛（曾写过，已删，两个理由）：
+          //   1. **不可触发**：segment_break 只在 loop 的【轮次边界】发出（inject_check 检查点），
+          //      而工具步骤的 tool_result 必在同一轮内到达 → 此刻不可能存在 running 步骤。
+          //   2. **语义矛盾**：本分支同时设了 completedDuration（含义="这段正常完成"），
+          //      又标 interrupted（含义="异常中断"）会自相矛盾，给正常完成的段贴错标签。
+          //   📌 顺带修掉一个测试假失败：`chatPanelC2ToolSteps` 静态核查断言源码里
+          //      「running → interrupted」的收敛写法**恰好出现 3 次**（对应三条真实停止路径）。
+          //      我多加的第 4 处让它变 4 → 失败。⛔ 不改测试迁就，而是删掉多余实现。
+          //      ⚠️ 本注释刻意不写出那段代码原文——静态计数断言会把注释里的字面量也算进去
+          //      （实测踩过：写了之后计数仍是 4）。
+          next[idx] = {
+            ...next[idx],
+            content: (next[idx].content || '') + pending,
+            stopped: true, thinking: false, thinkingElapsed: undefined, thinkingPreview: undefined,
+            ...(frozenDur !== undefined ? { completedDuration: frozenDur } : {}),
+          };
+          // ② 插入注入的用户气泡 + ③ 新开 assistant 气泡（承接后续 token）
+          const injectedBubbles: Message[] = injected
+            .filter((im: any) => String(im?.content || '').trim())
+            .map((im: any, j: number) => ({
+              id: `local_inject_${Date.now()}_${j}`, role: 'user', content: String(im.content),
+            }));
+          const newAssistant: Message = {
+            id: newId, role: 'assistant', content: '', model_used: modelUsed,
+            toolSteps: [], step: 0, maxStep: next[idx].maxStep ?? 5, tokensUsed: 0,
+            startedAt: Date.now(),
+          };
+          next.splice(idx + 1, 0, ...injectedBubbles, newAssistant);
+          return next;
+        });
+        streamMsgId = newId;                 // 重指向：后续事件写入新气泡
+        scheduleStreamCacheSync();
       } else if (ev.event === 'error') {
         patchStreamMsg(m => {
           const completedDuration = m.startedAt
@@ -1562,9 +1632,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (ev.event === 'done') {
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         closeThinkingPhase(); // 收尾：清思考计时器与阶段标记
+        // #1：清掉可能挂起的节流缓存写，防止它在下方"折叠缓存"之后又把分裂气泡写回。
+        if (cacheSyncTimerRef.current) { clearTimeout(cacheSyncTimerRef.current); cacheSyncTimerRef.current = null; }
         patchStreamMsg(m => {
           let content = m.content || '';
-          if (typeof d.content === 'string') content = d.content;
+          if (typeof d.content === 'string') {
+            // #1：done 的 content 是【全文】（loop.py full_text 跨轮累加 = 段1+段2）。
+            //   分裂后 streamMsgId 指向段2，必须只取 [break_at:]，否则段2 会重复显示段1 全文。
+            content = (lastBreakAt >= 0) ? d.content.slice(lastBreakAt) : d.content;
+          }
           else if (accContent) content = content + accContent;
           // TS-116（3.29）：计算完成用时（气泡出现 → done）
           const completedDuration = m.startedAt
@@ -1582,7 +1658,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         setSessions(prev => prev.map(s => s.id === streamSid ? { ...s, message_count: s.message_count + 2 } : s));
         // B07（TS-101）：流式完成 → 本地缓存同步（刷新/重启后可恢复）。
         // 按 streamMsgId 精确定位本流消息（不依赖数组顺序/身份），直接写缓存。
-        const finalMsg = localMessagesRef.current.find(m => m.id === streamMsgId)
+        // ⛔ 显式标注 Message：不标则类型是 `Message | {id,role,content}` 联合，
+        //   fallback 分支缺 toolSteps/completedDuration → 下方 #1 缓存折叠访问这两个
+        //   可选字段时 tsc 报 TS2339（实测踩到）。fallback 已满足 Message 必需字段。
+        const finalMsg: Message = localMessagesRef.current.find(m => m.id === streamMsgId)
           || { id: streamMsgId, role: 'assistant', content: (typeof d.content === 'string' ? d.content : '') };
         // 0.4.12 附带修复（**真实根因之一**）：卸载守卫。
         // 本分支由 reader.read() 循环驱动，组件卸载后循环仍会继续推进并执行到这里，
@@ -1595,11 +1674,32 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           // 网络错误触发重连循环；损坏即按空缓存兜底（DB 已有定稿，不丢消息）。
           let existing: any[] = [];
           try { existing = JSON.parse(localStorage.getItem('subagent_messages_v4') || '{}')[streamSid] || []; } catch { existing = []; }
-          // checkpoint-055：本轮 user 消息确保在缓存（此前只落 assistant，缓存残缺是丢消息根因之一）。
-          // user 在发送时已按序写入，这里仅兜底补入（不重排，保持时序）
-          const others = existing.filter((m: any) => m.id !== streamMsgId);
-          const hasUser = others.some((m: any) => m.id === userMsg.id);
-          syncSessionLocal(streamSid, hasUser ? [...others, finalMsg] : [...others, userMsg, finalMsg]);
+          if (frozenSegIds.length > 0) {
+            // #1 分裂场景：缓存折叠成与 DB 一致的结构。
+            //   DB 侧：inject 端点已立即落库 M1（user）；_persist_assistant 在 done 落
+            //   【一条合并 assistant】（段1+段2 全文）。若缓存保留分裂的段1/段2/注入气泡，
+            //   刷新 mergeDbWithLocal 时段2（= DB 全文的【后缀】）匹配不上 matchesDb（前缀
+            //   匹配）→ 被当多余气泡重复追加。故移除全部分裂气泡，只写一条合并全文 assistant，
+            //   使缓存 ≡ DB 的 assistant 部分（M1 刷新时从 DB 加载，注入气泡由 matchesDb 去重）。
+            //   ⛔ toolSteps 取段2 的（finalMsg）：刷新后以 DB 为准（DB 存全部步骤），缓存仅过渡显示。
+            const dropIds = new Set<string>([...frozenSegIds, streamMsgId]);
+            const others = existing.filter((m: any) =>
+              !dropIds.has(String(m.id)) && !String(m.id || '').startsWith('local_inject_'));
+            const merged: Message = {
+              id: streamMsgId, role: 'assistant',
+              content: (typeof d.content === 'string' ? d.content : (finalMsg.content || '')),
+              model_used: modelUsed, stopped: true, toolSteps: finalMsg.toolSteps,
+              ...(finalMsg.completedDuration !== undefined ? { completedDuration: finalMsg.completedDuration } : {}),
+            };
+            const hasUser = others.some((m: any) => m.id === userMsg.id);
+            syncSessionLocal(streamSid, hasUser ? [...others, merged] : [...others, userMsg, merged]);
+          } else {
+            // checkpoint-055：本轮 user 消息确保在缓存（此前只落 assistant，缓存残缺是丢消息根因之一）。
+            // user 在发送时已按序写入，这里仅兜底补入（不重排，保持时序）
+            const others = existing.filter((m: any) => m.id !== streamMsgId);
+            const hasUser = others.some((m: any) => m.id === userMsg.id);
+            syncSessionLocal(streamSid, hasUser ? [...others, finalMsg] : [...others, userMsg, finalMsg]);
+          }
         }
         if (currentSessionIdRef.current === streamSid) {
           setLocalMessages(prev => {
