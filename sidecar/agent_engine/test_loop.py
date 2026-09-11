@@ -20,6 +20,7 @@
 """
 import asyncio
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -30,6 +31,97 @@ from sidecar.agent_engine.loop import run_tool_loop, tools_spec, build_system_pr
 
 PASS, FAIL = 0, 0
 FAILURES = []
+
+# ══════════ 变异测试机制（0.4.20 补，针对 #1 插入点分裂 + 表#5 提示词纪律）══════════
+#
+# **为什么要补**：#1 与表#5 交付时我做过变异验证，但都是"临时打补丁 → 跑 → 手工还原"，
+#   **验证完什么都没留下**。表#5 尤其要紧——提交 `3a4e692` 是 0.4.19 里唯一零测试的提交，
+#   纯提示词文案改动，没有可复现的验证入口等于这段纪律裸奔。
+#
+# 运行：MUTATE=1|2|3 .venv/bin/python -m sidecar.agent_engine.test_loop
+# ⛔ **变异模式下必须出现 FAIL**；0 FAIL = 断言空转，需加强（不是"通过"）。
+#
+# | 变异 | 撤掉的修复 | 应失败的断言 |
+# |---|---|---|
+# | 1 | 不发 segment_break（#1 后端事件） | 22a~22d、22g 共 **5 条** |
+# | 2 | break_at 恒为 0（#1 断点算错） | 22d + 22g（22g 会显示段2 重复段1） |
+# | 3 | 提示词回退窄口径（表#5 推广前状态） | 10d3 + 10d4 |
+MUTATE = int(os.environ.get("MUTATE", "0"))
+
+# ⛔ 还原用【内存备份】而非 `git checkout --`：变异期间工作区可能有未提交改动，
+#   checkout 会一并抹掉（test_p4_doc_reader / test_office_io 的既有纪律，此处沿用）。
+_BACKUP: dict[str, str] = {}
+
+
+def _read_src(mod) -> str:
+    return Path(mod.__file__).read_text(encoding="utf-8")
+
+
+def _rebind_loop_names() -> None:
+    """⛔⛔ reload 之后**必须重新绑定**本模块顶部按名导入的对象。
+
+    本文件开头是 `from sidecar.agent_engine.loop import run_tool_loop, tools_spec,
+    build_system_prompt` —— 这是**按名绑定**：reload(loop) 会在 loop 的模块命名空间里
+    新建这些对象，但本模块的名字仍指向**旧的**。不重新绑定 → 变异完全不生效，
+    测试跑出"全过"假象（与 test_p4_doc_reader 里 `_EXEC_HOLDER` 那个坑同源）。
+    """
+    global run_tool_loop, tools_spec, build_system_prompt
+    import sidecar.agent_engine.loop as _lp
+    run_tool_loop = _lp.run_tool_loop
+    tools_spec = _lp.tools_spec
+    build_system_prompt = _lp.build_system_prompt
+
+
+def _apply_mutation() -> None:
+    """把 #1 / 表#5 的修复改回缺陷态。⛔ 锚点未命中必须 assert 报错——否则
+    "变异没抓到"可能只是**根本没注入成功**（0.4.18 B10/C8 变异2 静默失败过一次）。"""
+    if not MUTATE:
+        return
+    import sidecar.agent_engine.loop as lp
+    _BACKUP["loop"] = _read_src(lp)
+    s = _BACKUP["loop"]
+
+    if MUTATE == 1:
+        # 撤掉 segment_break 事件（#1 的核心产出）
+        patched = s.replace("            if _inj_payload:", "            if False and _inj_payload:")
+        assert patched != s, "变异 1 未命中 loop.py 源码，测试无效"
+    elif MUTATE == 2:
+        # break_at 恒为 0 → 前端切分后段2 会重复显示段1 全文
+        patched = s.replace('"break_at": len(full_text)}}', '"break_at": 0}}')
+        assert patched != s, "变异 2 未命中 loop.py 源码，测试无效"
+    elif MUTATE == 3:
+        # 表#5：提示词从「任何文件路径」回退到「用户上传的文件」窄口径
+        _old = ('        "【文件路径纪律】用户消息正文、或工具返回结果里出现的**文件绝对路径**"\n'
+                '        "（上传附件形如「（原件已保存：/…）」，也可能是导出产物、用户指定的任意路径），"\n'
+                '        "只代表文件**在本机存在**，其**内容不会**自动出现在你的上下文里。\\n"')
+        _new = ('        "【文件路径纪律】用户上传的文件的路径"\n'
+                '        "只代表文件**在本机存在**，其**内容不会**自动出现在你的上下文里。\\n"')
+        assert _old in s, "变异 3 未命中 loop.py 提示词，测试无效"
+        patched = s.replace(_old, _new)
+    else:
+        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3）")
+
+    Path(lp.__file__).write_text(patched, encoding="utf-8")
+    # ⛔ 改写磁盘后必须 reload + 重新绑定，否则测的是 sys.modules 里的旧对象（假通过）
+    import importlib
+    importlib.reload(lp)
+    _rebind_loop_names()
+
+
+def _restore() -> None:
+    """把被变异改写的源文件还原（⛔ 务必放 finally：用例 sys.exit(1) 会抛 SystemExit，
+    不放 finally 就会让 loop.py 留在变异态，污染后续所有测试与真实代码）。"""
+    if not MUTATE or not _BACKUP:
+        return
+    import sidecar.agent_engine.loop as lp
+    try:
+        if "loop" in _BACKUP and _read_src(lp) != _BACKUP["loop"]:
+            Path(lp.__file__).write_text(_BACKUP["loop"], encoding="utf-8")
+    finally:
+        _BACKUP.clear()
+        import importlib
+        importlib.reload(lp)
+        _rebind_loop_names()
 
 
 def check(name, cond, detail=""):
@@ -196,6 +288,34 @@ async def main():
           and "不得在未调用 delegate_task 的情况下" in sp2, sp2[-400:])
     sp3 = build_system_prompt("小助手", "工程师", "/data/ws", "auto", can_delegate=False)
     check("10c2 can_delegate=False 不含委派纪律", "【委派纪律】" not in sp3)
+
+    # 10d. 表#5/#6（0.4.19）：附件与文件路径纪律必须在系统提示词里
+    #   ⛔ 为什么要加这条静态断言：提交 `3a4e692`（表#5）是 0.4.19 里**唯一零测试**的提交，
+    #   它只改了 build_system_prompt 的提示词文案（把"用户上传的文件"扩为"任何文件路径"）。
+    #   纯文案改动难做行为测试，但**完全没有断言 = 提示词被误删/改写没人会发现**，
+    #   而这段纪律是表#5/#6 两项修复的**后端配套必需项**——
+    #   表#6 把附件从推模式改为拉模式后，若提示词不告知模型"路径≠内容"，
+    #   模型就会回答"我看不到文件"（这正是表#5 的用户实测症状）。
+    #   📌 参照 #11 删折叠后写的"反向守护 R1~R6"范式：源码/提示词层面的回潮防护。
+    check("10d 提示词含【文件路径纪律】段（表#5，拉模式的后端配套必需项）",
+          "【文件路径纪律】" in sp, sp[:400])
+    check("10d2 该纪律说明「路径只代表文件存在、内容不会自动进上下文」",
+          "只代表文件" in sp and "不会" in sp, sp[:400])
+    # 10d3 ⛔ 首轮写成 `"导出" in sp or "任意路径" in sp` —— **是空转断言**（变异实测抓到）：
+    #   提示词里"导出"出现在多处（本段措辞、另一行的"含导出的 .md/.json"、以及注释），
+    #   把表#5 推广的措辞整段删掉后，别处的"导出"仍让断言 PASS → 回归无人察觉。
+    #   ✅ 改为锚定**完整措辞**：必须是"也可能是导出产物、用户指定的任意路径"这句在。
+    check("10d3 该纪律覆盖范围含导出产物/任意路径（表#5 推广的关键，不止上传附件）",
+          "也可能是导出产物、用户指定的任意路径" in sp, sp[:400])
+    # ⛔ 守护"附件纪律"未被改回旧的窄口径（表#6 初版只覆盖上传附件，是表#5 要补的缺口）
+    check("10d4 纪律不再只限于「上传的附件」窄口径（表#5 已推广）",
+          "用户上传的文件" not in sp, sp[:400])
+    # 10d5 守护拉模式的**行为要求**：这段纪律的实际作用是逼模型去 read_file，
+    #   若只留"内容不会自动出现"而删掉"必须先 read_file"，模型照样会答"看不到文件"。
+    check("10d5 纪律含强制 read_file 指令（拉模式的行为要求，缺则模型仍答看不到）",
+          "必须先用 read_file" in sp, sp[:400])
+    check("10d6 纪律禁止「看不到文件」类推诿话术（表#5 的用户实测症状）",
+          "看不到文件" in sp, sp[:400])
 
     # 11. 流内超时兜底 → event: error 优雅结束（审核问题1）
     evs = []
@@ -543,8 +663,18 @@ async def main():
     print(f"\n===== SUMMARY: PASS={PASS} FAIL={FAIL} =====")
     if FAILURES:
         print("FAILED:", ", ".join(FAILURES))
+    if MUTATE and FAIL == 0:
+        # ⛔ 变异模式下 0 FAIL 不是"通过"，是"测试无效"——断言没真正绑定这个修复
+        print(f"⛔ 变异 {MUTATE} 未被抓住 —— 本测试对该修复无效，断言需加强")
+    if FAIL or (MUTATE and FAIL == 0):
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # ⛔ 变异注入/还原必须包住 asyncio.run：main() 内部会 sys.exit(1)，
+    #   不在 finally 还原就会让 loop.py 停在变异态，污染后续所有测试与真实代码。
+    _apply_mutation()
+    try:
+        asyncio.run(main())
+    finally:
+        _restore()

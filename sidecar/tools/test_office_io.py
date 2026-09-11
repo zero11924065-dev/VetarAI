@@ -8,11 +8,16 @@
   D2 pptx 解析含标题/正文/备注
   D3 create_document 四种类型端到端生成 + 反例
   D4 docx/xlsx/pptx 生成的文件可被对应解析器读回（闭环验证）
+  D5 page_break 分页块
+  D6 image 块尺寸 width_cm/height_cm（0.4.12 A7）
+  D7 **#14（0.4.20）写出端按参考文件格式套用**（字体/字号/对齐/缩进/行距/页边距）
 
 运行：.venv/bin/python -m sidecar.tools.test_office_io
+变异：MUTATE=1|2|3 .venv/bin/python -m sidecar.tools.test_office_io
 """
 import asyncio
 import io
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -21,6 +26,92 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 PASS, FAIL = 0, 0
 FAILURES = []
+
+# ══════════ 变异测试机制（0.4.20 补，针对 #14 写出端格式）══════════
+#
+# **为什么要补这个入口**：#14 交付时我确实做过 3 项变异验证（全部精准命中），
+#   但用的是「临时打补丁 → 跑测试 → 手工还原」的一次性做法，**验证完就没留下任何东西**。
+#   后果很实际：下次会话想复核"D7 那 13 个断言到底有没有用"，只能重新发明一遍变异方法。
+#   固化成 MUTATE 入口后，一条命令即可复现验证。
+#
+# 运行：MUTATE=1|2|3 .venv/bin/python -m sidecar.tools.test_office_io
+# ⛔ **变异模式下必须出现 FAIL**。若 0 FAIL，说明对应断言是空转的，断言需加强
+#   （这不是"测试通过"，是"测试无效"）。
+#
+# | 变异 | 撤掉的修复 | 应失败的断言 |
+# |---|---|---|
+# | 1 | 读参考文件格式（reference_path 形同虚设） | D7c~h 六项 |
+# | 2 | 正文段落格式套用（_apply_body_fmt） | D7f/g/h 三项（D7c/d/e 仍 PASS） |
+# | 3 | 字号套用（回退默认 12pt） | D7d 单项 |
+MUTATE = int(os.environ.get("MUTATE", "0"))
+
+# ⛔ 还原必须用【内存备份】而非 `git checkout --`：变异期间工作区可能有未提交改动，
+#   checkout 会把它们一并抹掉（test_p4_doc_reader 的既有纪律，此处沿用）。
+_BACKUP: dict[str, str] = {}
+
+
+def _read_src(mod) -> str:
+    return Path(mod.__file__).read_text(encoding="utf-8")
+
+
+def _apply_mutation() -> None:
+    """把 #14 的修复改回缺陷态。
+
+    ⛔ 锚点未命中必须 `assert` 报错——否则"变异没抓到"可能只是**根本没注入成功**。
+    （0.4.18 的 B10/C8 变异2 就因多行字符串语法错误静默失败，跑出"全过"假象，
+    我一度以为那处没有测试保护。）
+    """
+    if not MUTATE:
+        return
+    import sidecar.tools.doc_writer as dw
+    import sidecar.tools.doc_reader as dr
+    _BACKUP["dw"] = _read_src(dw)
+    _BACKUP["dr"] = _read_src(dr)
+
+    if MUTATE == 1:
+        # 撤掉"读参考文件格式" → reference_path 形同虚设（D7c~h 应全 FAIL）
+        s = _BACKUP["dw"]
+        patched = s.replace("        ref_style = None\n        if reference_path:",
+                            "        ref_style = None\n        if False:")
+        assert patched != s, "变异 1 未命中 doc_writer 源码，测试无效"
+        Path(dw.__file__).write_text(patched, encoding="utf-8")
+    elif MUTATE == 2:
+        # 撤掉正文段落格式套用 → D7f/g/h FAIL，而 D7c/d/e（字体/字号/边距）仍 PASS
+        s = _BACKUP["dw"]
+        patched = s.replace("            _apply_body_fmt(para, _body)", "            pass  # MUTATE2")
+        assert patched != s, "变异 2 未命中 doc_writer 源码，测试无效"
+        Path(dw.__file__).write_text(patched, encoding="utf-8")
+    elif MUTATE == 3:
+        # 撤掉字号套用 → D7d 单独 FAIL
+        s = _BACKUP["dw"]
+        patched = s.replace("    _pt = size_pt if (size_pt is not None and size_pt > 0) else 12.0",
+                            "    _pt = 12.0  # MUTATE3")
+        assert patched != s, "变异 3 未命中 doc_writer 源码，测试无效"
+        Path(dw.__file__).write_text(patched, encoding="utf-8")
+    else:
+        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3）")
+
+    # ⛔⛔ 改写磁盘后**必须 reload**：registry 的 create_document 分支里是函数内
+    #   `from sidecar.tools.doc_writer import write_document`，若不 reload，
+    #   它会从 **sys.modules 缓存**取到旧模块 → 变异完全无效却显示"全过"（假通过）。
+    import importlib
+    importlib.reload(dr)
+    importlib.reload(dw)
+
+
+def _restore() -> None:
+    """把被变异改写的源文件还原为测试开始前的内容（⛔ 务必放 finally）。"""
+    if not MUTATE or not _BACKUP:
+        return
+    import sidecar.tools.doc_writer as dw
+    import sidecar.tools.doc_reader as dr
+    try:
+        if "dw" in _BACKUP and _read_src(dw) != _BACKUP["dw"]:
+            Path(dw.__file__).write_text(_BACKUP["dw"], encoding="utf-8")
+        if "dr" in _BACKUP and _read_src(dr) != _BACKUP["dr"]:
+            Path(dr.__file__).write_text(_BACKUP["dr"], encoding="utf-8")
+    finally:
+        _BACKUP.clear()
 
 
 def check(name, cond, detail=""):
@@ -72,7 +163,7 @@ def _mk_pdf() -> bytes:
     return buf.getvalue()
 
 
-def main():
+def _run_all():
     from sidecar.attachments.parser import parse_attachment
     from sidecar.tools.registry import execute
 
@@ -343,7 +434,26 @@ def main():
     print(f"\n===== 结果：{PASS} PASS / {FAIL} FAIL =====")
     if FAILURES:
         print("失败项：", "、".join(FAILURES))
+    if MUTATE and FAIL == 0:
+        # ⛔ 变异模式下 0 FAIL 不是"通过"，是"测试无效"——说明断言没真正绑定这个修复
+        print(f"⛔ 变异 {MUTATE} 未被抓住 —— 本测试对该修复无效，断言需加强")
+    if FAIL or (MUTATE and FAIL == 0):
         sys.exit(1)
+
+
+def main() -> None:
+    """薄包装：注入变异 → 跑用例 → **无论成败都还原源码**。
+
+    ⛔ _restore() 必须放 finally：用例失败时会 sys.exit(1) 抛 SystemExit，
+    若不放在 finally，被改写的 doc_writer.py / doc_reader.py 会**留在变异态**，
+    污染后续所有测试与真实代码。
+    """
+    print(f"#14 Office 输入/输出集成测试  |  变异模式 = {MUTATE}")
+    _apply_mutation()
+    try:
+        _run_all()
+    finally:
+        _restore()
 
 
 if __name__ == "__main__":
