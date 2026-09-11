@@ -764,3 +764,117 @@ def _reindex_doc(fpath: Path, scope: str, project_id: str) -> bool:
         conn.close()
     _embed_entry(entry_id, title, body, [])
     return True
+
+
+def _purge_file_index(fpath: Path) -> None:
+    """覆盖导入前清掉该路径的旧索引行（FTS + 向量）。
+
+    ⛔ **为什么必须清 FTS**：`_reindex_doc` 对 `knowledge_entries` 用 `INSERT OR REPLACE`
+    （同路径派生的 uuid5 相同 → 天然覆盖），但 `knowledge_fts` 是**普通 INSERT**——
+    FTS5 虚表不支持 OR REPLACE。不清就会多留一行旧正文的分词，表现为：同一个文件
+    检索时命中两份、且其中一份还是**覆盖前的旧内容**。向量表同理（会留旧向量）。
+    """
+    entry_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"knowledge-file://{fpath.resolve()}"))
+    conn = _iconn()
+    try:
+        conn.execute("DELETE FROM knowledge_fts WHERE entry_id = ?", (entry_id,))
+        conn.execute("DELETE FROM knowledge_embeddings WHERE entry_id = ?", (entry_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def import_files(scope: str, project_id: str | None, sources: list[str],
+                 on_conflict: str = "ask") -> dict:
+    """A11（0.4.22）：把用户选中的外部文件复制进知识目录并索引。
+
+    ⛔ 拉模式铁律同 rebuild_index/_reindex_doc：只复制+索引供检索，不自动注入上下文。
+    ⛔ 非递归：sources 是文件路径列表（来自 chooseInputFile 文件对话框，用户主动选），
+      不遍历目录。某 source 是目录/不存在 → 计入 failed。
+    ⛔ 复制用 copy2 保留 mtime（_reindex_doc 用 mtime 做 created_at，"新→旧"排序有意义）。
+    ⛔ **同名冲突由用户决定，后端不擅自处置**（用户 2026-09-12 拍板"改成弹窗问我"）：
+      * `on_conflict="ask"`（默认）：**不碰**已存在的文件，把它列入 `conflicts` 返回，
+        前端弹窗问用户 → 用户选完再用下面三种策略之一重新调用；
+      * `"overwrite"`：覆盖知识目录里的旧副本（先清旧 FTS/向量行，见 _purge_file_index）；
+      * `"rename"`：存成 `名_1.扩展名`（旧文件原样保留）；
+      * `"skip"`：跳过该文件（旧文件原样保留）。
+      ⛔ 三种策略都**绝不动用户原始文件**（sources 指向的本机文件只读不写）。
+    ⛔ 大文件/不支持类型/解析失败：_reindex_doc 返回 False → 计入 skipped 并删除已复制的
+      文件（不留垃圾），不报错中断整批（用户选一堆文件，个别不支持不应中断）。
+
+    返回 {imported, failed, skipped, conflicts: [name…], details: [{name, status, reason?}]}。
+    """
+    import shutil
+    kdir = scope_dir(scope, project_id)
+    if kdir is None:
+        return {"imported": 0, "failed": len(sources), "skipped": 0, "conflicts": [],
+                "details": [{"name": s, "status": "failed", "reason": "无效的作用域或项目"}
+                            for s in sources]}
+    kdir.mkdir(parents=True, exist_ok=True)
+    imported = failed = skipped = 0
+    conflicts: list[str] = []
+    details: list[dict] = []
+    for src in sources:
+        sp = Path(src)
+        name = sp.name
+        if not sp.exists() or not sp.is_file():
+            failed += 1
+            details.append({"name": name, "status": "failed", "reason": "不是文件或不存在"})
+            continue
+
+        dest = kdir / name
+        existed = dest.exists()          # 本次是否真的撞上了同名文件（决定 details 里的处置记录）
+        if existed:
+            if on_conflict == "ask":
+                # ⛔ 默认策略：不碰旧文件、不复制、不索引，交回前端弹窗问用户
+                conflicts.append(name)
+                details.append({"name": name, "status": "conflict",
+                                "reason": "知识目录已有同名文件（等你决定怎么处理）"})
+                continue
+            if on_conflict == "skip":
+                skipped += 1
+                details.append({"name": name, "status": "skipped",
+                                "reason": "同名文件已存在，按你的选择跳过"})
+                continue
+            if on_conflict == "rename":
+                seq = 1
+                while dest.exists():
+                    dest = kdir / f"{sp.stem}_{seq}{sp.suffix}"
+                    seq += 1
+            elif on_conflict == "overwrite":
+                _purge_file_index(dest)      # ⛔ 先清旧 FTS/向量，否则残留旧正文
+            else:
+                failed += 1
+                details.append({"name": name, "status": "failed",
+                                "reason": f"未知的冲突策略: {on_conflict}"})
+                continue
+
+        try:
+            shutil.copy2(sp, dest)
+        except OSError as e:
+            failed += 1
+            details.append({"name": name, "status": "failed", "reason": f"复制失败: {e}"})
+            continue
+        # 索引（_reindex_doc 内部处理大文件/类型/解析失败 → 返回 False）
+        ok = _reindex_doc(dest, scope, project_id or "")
+        if ok:
+            imported += 1
+            details.append({"name": dest.name, "status": "imported",
+                            # 无冲突 → None；有冲突 → 记录用户选的处置方式（前端汇总提示用）
+                            "conflict_resolved": on_conflict if existed else None})
+        else:
+            skipped += 1
+            details.append({"name": dest.name, "status": "skipped",
+                            "reason": "不支持的类型/解析失败/超大文件"})
+            # 复制了但索引失败 → 删除复制的文件（知识目录不留没索引的垃圾）
+            # ⛔ 仅删本次新复制的副本；overwrite 情况下旧副本已被覆盖，无从恢复，
+            #    故 overwrite + 索引失败要如实告知用户（不能假装成功）。
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            if on_conflict == "overwrite":
+                details[-1]["reason"] = ("不支持的类型/解析失败/超大文件；"
+                                         "⚠️ 且原同名文件已被本次覆盖删除")
+    return {"imported": imported, "failed": failed, "skipped": skipped,
+            "conflicts": conflicts, "details": details}

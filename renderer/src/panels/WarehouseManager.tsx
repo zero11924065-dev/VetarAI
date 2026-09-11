@@ -31,6 +31,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { getApiBase } from '../apiBase';
 import { colors, radius, cardL, btnSecondary, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
+import { choiceDialog } from '../Dialog';
 
 const API = getApiBase();
 
@@ -43,7 +44,9 @@ export function WarehouseManager() {
   const [groups, setGroups] = useState<KnowledgeGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
+  const [importing, setImporting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   // TS-120 阶段二：嵌入模型状态（可用性 + 向量覆盖率）
   const [embedStatus, setEmbedStatus] = useState<{ available: boolean; entries_total: number; entries_embedded: number } | null>(null);
 
@@ -110,6 +113,87 @@ export function WarehouseManager() {
     }
   };
 
+  // A11（0.4.22）：导入用户选中的文件到本知识组（复制+解析+索引）。
+  // ⛔ 拉模式铁律：只导入索引供检索，不自动注入上下文。
+  // ⛔ 非递归：chooseInputFile({multiple}) 返回文件路径数组（用户主动选），不遍历目录。
+  // ⛔ bridge 不存在（浏览器调试态）时静默返回，不报错。
+  // ⛔ 同名冲突**弹窗问用户**（用户 2026-09-12 拍板，不自动改名也不静默覆盖）：
+  //    第一趟用 on_conflict='ask' —— 不冲突的正常导入，冲突的原样留着并列在 conflicts 里；
+  //    有冲突才弹窗，用户选完**只重传冲突的那几个文件**（不重复导入已成功的）。
+  const importFiles = async (g: KnowledgeGroup) => {
+    const bridge = (window as any).subagent;
+    if (!bridge?.chooseInputFile) { setError('当前环境不支持文件选择'); return; }
+    setImporting(g.dir); setError(null); setInfo(null);
+    try {
+      const paths = await bridge.chooseInputFile({ multiple: true, title: '选择要导入知识仓库的文件' });
+      if (!paths || (Array.isArray(paths) && paths.length === 0)) return; // 用户取消
+      const list: string[] = Array.isArray(paths) ? paths : [paths];
+      const baseName = (p: string) => p.split(/[\\/]/).pop() || p;
+
+      const post = async (sendPaths: string[], strategy: string) => {
+        const res = await fetch(`${API}/knowledge/import-files`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: g.scope, project_id: g.project_id,
+                                 paths: sendPaths, on_conflict: strategy }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+        return d;
+      };
+
+      // 第一趟：ask —— 只导入不冲突的，冲突的报回来
+      let d = await post(list, 'ask');
+      const conflicts: string[] = Array.isArray(d.conflicts) ? d.conflicts : [];
+
+      if (conflicts.length > 0) {
+        const choice = await choiceDialog({
+          title: '知识目录已有同名文件',
+          message: `${conflicts.length} 个文件在知识目录里已有同名：\n${conflicts.slice(0, 8).join('\n')}`
+            + (conflicts.length > 8 ? `\n…等共 ${conflicts.length} 个` : '')
+            + '\n\n要如何处理？（你的本机原始文件不会被改动）',
+          options: [
+            { value: 'overwrite', label: '覆盖同名文件', danger: true },
+            { value: 'rename', label: '改名并存' },
+            { value: 'skip', label: '跳过这些' },
+          ],
+          cancelText: '不处理（保留原文件）',
+        });
+        if (choice) {
+          // ⛔ 只重传冲突的那几个（第一趟已把不冲突的成功导入，不能重复）
+          const conflictSet = new Set(conflicts);
+          const retryPaths = list.filter(p => conflictSet.has(baseName(p)));
+          const d2 = await post(retryPaths, choice);
+          // ⛔ 两趟结果直接相加即可，无需特判 choice：
+          //   第一趟（ask）的 skipped 只含"不支持/解析失败"的文件，**不含**冲突项；
+          //   第二趟的 skipped 只在选"跳过"时才含冲突项 → 二者天然不重叠，相加不重复计数。
+          d = {
+            imported: (d.imported || 0) + (d2.imported || 0),
+            failed: (d.failed || 0) + (d2.failed || 0),
+            skipped: (d.skipped || 0) + (d2.skipped || 0),
+            conflicts: d2.conflicts || [],
+            details: [...(d.details || []), ...(d2.details || [])],
+          };
+        } else {
+          // 用户选择不处理：冲突文件如实计入 skipped，并说明是"按你的选择保留原文件"
+          d.skipped = (d.skipped || 0) + conflicts.length;
+        }
+      }
+
+      const parts: string[] = [];
+      if (d.imported) parts.push(`导入 ${d.imported} 个`);
+      if (d.skipped) parts.push(`跳过 ${d.skipped} 个`);
+      if (d.failed) parts.push(`失败 ${d.failed} 个`);
+      if (conflicts.length) parts.push(`同名 ${conflicts.length} 个`);
+      setInfo(parts.length ? parts.join('，') : '未导入任何文件');
+      await refresh();
+    } catch (e) {
+      setError('导入文件失败: ' + (e as Error).message);
+    } finally {
+      setImporting(null);
+    }
+  };
+
   return (
     <div style={{ ...cardL, padding: '16px 20px' }}>
       <div style={{ fontSize: 12, color: colors.textTertiary, marginBottom: 12, lineHeight: 1.6 }}>
@@ -135,6 +219,12 @@ export function WarehouseManager() {
         <div style={{ ...calloutStyle('error'), marginBottom: 12 }}>
           <Icon name="alert-triangle" size={16} style={{ flexShrink: 0 }} />
           <span>{error}</span>
+        </div>
+      )}
+      {info && (
+        <div style={{ ...calloutStyle('success'), marginBottom: 12 }}>
+          <Icon name="check" size={16} style={{ flexShrink: 0 }} />
+          <span>{info}</span>
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -164,6 +254,11 @@ export function WarehouseManager() {
                 {g.dir || '（目录不可用）'}
               </div>
             </div>
+            <button className="ui-btn ui-btn-secondary" style={{ ...btnSecondary, height: 26, fontSize: 12, flexShrink: 0 }}
+              onClick={() => importFiles(g)} disabled={importing === g.dir || !g.dir}
+              data-tip="选择本机文件（pdf / docx / xlsx / pptx / txt / md 等）导入本知识组，复制进知识目录并解析索引，可在会话右侧检索">
+              {importing === g.dir ? <Spinner size={12} /> : null} 导入文件
+            </button>
             <button className="ui-btn ui-btn-secondary" style={{ ...btnSecondary, height: 26, fontSize: 12, flexShrink: 0 }}
               onClick={() => openDir(g)} disabled={opening === g.dir || !g.dir}>
               {opening === g.dir ? <Spinner size={12} /> : null} 打开文件夹
