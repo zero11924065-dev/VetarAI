@@ -750,6 +750,57 @@ async def main():
     check("22p ⛔ 轮次预算耗尽时仍正常 done，不退化成'达到最大轮次'error",
           "done" in kinds_edge and "error" not in kinds_edge, str(kinds_edge))
 
+    # 23（0.4.22 重打包修复二，checkpoint-109）：轮内 ctx 增量应随轮末 state 回传
+    #   （指示器"随对话增长"；用户 2026-09-12 实测一轮之内纹丝不动、像不增）。
+    #   缺陷：_ctx_chars 只在【轮初】统计一次 → 本轮新增的 tool_report / 注入消息
+    #   完全不进指示器，轮末 state 回传的是轮初旧值。
+    #   修法：轮末 state yield 前重算一次（同一统计函数）。
+    #   ⛔ 断言用**快照法**（曾用差值法，改前也绿——下一轮轮初本就含上一轮 tool_report，
+    #     跨轮差值暴露不了"轮末用轮初旧值"）：connector 记录每轮**轮初**的 messages 快照，
+    #     测试内按同一口径重算期望值；第 1 轮末 state 的 ctx_chars 应等于【第 2 轮轮初】
+    #     的统计值（= 含本轮 tool_report）。改前它等于第 1 轮轮初值 → 天然红。
+    class _CtxSnapConn(MockConn):
+        def __init__(self, rounds):
+            super().__init__(rounds)
+            self.round_msgs = []
+            self.tools_seen = None
+
+        async def chat_stream(self, model, messages, tools=None):
+            self.round_msgs.append([dict(m) for m in messages])
+            self.tools_seen = tools
+            async for ev in super().chat_stream(model, messages, tools):
+                yield ev
+
+    def _ctx_chars_of(msgs, tools):
+        total = 0
+        for m in msgs:
+            if isinstance(m, dict):
+                for v in m.values():
+                    if isinstance(v, str):
+                        total += len(v)
+        if tools:
+            total += len(json.dumps(tools, ensure_ascii=False))
+        return total
+
+    _ctx_conn = _CtxSnapConn([([], [("list_dir", {"path": "."})]), (["x"], None)])
+    evs_ctx = []
+    async for ev in run_tool_loop("m", [{"role": "user", "content": "hi"}], tools_spec(),
+                                  str(sandbox), max_rounds=5, connector=_ctx_conn):
+        evs_ctx.append(ev)
+    _ctx_states = [e["data"] for e in evs_ctx if e["event"] == "state"]
+    check("23a 两轮都有 state 且 connector 记到两轮快照（断言前提，防空转）",
+          len(_ctx_states) >= 2 and len(_ctx_conn.round_msgs) >= 2,
+          str([e["event"] for e in evs_ctx]))
+    _exp_r2 = _ctx_chars_of(_ctx_conn.round_msgs[1], _ctx_conn.tools_seen) if len(_ctx_conn.round_msgs) >= 2 else -1
+    _exp_r1 = _ctx_chars_of(_ctx_conn.round_msgs[0], _ctx_conn.tools_seen) if _ctx_conn.round_msgs else -1
+    _c1 = _ctx_states[0].get("ctx_chars", 0) if _ctx_states else 0
+    _c2 = _ctx_states[-1].get("ctx_chars", 0) if _ctx_states else 0
+    check("23b ⛔ 第 1 轮末 state 的 ctx_chars 应含本轮 tool_report（= 第 2 轮轮初统计值）",
+          _c1 == _exp_r2 and _exp_r2 > _exp_r1,
+          f"c1={_c1} 期望R2初={_exp_r2} R1初={_exp_r1}")
+    check("23c 第 2 轮末 state 的 ctx_chars 口径一致（= 第 2 轮轮初统计值，本轮无新增）",
+          _c2 == _exp_r2, f"c2={_c2} 期望={_exp_r2}")
+
     # 清理
     shutil.rmtree(base, ignore_errors=True)
     check("临时目录已清理", not base.exists())

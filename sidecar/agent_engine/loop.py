@@ -715,6 +715,31 @@ async def _run_tool(name: str, args: dict, sandbox_root: str, authorizer: Author
     return await execute_tool(name, args or {}, sandbox_root, authorizer)
 
 
+def _measure_ctx_chars(msgs: list, tools_spec_list) -> int:
+    """统计本轮送入模型的真实上下文字数（B3，0.4.8；0.4.22 重打包修复二抽出纯函数）。
+
+    口径：msgs 全部角色、全部字符串字段之和 + tools 声明的 JSON 长度。
+    前端指示器据此 ×0.6 显示 token（含 system prompt 与工具声明基线）。
+
+    ⛔ 0.4.22 重打包修复二（checkpoint-109）：**轮末 state 前必须重算一次**。
+    原实现只在轮初统计一次 → 本轮新增的 tool_report / 注入消息不进指示器，
+    用户看到"一轮之内纹丝不动、像不增"（2026-09-12 实测）。轮初与轮末两处
+    共用本函数，保证口径不漂移。
+    """
+    total = 0
+    for _m in msgs:
+        if isinstance(_m, dict):
+            for _v in _m.values():
+                if isinstance(_v, str):
+                    total += len(_v)
+    if tools_spec_list:
+        try:
+            total += len(json.dumps(tools_spec_list, ensure_ascii=False))
+        except (TypeError, ValueError):
+            pass
+    return total
+
+
 def _normalize_query(q: str) -> str:
     """搜索关键词归一化（用于去重判定）：去首尾空白、压缩连续空白、转小写。"""
     return _re.sub(r"\s+", " ", str(q)).strip().lower()
@@ -1192,19 +1217,8 @@ async def run_tool_loop(
         # B3（0.4.8）：本轮送入模型的真实上下文字数。
         # 前端此前只按 user/assistant 消息估算，未计入工具结果（tool_report）与
         # system prompt，导致顶栏"上下文 ≈17"严重低估（实际数万 token）。
-        # 这里统计 msgs 全部角色与全部字段（含 tools 声明），经 state 事件回传，
-        # 前端指示器改用该真实值——不受 KV 缓存增量影响。
-        _ctx_chars = 0
-        for _m in msgs:
-            if isinstance(_m, dict):
-                for _k, _v in _m.items():
-                    if isinstance(_v, str):
-                        _ctx_chars += len(_v)
-        if tools_spec_list:
-            try:
-                _ctx_chars += len(json.dumps(tools_spec_list, ensure_ascii=False))
-            except (TypeError, ValueError):
-                pass
+        # 统计口径收在 _measure_ctx_chars（含 tools 声明），轮末 state 前会重算一次。
+        _ctx_chars = _measure_ctx_chars(msgs, tools_spec_list)
         # B3：_ctx_chars 随本轮【已有】的 state 事件回传（见下方两处 yield），不新增事件——
         # 新增会破坏 test_loop 对 state 事件数量/步数序列的断言契约。
         async for ev in conn.chat_stream(model, msgs, **_stream_kwargs):
@@ -1808,6 +1822,10 @@ async def run_tool_loop(
             }
             msgs.append({"role": "user", "content": json.dumps(report, ensure_ascii=False)})
 
+        # ⛔ 0.4.22 重打包修复二（checkpoint-109）：轮末 state 前**重算** ctx_chars——
+        #   本轮新增的 tool_report / 注入消息必须进指示器（用户实测"一轮之内纹丝不动"）。
+        #   轮初那次统计只用于轮内事件（无消费方），轮末这次才是回传前端的真值。
+        _ctx_chars = _measure_ctx_chars(msgs, tools_spec_list)
         yield {"event": "state", "data": {"step": step, "max": max_rounds, "tokens_used": tokens_used, "prompt_eval_count": step_counts["prompt_eval_count"], "ctx_chars": _ctx_chars}}
 
         # 双保险熔断之 2：连续失败
