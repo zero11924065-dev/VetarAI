@@ -55,6 +55,46 @@ function hasSendableText(raw: string): boolean {
   return normalizeInputText(raw).trim().length > 0;
 }
 
+/**
+ * A/B-2（0.4.23）：消息「移入知识仓库」后，重算顶栏上下文指示器。
+ *
+ * ⛔ **为什么是扣减而不是归零**：原实现在归档后把后端真实字数 `ctx_chars` 置 0，
+ * 让指示器退回**纯前端启发式**（只数未归档的 user/assistant 正文 ×0.6）。而启发式
+ * **不含 system prompt 与工具声明**——实测 `tools_spec` 单独就 8433 字符 ≈ **5060 token**
+ * （18 个工具）。于是"移入仓库后"数字不是变小一点，而是**断崖式掉到远低于真实值**，
+ * 直到下一轮 `state` 事件才跳回 → 用户看到数字忽大忽小（用户 2026-09-12 报
+ * 「token 计数逻辑有误，修复多次未成功」的成因之一；历次修复都只在调估算精度，没人动过这里）。
+ *
+ * ✅ 正解：只从真实值里**扣掉被归档消息自身的贡献**，保住 system prompt + 工具声明基线，
+ * 同时仍然满足用户明确要求的「移入仓库即下降、脱离上下文就该重新计算」。
+ *
+ * ⛔ 已知近似（如实标注，不假装精确）：扣的是消息 `content` 的字符数，而后端 `_ctx_chars`
+ * 统计的是 msgs 全部角色与全部字段（含 role 等 JSON 结构字符），故扣减**略小于**真实减少量。
+ * 这是保守方向的误差（宁可少扣也不把数字扣到偏低），且下一轮 `state` 事件会用后端真值纠正。
+ *
+ * @param backendCtxChars 后端最近一次回传的真实上下文字符数（0 = 尚无真值）
+ * @returns nextCtxChars：新的真实字符数基准；nextTokenUsed：要显示的 token 数，
+ *          **null 表示不要硬写显示值**（交由启发式估算兜底，避免显示 0 这种更糟的失真）
+ */
+export function ctxTokensAfterArchive(
+  backendCtxChars: number,
+  msgs: Array<{ id?: number | string; content?: string }>,
+  archivedIds: Set<number>,
+): { nextCtxChars: number; nextTokenUsed: number | null } {
+  // ⛔ 边界守卫：无后端真值时（会话刚加载、还没跑过任何一轮、从未收到 state 事件）
+  //   不得做扣减——扣减会得出 0，把原本启发式还能算出的值也清成 0（比原行为更糟）。
+  //   此时保持"归零 + 交回估算 effect 按未归档消息重算"的原语义。
+  if (!(backendCtxChars > 0)) {
+    return { nextCtxChars: 0, nextTokenUsed: null };
+  }
+  const archivedChars = msgs
+    .filter(m => typeof m.id === 'number' && archivedIds.has(m.id))
+    .reduce((sum, m) => sum + ((m.content || '').length), 0);
+  const nextCtxChars = Math.max(0, backendCtxChars - archivedChars);
+  // ⛔ 扣到 0（极端：归档了几乎全部内容）→ 返回 null，不硬显示 0，交回启发式兜底
+  return { nextCtxChars, nextTokenUsed: nextCtxChars > 0 ? Math.round(nextCtxChars * 0.6) : null };
+}
+
 // TS-116（3.28）：消息时间戳格式化（SQLite datetime('now') 是 UTC，补 'Z' 解析）
 function formatTime(isoString: string): string {
   if (!isoString) return '';
@@ -1055,9 +1095,17 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m);
       setLocalMessages(nextArchived);
       if (currentSessionId) syncSessionLocal(currentSessionId, nextArchived);
-      // B3（0.4.8）：归档后消息已脱离上下文，后端上一轮的真实字数已过期 →
-      // 复位为 0，让估算 effect 立即按"未归档消息"重算（保持"移入仓库即下降"）。
-      backendCtxCharsRef.current = 0;
+      // ⛔ A/B-2（0.4.23）：归档后**不要**把后端真实值归零（否则指示器退回纯前端启发式，
+      //   漏掉 system prompt 与工具声明 ≈5060 token → 数字断崖式掉到远低于真实值，
+      //   下一轮 state 事件才跳回 = 用户报的"数字忽大忽小"）。
+      //   改为只扣掉被归档消息自身的贡献，保住基线，同时仍满足"移入仓库即下降"。
+      //   ⛔ 计算与边界守卫全部收在纯函数 `ctxTokensAfterArchive` 里（模块顶部，有单测覆盖）——
+      //   此处**不要**再内联一份实现，否则两处漂移。nextTokenUsed 为 null 表示不硬写显示值
+      //   （无后端真值 / 扣到 0 两种情形），交由估算 effect 用启发式兜底，避免显示 0。
+      const _arch = ctxTokensAfterArchive(backendCtxCharsRef.current,
+                                         localMessagesRef.current, selectedMsgIds);
+      backendCtxCharsRef.current = _arch.nextCtxChars;
+      if (_arch.nextTokenUsed !== null) setTokenUsed(_arch.nextTokenUsed);
       setToast(`已移入知识仓库 ✓（${d.title}）`);
       setTimeout(() => setToast(null), 4000);
       // 关闭弹窗、清空勾选；自动展开右侧面板（问题2：转移后即时可见新条目）。
@@ -1509,7 +1557,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         const newId = newLocalMsgId();
         setLocalMessages(prev => {
           const idx = prev.findIndex(m => m.id === frozenId);
-          if (idx < 0) return prev;
+          if (idx < 0) {
+            // ⛔ A-3（0.4.23）：这条路径此前**完全静默**——不分裂、不报错，且紧接着
+            //   `streamMsgId = newId` 仍会执行 → 后续 token 写向一个不存在的气泡 → 正文也丢。
+            //   本次排查（用户实测"插入后不分裂"）最费劲的地方正是它无声无息，只能靠读代码猜。
+            //   ⛔ 只加诊断，不改行为：真机复现时控制台能直接给出 frozenId 与现存 id 列表，
+            //   一眼看出是 id 漂移（alignLocalIdsWithDb 换了 id）还是气泡已被移除。
+            console.warn('[segment_break] 找不到要定格的气泡，分裂已跳过（后续正文可能丢失）',
+                         { frozenId, existingIds: prev.map(m => m.id).slice(-8) });
+            return prev;
+          }
           const next = [...prev];
           // 定格段1：⛔ 必须给 completedDuration —— 否则刷新恢复时会被
           //   `!manualStopped && completedDuration==null` 判据误标成"已中断执行（半成品）"，
@@ -1533,11 +1590,32 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             ...(frozenDur !== undefined ? { completedDuration: frozenDur } : {}),
           };
           // ② 插入注入的用户气泡 + ③ 新开 assistant 气泡（承接后续 token）
+          // ⛔⛔ **必须复用 handleInject 已乐观追加的气泡**（0.4.23 修复，I1 测试复现）：
+          //   handleInject（:1918-1919）在 POST /inject **之前**就把用户气泡追加到了数组末尾，
+          //   本分支若再无条件新建 `local_inject_*` 气泡 → 同一条消息**显示两次**
+          //   （实测 `expected 2 to be 1`；刷新后才被 mergeDbWithLocal 的 content 去重掩盖，
+          //    故这是**实时视图**缺陷）。修法：按 content 匹配已存在的乐观气泡 → 摘出、
+          //   重插到段1 之后并**复用其 id**（该 id 已随乐观气泡写进本地缓存，复用才不错位）。
+          // ⛔ **必须从尾部倒着找**：链式插入（用户连插两条同文本）时，上一次分裂已插入的
+          //   气泡也在数组里且位置更靠前；正序会误吃掉它，倒序才能命中最新追加的乐观气泡。
           const injectedBubbles: Message[] = injected
             .filter((im: any) => String(im?.content || '').trim())
-            .map((im: any, j: number) => ({
-              id: `local_inject_${Date.now()}_${j}`, role: 'user', content: String(im.content),
-            }));
+            .map((im: any, j: number) => {
+              const content = String(im.content);
+              let dupIdx = -1;
+              // 只在段1 之后找（乐观气泡必然在末尾；段1 之前的历史消息不可动）
+              for (let i = next.length - 1; i > idx; i--) {
+                if (next[i].role === 'user' && String(next[i].content || '') === content) {
+                  dupIdx = i; break;
+                }
+              }
+              if (dupIdx >= 0) {
+                const [existing] = next.splice(dupIdx, 1);   // 摘出乐观气泡，稍后重插到正确位置
+                return existing;                             // ⛔ 复用其 id 与对象
+              }
+              // 未命中（注入来自其他来源，或乐观气泡未及落地）→ 才新建
+              return { id: `local_inject_${Date.now()}_${j}`, role: 'user', content };
+            });
           const newAssistant: Message = {
             id: newId, role: 'assistant', content: '', model_used: modelUsed,
             toolSteps: [], step: 0, maxStep: next[idx].maxStep ?? 5, tokensUsed: 0,
@@ -1924,8 +2002,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         body: JSON.stringify({ project_id: projectId, agent_id: agentId, content: text }),
       });
       const d = await r.json().catch(() => ({}));
-      // 无活流（可能当前轮刚好结束）→ 如实提示，让用户直接发送
-      if (!d.ok) setReconnectNotice(d.detail || '当前没有进行中的生成，请直接发送');
+      // 无活流（可能当前轮刚好结束）→ 如实告知，让用户直接发送。
+      // ⛔ A-3（0.4.23）：改用 toast，不用 reconnectNotice —— 后者在流的 finally 里被
+      //   `setReconnectNotice(null)` 清除（:1909）。注入失败恰恰最常发生在**流即将结束**时
+      //   （用户在最后一轮插入 → 后端无下一轮可 drain，见 loop.py 最后一轮补救），
+      //   于是提示一闪而过、用户什么也看不到 = **完全感知不到失败**。
+      //   toast 不归流生命周期管，能稳定显示 4 秒。
+      if (!d.ok) {
+        setToast(d.detail || '当前没有进行中的生成，请直接发送');
+        setTimeout(() => setToast(null), 4000);
+      }
     } catch (e) { console.error('inject failed:', e); }
   }
 
