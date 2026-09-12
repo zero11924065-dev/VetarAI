@@ -148,13 +148,21 @@ describe('C2 根因③：停止后工具步骤不得仍显示"正在调用"', ()
     unmount();
   });
 
-  it('③ 三条停止路径的 toolSteps patch 均存在（静态核查，覆盖 jsdom 测不到的两条）', async () => {
-    // 读源码核查：三条停止路径都必须把 running 收敛为 interrupted。
-    // ⛔ 用 AST/正则核查**真实代码**，不靠文本子串（注释里的字样会误伤，C5 已踩过）。
+  it('③ 五条收敛出口的 toolSteps patch 均存在（静态核查，覆盖 jsdom 测不到的路径）', async () => {
+    // 读源码核查：所有"流/停止终止"出口都必须把 running 收敛为 interrupted。
+    // ⛔ 0.4.22 重打包修复二（checkpoint-109）：收敛抽成模块级纯函数 convergeRunningSteps，
+    //   出口从 3 条（手动停止×3）扩到 **5 条**（+分裂定格 segment_break、+done 兜底）——
+    //   用户实测分裂气泡残留「正在调用…」转圈，根因是 M5 重连丢 tool_result 后
+    //   done/定格路径都不收敛。断言改为数【调用点】：任何一条出口被删都会红。
+    // ⛔ 用正则核查**真实代码**，不靠文本子串（注释里的字样会误伤，C5 已踩过）。
     // ⛔ 不留"读不到就假通过"的兜底分支：?raw 失效时必须**失败**而非空转
-    // （空转断言比没有断言更危险——它给出虚假的安全感）。
+    //   （空转断言比没有断言更危险——它给出虚假的安全感）。
     const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
     expect(src.length).toBeGreaterThan(10000);      // 确实读到了源码
-    expect((src.match(/status: 'interrupted' as const/g) || []).length).toBe(3);
+    // 调用点统一写法 `toolSteps: convergeRunningSteps(`（定义处是
+    // `function convergeRunningSteps(steps:`，不含该前缀，不会误计）
+    expect((src.match(/toolSteps: convergeRunningSteps\(/g) || []).length).toBe(5);
+    // 纯函数本体必须存在（收敛逻辑的唯一真相源）
+    expect(src).toContain('export function convergeRunningSteps(');
   });
 });

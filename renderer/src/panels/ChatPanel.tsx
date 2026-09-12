@@ -95,6 +95,32 @@ export function ctxTokensAfterArchive(
   return { nextCtxChars, nextTokenUsed: nextCtxChars > 0 ? Math.round(nextCtxChars * 0.6) : null };
 }
 
+/**
+ * 把 running 态工具步骤收敛为 interrupted（0.4.22 重打包修复二，checkpoint-109）。
+ *
+ * ═══ 为什么抽成纯函数 ═══
+ * 用户实测（2026-09-12 四图）：插入分裂成功后，被定格的旧气泡**仍显示**「正在调用
+ * web_search…」转圈与「模型加载/推理中…已等待 26s」横幅。落库证据：该会话只有 2 条
+ * assistant 落库，**分裂出的段1 从未落库**；其折叠行却显示 5 步而分裂点只经过 1~2 轮
+ * → **M5 重连导致 loop 整轮重跑**，attempt1 断连时残留的 running（其 tool_result
+ * 随断连丢失）再无人收敛。
+ *
+ * 收敛此前只存在于 3 条手动停止路径（C2，0.4.16）。本批把收敛扩到 5 个出口
+ * （3 停止 + 分裂定格 + done 兜底），抽纯函数共用：
+ *   · 语义统一（既非 ok 也非 error，不谎称成功/失败）；
+ *   · chatPanelC2ToolSteps 的静态计数断言改为数【调用点】，任何一条路径被删都会红。
+ *
+ * ⛔ 历史注释断言「分裂点不可能有 running（tool_result 必同轮到达）」——该断言只在
+ *   **单连接不重连**时成立，重连/断连即破（tool_result 丢失而 running 永留）。
+ *
+ * 无 running 时原样返回（引用不变，避免无谓的新数组触发重渲染）。
+ */
+export function convergeRunningSteps(steps: ToolStep[] | undefined): ToolStep[] | undefined {
+  if (!steps || steps.length === 0) return steps;
+  if (!steps.some(st => st.status === 'running')) return steps;
+  return steps.map(st => (st.status === 'running' ? { ...st, status: 'interrupted' as const } : st));
+}
+
 // TS-116（3.28）：消息时间戳格式化（SQLite datetime('now') 是 UTC，补 'Z' 解析）
 function formatTime(isoString: string): string {
   if (!isoString) return '';
@@ -1534,8 +1560,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // B3（0.4.8）：改用后端回传的真实上下文字数 ctx_chars 驱动指示器（含工具结果
         // 与 system prompt），根治"≈17"严重低估；无该字段时保持原估算驱动。
         if (typeof d.ctx_chars === 'number' && d.ctx_chars > 0) {
-          backendCtxCharsRef.current = d.ctx_chars;
-          setTokenUsed(Math.round(d.ctx_chars * 0.6));
+          // ⛔ 0.4.22 重打包修复二（checkpoint-109）：**单调守门**。
+          //   ctx_chars 是"该轮开头"的上下文快照，随**轮末** state 回传。M5 重连会让
+          //   loop 整轮重跑：attempt2 第 1 轮末的 state（小值，如 6057 token）会**晚于**
+          //   attempt1 末轮的 state（大值，如 7617）到达 → 直接覆盖 = 用户看到数字
+          //   "发第二条后反而降低"（2026-09-12 实测图2）。
+          //   守门：取大者。上下文的真实减少只允许走**显式路径**（归档扣减
+          //   ctxTokensAfterArchive / 压缩 / 切会话复位），它们直接写 ref 与显示值，
+          //   不经此守门 → 单调性不会妨碍"移入仓库即下降"。
+          //   ⛔ 已知代价（如实标注）：归档后下一轮的 state 真值若**小于**扣减后的 ref，
+          //     会被守门夹住 → 真值纠正延迟到上下文重新增长超过它为止。换来的是
+          //     重连旧值永不覆盖、数字不再忽大忽小（用户首要诉求是单调平滑）。
+          const nextChars = Math.max(backendCtxCharsRef.current, d.ctx_chars);
+          backendCtxCharsRef.current = nextChars;
+          setTokenUsed(prev => Math.max(prev, Math.round(nextChars * 0.6)));
         }
         patchStreamMsg(m => ({ ...m, step: d.step, maxStep: d.max, tokensUsed: d.tokens_used,
           ...(typeof d.prompt_eval_count === 'number' ? { prompt_eval_count: d.prompt_eval_count } : {}) }));
@@ -1573,20 +1611,24 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           //   但段1 是【正常完成】的段，不是异常中断。stopped 停掉打字机光标。
           const frozenDur = next[idx].startedAt
             ? Math.round((Date.now() - next[idx].startedAt) / 1000) : undefined;
-          // ⛔ 这里**不做** running→interrupted 收敛（曾写过，已删，两个理由）：
-          //   1. **不可触发**：segment_break 只在 loop 的【轮次边界】发出（inject_check 检查点），
-          //      而工具步骤的 tool_result 必在同一轮内到达 → 此刻不可能存在 running 步骤。
-          //   2. **语义矛盾**：本分支同时设了 completedDuration（含义="这段正常完成"），
-          //      又标 interrupted（含义="异常中断"）会自相矛盾，给正常完成的段贴错标签。
-          //   📌 顺带修掉一个测试假失败：`chatPanelC2ToolSteps` 静态核查断言源码里
-          //      「running → interrupted」的收敛写法**恰好出现 3 次**（对应三条真实停止路径）。
-          //      我多加的第 4 处让它变 4 → 失败。⛔ 不改测试迁就，而是删掉多余实现。
-          //      ⚠️ 本注释刻意不写出那段代码原文——静态计数断言会把注释里的字面量也算进去
-          //      （实测踩过：写了之后计数仍是 4）。
+          // ⛔⛔ 0.4.22 重打包修复二（checkpoint-109）：定格时**必须收敛运行态**，两处：
+          //   ① toolSteps 的 running → interrupted（convergeRunningSteps）；
+          //   ② waitingSeconds 清 0（横幅判据 `!content && waitingSeconds>=8` 即不成立）。
+          //   ⛔ 推翻本处历史注释的旧断言（"分裂点不可能有 running"）：该断言只在
+          //     **单连接不重连**时成立。用户 2026-09-12 实测 + 落库证据（分裂气泡从未落库、
+          //     折叠行却显示 5 步而分裂点只经 1~2 轮）证明 **M5 重连会让 loop 整轮重跑**，
+          //     attempt1 断连时残留的 running（其 tool_result 随断连丢失）走到分裂点仍在。
+          //   ⛔ 分裂后 streamMsgId 重指向新气泡 → 本流的 +1 计时 / 首 token 清零 / done
+          //     收尾**全部写新气泡**，旧气泡再无事件到达 → 不在此处清，横幅与转圈**永久残留**
+          //     （截图两帧同为「已等待 26s」不再跳，正是"再无事件到达"的指纹）。
+          //   语义说明：interrupted 与 completedDuration 并存**不矛盾**——前者说的是
+          //     "这段里有个工具没等到结果"（如实），后者说的是"这段的生成过程正常结束"。
           next[idx] = {
             ...next[idx],
             content: (next[idx].content || '') + pending,
             stopped: true, thinking: false, thinkingElapsed: undefined, thinkingPreview: undefined,
+            waitingSeconds: 0,
+            toolSteps: convergeRunningSteps(next[idx].toolSteps),
             ...(frozenDur !== undefined ? { completedDuration: frozenDur } : {}),
           };
           // ② 插入注入的用户气泡 + ③ 新开 assistant 气泡（承接后续 token）
@@ -1743,7 +1785,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
           // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
           // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
-          toolSteps: (m.toolSteps || []).map(st => st.status === 'running' ? { ...st, status: 'interrupted' as const } : st) }));
+          toolSteps: convergeRunningSteps(m.toolSteps) }));
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
         setSending(false);
       }
@@ -1768,6 +1810,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           return {
             ...m, content, thinking: false, thinkingElapsed: undefined, thinkingPreview: undefined,
             stopped: true,
+            // ⛔ 0.4.22 重打包修复二（checkpoint-109）：done 兜底收敛 running 步骤。
+            //   正常流下 tool_result 必先于 done 到达，此处收敛是 no-op；
+            //   但 **M5 重连/断连会丢 tool_result**（attempt1 的工具结果随连接丢失），
+            //   此后 done 到达而 running 永留 → 「正在调用 …」转圈永久残留（F3 测试复现）。
+            //   三条手动停止路径之外，这是第五个收敛出口（共用 convergeRunningSteps）。
+            toolSteps: convergeRunningSteps(m.toolSteps),
             ...(completedDuration !== undefined ? { completedDuration } : {}),
           };
         });
@@ -1901,7 +1949,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
           // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
           // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
-          toolSteps: (m.toolSteps || []).map(st => st.status === 'running' ? { ...st, status: 'interrupted' as const } : st) }));
+          toolSteps: convergeRunningSteps(m.toolSteps) }));
             // B07：停止时的已生成部分也同步本地缓存
             setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
             break;
@@ -1940,7 +1988,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
           // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
           // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
-          toolSteps: (m.toolSteps || []).map(st => st.status === 'running' ? { ...st, status: 'interrupted' as const } : st) }));
+          toolSteps: convergeRunningSteps(m.toolSteps) }));
         // B07：停止时的已生成部分也同步本地缓存
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
       } else {
