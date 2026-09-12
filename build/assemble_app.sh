@@ -8,7 +8,7 @@ BASE="/Users/vetar/Desktop/beta/subagent"
 # 而不必覆盖正式产物（正式产物是已备份 DMG 的来源，覆盖后两者会分叉）。
 OUT="${OUT:-$BASE/build/VetarAI.app}"
 ELECTRON="$BASE/node_modules/electron/Electron.app"
-VERSION="${VERSION:-0.4.22}"
+VERSION="${VERSION:-0.4.23}"
 
 echo "[1/6] 清理旧产物..."
 rm -rf "$OUT"

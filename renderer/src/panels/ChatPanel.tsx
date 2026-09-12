@@ -156,7 +156,15 @@ let localMsgSeq = 0;
 function newLocalMsgId(): string { return `local_${Date.now()}_${++localMsgSeq}`; }
 
 // ── M1-4：Markdown 流式渲染（未闭合 ``` 先当纯文本，闭合后转代码块）──
-function StreamingMarkdown({ text }: { text: string }) {
+// ⛔⛔ F2（0.4.23 安全区）：包 `React.memo`。
+// 主因（`36-…测量操作卡.md` 5.7 真机数据坐实）：流式/思考期每个 SSE 事件都 setLocalMessages
+//   → 重渲染整个消息列表（实测 93~95 条），**每条 assistant 都重新走 ReactMarkdown 完整解析**，
+//   而其中 94 条的 text 一个字没变 → 重解析纯属浪费，是 Electron 渲染进程烧满一核（~103%）的主成本。
+// memo 后 text 不变即跳过重渲染与重解析。
+// ⛔ 默认浅比较即可、**不需要自定义比较函数**：本组件是叶子组件，只接收 `text` 一个 prop，
+//   其余（colors/fonts/radius）全部读模块级 theme 常量，不随渲染变化。
+// ⛔ 属"安全区"：memo 不改输出 DOM/样式，也不动消息列表 `.map()` 结构 → 与 A12 UI 重构零冲突。
+export const StreamingMarkdown = React.memo(function StreamingMarkdown({ text }: { text: string }) {
   const openFences = (text.match(/```/g) || []).length;
   const balanced = openFences % 2 === 0;
   if (!text) return null;
@@ -207,7 +215,7 @@ function StreamingMarkdown({ text }: { text: string }) {
       }}>{text}</ReactMarkdown>
     </div>
   );
-}
+});
 
 // ── M1-4：工具步骤折叠条 ──
 function ToolStepBar({ step }: { step: ToolStep }) {
@@ -1448,22 +1456,40 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     }
     // 节流：token 高频时 rAF 合并一次 setState（避免每 token 重渲染卡 UI）
     // B05（TS-101）：按 streamMsgId 定位目标气泡，不再盲写"最后一条"
+    // ⛔⛔ F4（0.4.23 安全区）：**思考增量也并入这同一个按帧 flush**。
+    // 真机数据（`36-…测量操作卡.md` 5.7）：模型运行时 Electron 渲染进程 ~103%（烧满一核），
+    //   而 ollama 仅 ~22%、codex 跑同样模型前端 0% → 前端在自我空转。D 场景（思考圆圈，
+    //   fps 3.7 / longtask 78%）的元凶就是 thinking 分支：qwen3.8 是思考模型、思考增量高频到达，
+    //   而此前**每个 delta 都单独 patchStreamMsg** → 每次都重渲染整个消息列表（93~95 条）。
+    // 现在：thinkingPreview 增量累积进 accThinking，与正文**共用同一次 rAF 提交**
+    //   （一帧内无论到了多少个 delta，最多提交一次）→ 思考期提交数从"每 delta 一次"降到"每帧一次"。
+    // ⛔ 语义不变项（都有测试守护，chatPanelF4ThinkingThrottle）：
+    //   预览仍是末 120 字（slice(-120) 保留）、思考态开/关与计时走 startThinkingPhase/closeThinkingPhase
+    //   （**不参与节流**，故阶段语义与 B12 计时完全不受影响）、每条终结路径都清 accThinking。
     let rafId = 0;
     const flushAcc = () => {
       rafId = 0;
-      if (currentSessionIdRef.current !== streamSid) { accContent = ''; return; }
-      if (!accContent) return;
+      if (currentSessionIdRef.current !== streamSid) { accContent = ''; accThinking = ''; return; }
+      if (!accContent && !accThinking) return;
       const c = accContent; accContent = '';
+      const t = accThinking; accThinking = '';
       setLocalMessages(prev => {
         const idx = prev.findIndex(m => m.id === streamMsgId);
         if (idx < 0) return prev;
         const next = [...prev];
-        next[idx] = { ...next[idx], content: (next[idx].content || '') + c };
+        next[idx] = {
+          ...next[idx],
+          // ⛔ 两个字段都可能为空（只来了 thinking、或只来了 token）→ 条件展开，
+          //   避免把 content 写成 `undefined + c` 或无谓地重置 thinkingPreview。
+          ...(c ? { content: (next[idx].content || '') + c } : {}),
+          ...(t ? { thinkingPreview: ((next[idx].thinkingPreview || '') + t).slice(-120) } : {}),
+        };
         return next;
       });
       scheduleStreamCacheSync();
     };
     let accContent = '';
+    let accThinking = '';   // F4：思考预览的按帧累积缓冲（与 accContent 同生同灭）
     // 问题（0.4.2实测·长思考界面静默）修复：旧版用一次性 sawContent 守卫，
     // 导致【首轮正文之后的思考增量全被丢弃】——首轮先出正文、后续轮长思考时界面静默、
     // 思考计时停跳。改为"阶段化"：思考指示随每个思考阶段开/关，任意一轮思考都可见、
@@ -1545,8 +1571,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 思考增量（任意轮）→ 阶段化显示：思考中 + 每秒跳动 + 简版预览
         startThinkingPhase();
         const delta = typeof d.delta === 'string' ? d.delta : '';
+        // ⛔⛔ F4（0.4.23 安全区）：**不再每 delta 一次 patchStreamMsg**（那是 D 场景烧满核的元凶），
+        //   改为累积进 accThinking、调度按帧 flush，与正文 token 共用同一次提交。
+        //   startThinkingPhase 仍每 delta 调用（它内部有 thinkingPhaseOpen 守卫，重复调用是 no-op，
+        //   且思考态开启必须即时、不能被节流拖延）。
         if (delta) {
-          patchStreamMsg(m => ({ ...m, thinkingPreview: ((m.thinkingPreview || '') + delta).slice(-120) }));
+          accThinking += delta;
+          if (!rafId) rafId = requestAnimationFrame(flushAcc);
         }
       } else if (ev.event === 'tool_call') {
         closeThinkingPhase(); // 模型停止思考去调工具，关闭当前思考阶段
@@ -1588,6 +1619,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         closeThinkingPhase();               // 停掉当前段的思考计时器
         const pending = accContent; accContent = '';
+        // ⛔ F4：思考缓冲必须在此丢弃（不是"留到下一帧"）。
+        //   段1 定格时显式置 thinkingPreview: undefined；而 streamMsgId 下面会重指向段2 →
+        //   若不清空，挂起的帧 flush 会把**段1 的思考预览写进段2 气泡**（跨段串味）。
+        accThinking = '';
         const frozenId = streamMsgId;       // 定格前捕获旧 id（updater 闭包用）
         frozenSegIds.push(frozenId);
         lastBreakAt = (typeof d.break_at === 'number' && d.break_at >= 0) ? d.break_at : -1;
@@ -1779,6 +1814,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         closeThinkingPhase();
         const c = accContent; accContent = '';
+        accThinking = '';   // F4：流已终止，丢弃挂起的思考缓冲（下面已置 thinkingPreview: undefined）
         patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
           // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
           // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
@@ -1821,6 +1857,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         });
         if (accContent) { /* done 已覆盖，丢弃残留 */ }
         accContent = '';
+        accThinking = '';   // F4：done 已置 thinkingPreview: undefined，挂起的思考缓冲必须丢弃
         // B02：message_count 用冻结的 streamSid，不用闭包 currentSessionId
         setSessions(prev => prev.map(s => s.id === streamSid ? { ...s, message_count: s.message_count + 2 } : s));
         // B07（TS-101）：流式完成 → 本地缓存同步（刷新/重启后可恢复）。
@@ -1941,6 +1978,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
             if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
             const c = accContent; accContent = '';
+            accThinking = '';   // F4：用户停止，丢弃挂起的思考缓冲（下面置 thinking:false）
             // 0.4.12（C6）：只有 AbortError 才是**用户手动停止**，故额外置 manualStopped；
             // done/error 路径只置 stopped（"流已终止"），不再被渲染成"已手动停止"。
             patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
@@ -1981,6 +2019,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         const c = accContent; accContent = '';
+        accThinking = '';   // F4：用户停止，丢弃挂起的思考缓冲（下面置 thinking:false）
         // 0.4.12（C6）：同上，仅此处（用户手动停止）置 manualStopped
         patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
           // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，

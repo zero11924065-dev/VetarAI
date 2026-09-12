@@ -154,6 +154,58 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/chatPanelB12RunElapsed.test.tsx",
         "expect_fail": ["finally"],
     },
+    # ── F2（0.4.23 安全区）StreamingMarkdown memo 化 ───────────────────────
+    {
+        "id": 9,
+        "name": "F2 撤掉 StreamingMarkdown 的 React.memo",
+        "why": "真机数据（36 号测量卡 5.7）坐实：流式/思考期每个 SSE 事件都 setLocalMessages → "
+               "重渲染整个消息列表（93~95 条），每条 assistant 都重新走 ReactMarkdown 完整解析，"
+               "而其中 94 条 text 一个字没变 → 重解析是 Electron 渲染进程烧满一核（~103%）的主成本。"
+               "撤掉 memo 即回到「每帧重解析全部 Markdown」的原始缺陷。"
+               "⛔ 变异手法：把 React.memo(...) 换成 identity 包裹（`(f => f)(...)`），"
+               "这样只改一处锚点、结尾 `});` 不动即语法仍正确，语义上等价于「没有 memo」。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "export const StreamingMarkdown = React.memo(function StreamingMarkdown({ text }: { text: string }) {",
+        "mutant": "export const StreamingMarkdown = ((f: any) => f)(function StreamingMarkdown({ text }: { text: string }) {  // MUTATE-9：撤掉 memo",
+        "test": "src/__tests__/streamingMarkdownMemo.test.tsx",
+        "expect_fail": ["M2"],
+    },
+    # ── F4（0.4.23 安全区）thinking delta 按帧合并节流 ──────────────────────
+    {
+        "id": 10,
+        "name": "F4 撤掉 thinking 节流，回到「每 delta 一次 patchStreamMsg」",
+        "why": "真机数据（36 号测量卡 5.7）：D 场景（思考圆圈，fps 3.7 / longtask 78%）的元凶是 "
+               "thinking 分支每个 delta 都单独 patchStreamMsg → 每次都重渲染整个消息列表（93~95 条）。"
+               "F4 把思考增量累积进 accThinking、与正文共用同一次 rAF 提交。本变异把 thinking 分支"
+               "改回「每 delta 直接 patch」的旧形态，同时命中运行时断言 T1（提交数飙升）与源码契约"
+               "（oldForm 正则重新匹配）。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """        if (delta) {
+          accThinking += delta;
+          if (!rafId) rafId = requestAnimationFrame(flushAcc);
+        }""",
+        "mutant": """        if (delta) {
+          patchStreamMsg(m => ({ ...m, thinkingPreview: ((m.thinkingPreview || '') + delta).slice(-120) }));  // MUTATE-10：每 delta 一次提交
+        }""",
+        "test": "src/__tests__/chatPanelF4ThinkingThrottle.test.tsx",
+        "expect_fail": ["T1", "thinking 分支"],
+    },
+    {
+        "id": 11,
+        "name": "F4 漏清 accThinking（分裂路径不清空 → 跨段串味）",
+        "why": "F4 要求每条终结路径都清 accThinking（与 accContent 同生同灭）。插入点分裂路径若漏清，"
+               "段1 挂起的思考缓冲会在 streamMsgId 重指向段2 后、被后续帧 flush 写进段2 气泡（跨段串味）。"
+               "本变异删掉分裂路径的 accThinking 清空，命中源码契约「清零次数不得少于 accContent」那条。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """        //   段1 定格时显式置 thinkingPreview: undefined；而 streamMsgId 下面会重指向段2 →
+        //   若不清空，挂起的帧 flush 会把**段1 的思考预览写进段2 气泡**（跨段串味）。
+        accThinking = '';
+        const frozenId = streamMsgId;       // 定格前捕获旧 id（updater 闭包用）""",
+        "mutant": """        // MUTATE-11：漏清 accThinking
+        const frozenId = streamMsgId;       // 定格前捕获旧 id（updater 闭包用）""",
+        "test": "src/__tests__/chatPanelF4ThinkingThrottle.test.tsx",
+        "expect_fail": ["每条终结路径"],
+    },
 ]
 
 
