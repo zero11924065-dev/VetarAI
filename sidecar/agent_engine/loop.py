@@ -1246,6 +1246,39 @@ async def run_tool_loop(
 
         # 本轮无工具调用
         if not pending_tcs:
+            # ⛔⛔ 最后一轮插入补救（0.4.23，用户 2026-09-12 实测报障 + 真实 uvicorn 实验确证）
+            #
+            # 缺陷：inject_check 只在每轮**开头**调用。若用户在【最后一轮】（本轮不再调工具、
+            # 正要给最终答复）生成途中插入消息，此后**没有下一轮** → 该消息永不被 drain、
+            # segment_break 永不发出、模型永远看不到它（仅落库）。而 api_chat_inject 已回了
+            # ok=true + "模型完成当前这一步后会读到你的新消息" → **诚实性缺陷**：承诺了做不到的事。
+            # 真实实验（curl -N + 真 uvicorn，场景 B）：ok=true、消息已落库、全程无 segment_break。
+            #
+            # 修法：done 之前**补 drain 一次**。有待注入消息 → 发 segment_break（前端据此分裂气泡）
+            # + 并入 msgs + continue 让模型真的读到它（保住 A5 的"不打断当前轮、下一轮读到"语义，
+            # 而不是发个事件就完事）。
+            # ⛔ 必须守 `step < max_rounds`：轮次预算已耗尽时 continue 会掉出 for 循环 →
+            #   走到循环后的"达到最大轮次"error（loop.py 末尾），把**正常完成**变成**报错**。
+            #   此时如实保留 done，接受残留限制（见下）。
+            if inject_check is not None and step < max_rounds:
+                try:
+                    _final_injected = inject_check() or []
+                except Exception:
+                    _final_injected = []      # 注入失败不能拖垮推理主流程（同轮次开头那次）
+                _final_payload = [{"role": "user", "content": str(_t)}
+                                  for _t in _final_injected if str(_t).strip()]
+                if _final_payload:
+                    # break_at = 补救前已生成的全文长度（full_text 跨轮累加，done 的 content
+                    # 是【全文】）→ 前端据此把段2 切成 [break_at:]，否则段2 会重复段1。
+                    yield {"event": "segment_break",
+                           "data": {"injected_messages": _final_payload,
+                                    "break_at": len(full_text)}}
+                    for _txt in _final_injected:
+                        if str(_txt).strip():
+                            msgs.append({"role": "user", "content": str(_txt)})
+                    # ⛔ 不 yield done：让下一轮的 inject_check 之外的正常流程接管，
+                    #   模型会在下一轮真正看到这条消息并作出回应（可能继续调工具或直接答复）。
+                    continue
             if full_text.strip():
                 yield {"event": "state", "data": {"step": step, "max": max_rounds, "tokens_used": tokens_used, "prompt_eval_count": step_counts["prompt_eval_count"], "ctx_chars": _ctx_chars}}
                 yield {"event": "done", "data": {"content": full_text, "tool_calls": tool_calls_log}}

@@ -656,6 +656,100 @@ async def main():
           str([e["event"] for e in evs_noseg]))
     _inj_seq.clear(); _inj_seq.extend(_inj_seq_none)   # 清理，不影响后续用例
 
+    # ── 22i~22o ⛔ 最后一轮插入的缺口（用户 2026-09-12 实测报障，真实 uvicorn 实验确证）──
+    #
+    # 缺陷：`inject_check` 只在每轮**开头**被调用（本文件上方 for 循环顶部）。若用户在
+    # 【最后一轮】生成途中插入消息，此后没有"下一轮" → 该消息永不被 drain、
+    # `segment_break` 永不发出、模型永远看不到它（仅落库）。而 `api_chat_inject` 已经
+    # 回了 `ok=true` + 提示"模型完成当前这一步后会读到你的新消息" → **诚实性缺陷**：
+    # 承诺了做不到的事，用户看到提示却毫无反应。
+    #
+    # 真实实验数据（curl -N + 真 uvicorn，场景 B）：inject 返回 ok=true、消息已落库，
+    # 但全程无 segment_break，流在 done 正常结束。
+    LAST_INJ = "最后一轮插入的消息"
+
+    class LastRoundConn:
+        """第1轮 正文+工具调用；第2轮（最后一轮）生成途中 push 注入；第3轮 针对注入回复。"""
+        def __init__(self, queue: list):
+            self.calls = 0
+            self.q = queue
+            self.user_msgs_per_round: list[list[str]] = []
+
+        async def chat_stream(self, model, messages, tools=None):
+            self.calls += 1
+            self.user_msgs_per_round.append(
+                [str(m.get("content")) for m in messages if m.get("role") == "user"])
+            if self.calls == 1:
+                yield {"content_delta": "前段"}
+                yield {"tool_calls": [{"id": "lr1",
+                                       "function": {"name": "list_dir", "arguments": "{}"}}]}
+                yield {"done": True, "counts": {"eval_count": 1}}
+            elif self.calls == 2:
+                # ⛔ 此刻本轮的 inject_check 已经调用过了（在轮次开头）——
+                #    在这里 push 精确复现"用户在最后一轮思考中插入"。只 push 一次。
+                self.q.append(LAST_INJ)
+                yield {"content_delta": "终段"}
+                yield {"done": True, "counts": {"eval_count": 1}}
+            else:
+                yield {"content_delta": "针对插入的回复"}
+                yield {"done": True, "counts": {"eval_count": 1}}
+
+    _lr_q: list = []
+
+    def _lr_probe():
+        out = list(_lr_q)
+        _lr_q.clear()
+        return out
+
+    _lr_conn = LastRoundConn(_lr_q)
+    evs_lr = []
+    async for ev in run_tool_loop("m", [{"role": "user", "content": "hi"}], tools_spec(),
+                                  str(sandbox), max_rounds=6, connector=_lr_conn,
+                                  inject_check=_lr_probe):
+        evs_lr.append(ev)
+    kinds_lr = [e["event"] for e in evs_lr]
+    sb_lr = next((e for e in evs_lr if e["event"] == "segment_break"), None)
+    # ⛔ 不用 `if sb_lr:` 守卫后续断言（空转断言同源问题，见 22a 上方注释）
+    _sb_lr_d = (sb_lr or {"data": {}})["data"]
+    check("22i ⛔ 最后一轮插入也要发 segment_break（否则前端不分裂、用户毫无反馈）",
+          sb_lr is not None, str(kinds_lr))
+    check("22j segment_break payload 含该消息",
+          _sb_lr_d.get("injected_messages") == [{"role": "user", "content": LAST_INJ}],
+          str(_sb_lr_d)[:200])
+    check("22k break_at = 补救前已生成的全文长度（段2 不得重复段1）",
+          _sb_lr_d.get("break_at") == len("前段终段"),
+          f"break_at={_sb_lr_d.get('break_at')} 期望={len('前段终段')}")
+    check("22l ⛔ 插入的消息真的进了模型上下文（不得只发事件不给模型看）",
+          any(LAST_INJ in u
+              for round_msgs in _lr_conn.user_msgs_per_round[2:] for u in round_msgs),
+          str(_lr_conn.user_msgs_per_round))
+    check("22m 队列不得静默滞留（drain 后为空）", len(_lr_q) == 0, str(_lr_q))
+    check("22n ⛔ 补救不得把正常完成变成 error（仍须 done、无'达到最大轮次'）",
+          "done" in kinds_lr and "error" not in kinds_lr, str(kinds_lr))
+    check("22o segment_break 只发一次（补救不得与轮次开头的 drain 重复发）",
+          kinds_lr.count("segment_break") == 1, str(kinds_lr))
+
+    # 22p ⛔ 边界：轮次预算耗尽（step == max_rounds）时无从 continue →
+    #     **必须仍正常 done**，绝不能退化成"达到最大轮次"error（把成功完成变成报错）。
+    #     残留限制（如实记录，见 loop.py 修复处注释）：此时插入的消息仅落库、本次流不读，
+    #     下次发送才被模型读到。
+    _lr_q2: list = []
+    _lr_conn2 = LastRoundConn(_lr_q2)
+
+    def _lr_probe2():
+        out = list(_lr_q2)
+        _lr_q2.clear()
+        return out
+
+    evs_edge = []
+    async for ev in run_tool_loop("m", [{"role": "user", "content": "hi"}], tools_spec(),
+                                  str(sandbox), max_rounds=2, connector=_lr_conn2,
+                                  inject_check=_lr_probe2):
+        evs_edge.append(ev)
+    kinds_edge = [e["event"] for e in evs_edge]
+    check("22p ⛔ 轮次预算耗尽时仍正常 done，不退化成'达到最大轮次'error",
+          "done" in kinds_edge and "error" not in kinds_edge, str(kinds_edge))
+
     # 清理
     shutil.rmtree(base, ignore_errors=True)
     check("临时目录已清理", not base.exists())
