@@ -2036,7 +2036,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           stopWaitTimer();
           break; // 流正常读完 → 结束
         } catch (e: any) {
-          if (typeof stopWaitTimer === 'function') stopWaitTimer();
+          stopWaitTimer();
           if (e?.name === 'AbortError') {
             // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
             if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
@@ -2330,8 +2330,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             <button className="ui-btn ui-btn-primary" onClick={async () => {
               try {
-                // B13（0.4.22）修复前记录压缩前的消息 id 集合，用于判断最后一条 user 是否被压缩掉。
-                const idsBefore = new Set((localMessagesRef.current || []).map((m: any) => m.id));
                 await fetch(`${API}/sessions/${currentSessionId}/compact`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({}) });
                 setCompactWarning(null);
                 setToast('已压缩，继续任务中...');
@@ -2362,7 +2360,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                     // 最后一条 user 确实已被压缩掉 → 显式重发（content 作参数，避免旧闭包空 input）
                     resendWithContent(String(lastUser.content || ''));
                   }
-                  void idsBefore;
                 } catch { /* 判断失败则不重发（保守：宁可少发不可重复） */ }
               } catch (e) { setToast('压缩失败: ' + (e as Error).message); }
             }} style={{...btnPrimary, height:28}}>智能压缩</button>
