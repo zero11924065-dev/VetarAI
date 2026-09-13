@@ -1496,7 +1496,23 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // 计时持续跳动，并附简版思考预览（让你实时知道 agent 在想什么、不是空转）。
     let thinkingStartedAt: number | null = null;
     // B05：工具事件也按 id 定位（防止数组变化时落到错误气泡）
-    const patchStreamMsg = (patch: (m: Message) => Message) => {
+    // ⛔⛔ 止血（0.4.24，checkpoint-111）：新增 `persist` 选项（**默认 true，既有调用点语义零变化**）。
+    //
+    // 真凶（2026-09-13 用户真机复测 + 实测坐实，详见 `39-…执行计划.md` 第一节）：
+    //   `syncSessionLocal`（useMessages.ts）每次调用都对 **47MB** 缓存做
+    //   `JSON.parse` → 改一个字段 → `JSON.stringify` → `localStorage.setItem`，**全同步阻塞主线程**，
+    //   真机单次约 **400ms**（M6 切会话独立实测 406ms、探针 longTaskMaxMs 439ms 互证）。
+    //   而它被 scheduleStreamCacheSync 以 500ms 节流挂在本函数上 →
+    //   **两个计时器（流级 + 等待）每秒各 patch 一次 = 每秒 2 次 47MB 全量重写 = 主线程被占 803ms/秒**。
+    //
+    // 为什么计时器不该落盘：它写的三个字段（runElapsed / thinkingElapsed / waitingSeconds）
+    //   **本就是瞬态显示值、不落库**（DB 表 session_messages 的 INSERT 列清单不含它们，
+    //   已核实 `sidecar/storage/store.py:736`）。刷新后流已结束、计时器不会复活，
+    //   这三个字段也不会被读回使用 → 缓存里存它们**毫无价值**，纯粹是每秒 2 次的 400ms 阻塞。
+    //
+    // ⛔ persist 默认 true：正文 token / 工具步骤 / 错误 / 分裂定格等路径**仍照常写穿**
+    //   （B07：流式写穿保证刷新/重启不丢消息）。只有计时器两处显式传 false。
+    const patchStreamMsg = (patch: (m: Message) => Message, opts?: { persist?: boolean }) => {
       if (currentSessionIdRef.current !== streamSid) return;
       setLocalMessages(prev => {
         const idx = prev.findIndex(m => m.id === streamMsgId);
@@ -1505,6 +1521,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         next[idx] = patch(next[idx]);
         return next;
       });
+      if (opts?.persist === false) return;   // 瞬态字段：只更新内存态，不写缓存
       scheduleStreamCacheSync();
     };
     // ⛔⛔ B12（0.4.21）：**流级计时器**（取代原"思考阶段计时器"）。
@@ -1528,12 +1545,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (runElapsedTimerRef.current) clearInterval(runElapsedTimerRef.current);
       runElapsedTimerRef.current = setInterval(() => {
         const now = Date.now();
+        // ⛔ 止血（0.4.24）：persist:false —— 计时 tick 只改瞬态显示值，不得引发 47MB 缓存全量重写
+        //   （每秒 1 次 × 约 400ms 阻塞主线程，是真机 longtask 803ms/秒的主因之一）。
         patchStreamMsg(mm => ({
           ...mm,
           runElapsed: mm.startedAt ? Math.round((now - mm.startedAt) / 1000) : mm.runElapsed,
           thinkingElapsed: (mm.thinking && thinkingStartedAt)
             ? Math.round((now - thinkingStartedAt) / 1000) : mm.thinkingElapsed,
-        }));
+        }), { persist: false });
       }, 1000);
     };
     startRunElapsedTimer();   // ⛔ 流一开始就跑，不等到思考阶段（工具先跑/直接出正文的场景也要有计时）
@@ -1928,7 +1947,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // H19 修复：清除条件必须是"首个正文 token"——thinking/tool_call 等事件几秒内就会到达，
         // 若任何事件都清除计时器，指示器永远到不了 8s 阈值；用户真正等待的是正文输出。
         const waitTimer = setInterval(() => {
-          patchStreamMsg(m => ({ ...m, waitingSeconds: (m.waitingSeconds || 0) + 1 }));
+          // ⛔ 止血（0.4.24）：persist:false —— 同流级计时器，waitingSeconds 是瞬态显示值，
+          //   每秒 tick 不得引发 47MB 缓存全量重写。
+          patchStreamMsg(m => ({ ...m, waitingSeconds: (m.waitingSeconds || 0) + 1 }), { persist: false });
         }, 1000);
         const stopWaitTimer = () => clearInterval(waitTimer);
         const gotFirstContent = { v: false };

@@ -206,6 +206,47 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/chatPanelF4ThinkingThrottle.test.tsx",
         "expect_fail": ["每条终结路径"],
     },
+    # ── 止血（0.4.24）计时器 tick 不得触发 47MB 缓存全量重写 ───────────────
+    {
+        "id": 12,
+        "name": "止血 撤掉 persist 短路（机制层）",
+        "why": "真凶＝syncSessionLocal 每次对 47MB 缓存做 parse+stringify+setItem 全同步阻塞（真机单次约 400ms）；"
+               "两个计时器每秒各 patch 一次 → 每秒 2 次重写 → 主线程被占 803ms/秒（探针实测）。"
+               "止血＝patchStreamMsg 新增 persist 选项，计时器传 false 跳过缓存调度。"
+               "本变异删掉短路判断 → 两个计时器恢复每秒各写一次 47MB → W1+W2 都红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "      if (opts?.persist === false) return;   // 瞬态字段：只更新内存态，不写缓存",
+        "mutant": "      // MUTATE-12：撤掉 persist 短路，计时器 tick 恢复触发缓存全量重写",
+        "test": "src/__tests__/chatPanelCacheWriteThrottle.test.tsx",
+        "expect_fail": ["W1", "W2"],
+    },
+    {
+        "id": 13,
+        "name": "止血 撤掉流级计时器的 persist:false（调用点）",
+        "why": "流级计时器每秒写 runElapsed/thinkingElapsed（均为瞬态显示值、DB 无对应列）。"
+               "撤掉 persist:false → 每秒 1 次 47MB 重写回来 → W1 红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """        }), { persist: false });
+      }, 1000);
+    };""",
+        "mutant": """        }));  // MUTATE-13：流级计时器恢复落盘
+      }, 1000);
+    };""",
+        "test": "src/__tests__/chatPanelCacheWriteThrottle.test.tsx",
+        "expect_fail": ["W1"],
+    },
+    {
+        "id": 14,
+        "name": "止血 撤掉等待计时器的 persist:false（调用点）",
+        "why": "等待计时器每秒写 waitingSeconds（瞬态；横幅判据 >=8）。撤掉 persist:false → 每秒 1 次 47MB 重写回来 → W2 红。"
+               "⛔ W2 实测改前是 20 次/10 秒（＝每秒 2 次），因为 state 事件不触发 stopWaitTimer，"
+               "两个计时器同时在跑——这正是真机探针 2.26 次/秒的代码级来源。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "          patchStreamMsg(m => ({ ...m, waitingSeconds: (m.waitingSeconds || 0) + 1 }), { persist: false });",
+        "mutant": "          patchStreamMsg(m => ({ ...m, waitingSeconds: (m.waitingSeconds || 0) + 1 }));  // MUTATE-14",
+        "test": "src/__tests__/chatPanelCacheWriteThrottle.test.tsx",
+        "expect_fail": ["W2"],
+    },
 ]
 
 
