@@ -1254,7 +1254,6 @@ async def run_tool_loop(
         if step_counts["prompt_eval_count"] > 0:
             prompt_eval_history.append(step_counts["prompt_eval_count"])
 
-        # 本轮无工具调用
         if not pending_tcs:
             # ⛔⛔ 最后一轮插入补救（0.4.23，用户 2026-09-12 实测报障 + 真实 uvicorn 实验确证）
             #
@@ -1301,7 +1300,6 @@ async def run_tool_loop(
                 tool_calls_log, conn)}
             return
 
-        # 有工具调用：逐个执行，结果回注
         all_failed = True
         for tc in pending_tcs:
             yield {"event": "tool_call", "data": {
