@@ -266,8 +266,8 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: colors.textTertiary, flexWrap: 'wrap', flexShrink: 0 }}>
           {/* 主持人 */}
-          <span style={{ color: '#FF9500', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <Icon name="crown" size={14} style={{ color: '#FF9500' }} /> {moderatorLabel}
+          <span style={{ color: colors.warn, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <Icon name="crown" size={14} style={{ color: colors.warn }} /> {moderatorLabel}
           </span>
           {/* 参与者 */}
           <span>参与者：{detail.participants.map(p => p.name).join('、')}</span>
@@ -285,17 +285,17 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
       </div>
 
       {/* 错误/通知条 */}
-      {error && <div style={{ ...calloutStyle('error'), borderRadius: 0, padding: '6px 16px', borderBottom: `1px solid ${colors.dangerBorder}` }}>{error}</div>}
-      {notice && <div style={{ ...calloutStyle('success'), borderRadius: 0, padding: '6px 16px', borderBottom: `1px solid ${colors.okBorder}` }}>{notice}</div>}
+      {error && <div style={{ ...calloutStyle('error'), borderRadius: radius.m, padding: '6px 16px', margin: '8px 16px 0', animation:'ui-fade-in .14s ease' }}>{error}</div>}
+      {notice && <div style={{ ...calloutStyle('success'), borderRadius: radius.m, padding: '6px 16px', margin: '8px 16px 0', animation:'ui-fade-in .14s ease' }}>{notice}</div>}
 
       {/* TS-109 增强（H18-3）：议题附件展示 */}
       {detail.attachments && detail.attachments.length > 0 && (
-        <div style={{ padding: '6px 16px', borderBottom: `1px solid ${colors.borderSubtle}`, background: '#F5F5F7', fontSize: 12 }}>
+        <div style={{ padding: '6px 16px', borderBottom: `1px solid ${colors.borderSubtle}`, background: colors.bgSidebar, fontSize: 12 }}>
           <span style={{ color: colors.textTertiary, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <Icon name="paperclip" size={14} /> 参考材料：
           </span>
           {detail.attachments.map((a, i) => (
-            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: '#F5F5F7', padding: '2px 6px', borderRadius: radius.s, margin: '2px 4px 2px 0', color: colors.textPrimary, border: `1px solid ${colors.borderSubtle}`, fontSize: 12 }}>
+            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: colors.bgCard, padding: '2px 6px', borderRadius: radius.s, margin: '2px 4px 2px 0', color: colors.textPrimary, border: `1px solid ${colors.borderSubtle}`, fontSize: 12 }}>
               <Icon name="file" size={14} style={{ color: colors.textTertiary }} /> {a.name}{a.is_text === false && <span style={{ color: colors.textTertiary }}>（非文本）</span>}
             </span>
           ))}
@@ -342,7 +342,7 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 500, color: colors.textPrimary, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      {moderatorAgent?.id === m.agent_id && <Icon name="crown" size={14} style={{ color: '#FF9500' }} />}
+                      {moderatorAgent?.id === m.agent_id && <Icon name="crown" size={14} style={{ color: colors.warn }} />}
                       <span>{m.agent_name}</span>
                       {!m.ok && <span style={{ color: colors.dangerText, fontSize: 12, fontWeight: 400 }}>·发言失败</span>}
                     </div>
@@ -397,7 +397,7 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
         {detail.status === 'confirm_end' && (
           <>
             <span style={{ color: colors.warnText, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <Icon name="crown" size={14} style={{ color: '#FF9500' }} /> 主持人认为各方已达成共识，是否收尾由你决定：
+              <Icon name="crown" size={14} style={{ color: colors.warn }} /> 主持人认为各方已达成共识，是否收尾由你决定：
             </span>
             <button className="ui-btn ui-btn-primary" onClick={handleFinish} disabled={busy}
               style={{ ...btnPrimary }}>
