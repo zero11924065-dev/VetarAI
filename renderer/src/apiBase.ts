@@ -20,13 +20,15 @@
 /**
  * API base resolution — no hardcoded 8765/11434 in the UI.
  *
- * Priority:
- *   1. localStorage 'subagent_api_base'  (set by SettingsPanel, survives reload)
- *   2. window.__SUBAGENT__ injected by Electron main.js (read from config.json)
+ * getApiBase() is synchronous and resolves by a three-level fallback:
+ *   1. localStorage 'subagent_api_base'  (set by SettingsPanel via setApiBase(), survives reload)
+ *   2. window.__SUBAGENT__ injected by Electron main.js (sidecarHost/sidecarPort
+ *      read from config.json — tracks a user-changed sidecar_port)
  *   3. fallback 127.0.0.1:8765 (dev default, matches config.json default)
  *
- * `resolveApiBase()` is async so it can consult the sidecar once to learn the
- * real sidecar_port if the user changed it in config.json.
+ * "No hardcoded port" means UI panels never write a port literal — every caller goes
+ * through getApiBase(). Level 3 is this module's single centralized dev fallback,
+ * not a scattered UI hardcode; no async sidecar lookup is involved.
  */
 
 const LS_KEY = 'subagent_api_base';
