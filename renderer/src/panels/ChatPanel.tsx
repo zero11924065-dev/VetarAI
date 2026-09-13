@@ -1621,6 +1621,25 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       });
     };
 
+    // ⛔ C2 根因③/C6/B07/F4：「用户手动停止」收敛逻辑集中于此，三处调用点共享，勿在调用点复制改写
+    const applyUserStopped = (afterCancelRaf?: () => void) => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      afterCancelRaf?.();
+      const c = accContent; accContent = '';
+      accThinking = '';   // F4：用户停止，丢弃挂起的思考缓冲（下面置 thinking:false）
+      // 0.4.12（C6）：只有 AbortError 才是**用户手动停止**，故额外置 manualStopped；
+      // done/error 路径只置 stopped（"流已终止"），不再被渲染成"已手动停止"。
+      patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
+        // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
+        // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
+        // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
+        // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
+        // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
+        toolSteps: convergeRunningSteps(m.toolSteps) }));
+      // B07：停止时的已生成部分也同步本地缓存
+      setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
+    };
+
     const applyEvent = (ev: { event: string; data: any }) => {
       const d = ev.data || {};
       if (ev.event === 'token') {
@@ -1872,18 +1891,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 为什么必须显式处理：前端事件白名单原本**没有 cancelled**，后端发了会被静默忽略 →
         // 若竞态下 cancelled 先于 AbortError 到达（或后端因其他路径取消），消息会既无"已手动停止"
         // 标签也无光标，看起来像"卡住"。不依赖"abort 一定先到"这种脆弱时序。
-        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-        closeThinkingPhase();
-        const c = accContent; accContent = '';
-        accThinking = '';   // F4：流已终止，丢弃挂起的思考缓冲（下面已置 thinkingPreview: undefined）
-        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
-          // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
-          // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
-          // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
-          // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
-          // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
-          toolSteps: convergeRunningSteps(m.toolSteps) }));
-        setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
+        // ⛔ C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
+        applyUserStopped(closeThinkingPhase);
         setSending(false);
       }
       // done → 最终 content 以 done 为准（覆盖已累加，保证完整）
@@ -2039,20 +2048,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           stopWaitTimer();
           if (e?.name === 'AbortError') {
             // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
-            if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-            const c = accContent; accContent = '';
-            accThinking = '';   // F4：用户停止，丢弃挂起的思考缓冲（下面置 thinking:false）
-            // 0.4.12（C6）：只有 AbortError 才是**用户手动停止**，故额外置 manualStopped；
-            // done/error 路径只置 stopped（"流已终止"），不再被渲染成"已手动停止"。
-            patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
-          // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
-          // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
-          // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
-          // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
-          // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
-          toolSteps: convergeRunningSteps(m.toolSteps) }));
-            // B07：停止时的已生成部分也同步本地缓存
-            setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
+            // ⛔ C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
+            applyUserStopped();
             break;
           }
           // M5 错误分类：业务错误（400/404）立即终止不重试；网络/5xx/流中断走重连
@@ -2080,19 +2077,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     } catch (e: any) {
       if (e?.name === 'AbortError') {
         // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
-        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-        const c = accContent; accContent = '';
-        accThinking = '';   // F4：用户停止，丢弃挂起的思考缓冲（下面置 thinking:false）
-        // 0.4.12（C6）：同上，仅此处（用户手动停止）置 manualStopped
-        patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
-          // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
-          // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
-          // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
-          // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
-          // 标为 interrupted（既非 ok 也非 error，不谎称成功/失败）。
-          toolSteps: convergeRunningSteps(m.toolSteps) }));
-        // B07：停止时的已生成部分也同步本地缓存
-        setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
+        // ⛔ C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
+        applyUserStopped();
       } else {
         const errMsg: Message = { id: newLocalMsgId(), role: 'assistant', content: `❌ ${e.message || '请求失败'}`, model_used: getEffectiveModel() };
         setLocalMessages(prev => [...prev, errMsg]);

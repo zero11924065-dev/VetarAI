@@ -155,6 +155,10 @@ describe('C2 根因③：停止后工具步骤不得仍显示"正在调用"', ()
     //   出口从 3 条（手动停止×3）扩到 **5 条**（+分裂定格 segment_break、+done 兜底）——
     //   用户实测分裂气泡残留「正在调用…」转圈，根因是 M5 重连丢 tool_result 后
     //   done/定格路径都不收敛。断言改为数【调用点】：任何一条出口被删都会红。
+    // ⛔ 0.4.26（B9-2 C4/R4-S1）：三处手动停止 patch 收敛进共享闭包 applyUserStopped()
+    //   （行为测试①② + B12 + C8 全绿佐证行为不变），静态断言随之改为两段式：
+    //   patch 点计数（分裂定格 + done + 闭包 = 3）+ 闭包接线计数（1 定义 + 3 调用 = 4），
+    //   任一停止路径忘调闭包、或任一 patch 点被删，都会红——绑定强度不低于原"数 5"。
     // ⛔ 用正则核查**真实代码**，不靠文本子串（注释里的字样会误伤，C5 已踩过）。
     // ⛔ 不留"读不到就假通过"的兜底分支：?raw 失效时必须**失败**而非空转
     //   （空转断言比没有断言更危险——它给出虚假的安全感）。
@@ -162,7 +166,12 @@ describe('C2 根因③：停止后工具步骤不得仍显示"正在调用"', ()
     expect(src.length).toBeGreaterThan(10000);      // 确实读到了源码
     // 调用点统一写法 `toolSteps: convergeRunningSteps(`（定义处是
     // `function convergeRunningSteps(steps:`，不含该前缀，不会误计）
-    expect((src.match(/toolSteps: convergeRunningSteps\(/g) || []).length).toBe(5);
+    expect((src.match(/toolSteps: convergeRunningSteps\(/g) || []).length).toBe(3);
+    // 三条手动停止路径（cancelled 事件 / 内层重试 AbortError / 外层流 AbortError）
+    // 必须全部接线共享闭包：3 处调用 + 1 处定义（箭头函数定义写法 `= (...) =>`
+    // 不含 `applyUserStopped(` 前缀，不会误计；⛔ 指针注释不得含函数名字面量）
+    expect((src.match(/applyUserStopped\(/g) || []).length).toBe(3);
+    expect(src).toContain('const applyUserStopped =');
     // 纯函数本体必须存在（收敛逻辑的唯一真相源）
     expect(src).toContain('export function convergeRunningSteps(');
   });
