@@ -92,6 +92,19 @@ input[type="checkbox"], input[type="radio"] { accent-color: #3B82F6; }
 .ui-card-hover { transition: border-color .15s ease, box-shadow .15s ease; }
 .ui-card-hover:hover { border-color: #D1CEC6 !important; box-shadow: 0 1px 3px rgba(28,28,26,.06); }
 
+/* A12 窄窗降级（用户实测反馈：窗口缩小时顶栏文字叠加）——
+   用容器查询按「对话列实际宽度」逐级隐藏低频文字（窗口媒体查询覆盖不了
+   右侧仓库面板展开吃掉宽度的情况）；保图标与 64px 迷你条。
+   jsdom 不应用容器查询，测试无感。 */
+.chat-topbar-scope { container-type: inline-size; }
+@container (max-width: 620px) {
+  .chat-topbar-model { display: none; }
+}
+@container (max-width: 480px) {
+  .chat-topbar-ctx-text { display: none; }
+  .chat-topbar-select { max-width: 120px !important; }
+}
+
 /* A12 新增：链接 */
 .ui-link { color: #2563EB; text-decoration: none; }
 .ui-link:hover { text-decoration: underline; }

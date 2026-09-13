@@ -32,7 +32,7 @@ import { TipPortal } from './TipPortal';
 import { Accordion } from './Accordion';
 import { getApiBase } from './apiBase';
 import { startAppEventStream } from './appEvents';
-import { colors, fonts } from './theme';
+import { colors, fonts, shadow } from './theme';
 import { Icon, Spinner } from './Icon';
 import { alertDialog } from './Dialog';
 
@@ -51,6 +51,23 @@ export default function App() {
   const [showSettingsPage, setShowSettingsPage] = useState(false);
   // checkpoint-051：手风琴头悬停态（内联样式写不了伪类）
   const [hoverPanel, setHoverPanel] = useState<string | null>(null);
+
+  // A12 灵动批②（窄窗自适应，用户实测反馈）：
+  // ① 侧栏宽度随窗口轻微变化（clamp 260~320）；
+  // ② 窗口宽 < 860px 时侧栏整体向左滑出隐藏（宽度+位移+透明度三重过渡），放宽自动滑回；
+  // ③ 隐藏后左缘留一枚「展开面板」把手（pinned），点它临时唤出，再点收起把手收回；
+  //    窗口放宽后 pinned 自动复位（回到正常布局，不再视作临时唤出）。
+  // ⛔ 全程不卸载侧栏（保活哲学：面板状态/轮询/流不因布局变化重启）。
+  const [winWidth, setWinWidth] = useState(typeof window === 'undefined' ? 1280 : window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWinWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const sidebarAutoHidden = winWidth < 860;
+  const [sidebarPinned, setSidebarPinned] = useState(false);
+  useEffect(() => { if (!sidebarAutoHidden) setSidebarPinned(false); }, [sidebarAutoHidden]);
+  const sidebarShown = !sidebarAutoHidden || sidebarPinned;
 
   // A13（0.4.22）：App 级常驻订阅「资源变更」流。空依赖 → 整个应用生命周期只启停一次，
   // 与下方各面板的保活（display 切换、不卸载）无关。Agent 写库后经此广播 → 各面板按需重拉，
@@ -181,8 +198,23 @@ export default function App() {
       <div style={{ display: activeModule === 'intelligence' && !showSettingsPage ? 'flex' : 'none', flex: 1, minWidth: 0, minHeight: 0 }}>
       {/* Left sidebar（flexShrink:0 防止被右侧超宽内容挤压出屏幕）
           checkpoint-046：打开整页设置时隐藏左栏（全屏展示，视觉体验优先）
-          checkpoint-051：亮色主题（规范 §8.0） */}
-      <div style={{ width: 320, flexShrink: 0, background: colors.bgSidebar, borderRight: `1px solid ${colors.borderDefault}`, display: showSettingsPage ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+          checkpoint-051：亮色主题（规范 §8.0）
+          A12 灵动批②：外壳做宽度动画（0 ↔ clamp），内壳固定 clamp 宽 + 滑移/淡出，
+          收起时内容向左滑出而非被压变形；设置页打开时仍整栏 display:none（原行为）。 */}
+      <div style={{
+        width: sidebarShown ? 'clamp(260px, 24vw, 320px)' : 0,
+        flexShrink: 0, overflow: 'hidden', minHeight: 0,
+        transition: 'width .26s cubic-bezier(.2,.8,.3,1)',
+        display: showSettingsPage ? 'none' : 'block',
+      }}>
+      <div style={{
+        width: 'clamp(260px, 24vw, 320px)', height: '100%',
+        background: colors.bgSidebar, borderRight: `1px solid ${colors.borderDefault}`,
+        display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden',
+        transform: sidebarShown ? 'none' : 'translateX(-28px)',
+        opacity: sidebarShown ? 1 : 0,
+        transition: 'transform .26s cubic-bezier(.2,.8,.3,1), opacity .2s ease',
+      }}>
         {/* checkpoint-058：独立 Agent（与项目平级的一等公民）——左栏最上方，
             不依赖任何项目；可单独创建/删除，删项目不影响 */}
         <IndependentAgentsPanel selectedAgentId={selectedAgentId} onSelect={selectIndependentAgent} onAgentDeleted={handleIndependentAgentDeleted} />
@@ -247,10 +279,30 @@ export default function App() {
         {/* 问题1修复（0.3.2实测）：原左栏底部"设置"齿轮与一级导航的设置重复，已删除。
             设置入口统一为最左导航栏底部的设置按钮，职能/流程两个中心共用。 */}
       </div>
+      </div>
 
       {/* Right: chat / 圆桌大屏（minWidth:0 切断子内容 min-content 向上传导，防超宽内容顶开整页；
           M7 TS-113 滚动锁定：minHeight:0 切断高度传导，仅消息区滚动，顶栏/输入区固定） */}
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: showSettingsPage ? 'none' : 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', background: colors.bgApp }}>
+        {/* A12 灵动批②：窄窗侧栏隐藏后的边缘把手——展开（pinned）/ 再收起 */}
+        {sidebarAutoHidden && !sidebarPinned && (
+          <button onClick={() => setSidebarPinned(true)} data-tip="展开面板"
+            style={{ position:'absolute', left:0, top:'50%', transform:'translateY(-50%)', zIndex:900,
+              width:26, height:46, borderRadius:'0 10px 10px 0', border:`1px solid ${colors.borderDefault}`, borderLeft:'none',
+              background:colors.bgCard, boxShadow:shadow.m, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+              animation:'ui-pop-in .18s ease', padding:0 }}>
+            <Icon name="chevron-right" size={15} style={{ color: colors.textSecondary }} />
+          </button>
+        )}
+        {sidebarAutoHidden && sidebarPinned && (
+          <button onClick={() => setSidebarPinned(false)} data-tip="收起面板"
+            style={{ position:'absolute', left:0, top:'50%', transform:'translateY(-50%)', zIndex:900,
+              width:26, height:46, borderRadius:'0 10px 10px 0', border:`1px solid ${colors.borderDefault}`, borderLeft:'none',
+              background:colors.bgCard, boxShadow:shadow.m, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+              animation:'ui-pop-in .18s ease', padding:0 }}>
+            <Icon name="chevron-left" size={15} style={{ color: colors.textSecondary }} />
+          </button>
+        )}
         {/* TS-109 改进：圆桌详情右侧大屏（与对话视图互斥显示；对话组件保活不销毁） */}
         {selectedProjectId && viewingRtId && (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', animation:'ui-fade-in .18s ease' }}>

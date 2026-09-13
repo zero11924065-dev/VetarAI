@@ -2225,12 +2225,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     <div style={{ display:'flex', height:'100%', minWidth:0, overflow:'hidden', background:colors.bgApp }}>
     {/* 左侧：原会话面板（纵向）；右侧：知识仓库面板（可折叠）。
         0.4.4：顶部/左右加留白——顶栏此前紧贴窗口外框，视觉上"贴边"。 */}
-    <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden' }}>
+    <div className="chat-topbar-scope" style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden' }}>
       {/* Top bar —— A12「纸面工具」：白底细线 + 低频操作收纳进 ⋯ 菜单（治"会话窗上方拥挤"）。
           TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容。
           0.4.0 实测重叠根治：原生 select 被压缩时文字不裁剪会向左溢出覆盖相邻元素（实测盖住 Agent 名），
           必须用"容器收缩 + overflow 裁剪"包裹；名字保留最小宽度 + 省略号。 */}
-      <div style={{ height:50, padding:'0 14px', borderBottom:`1px solid ${colors.borderDefault}`, background:colors.bgCard, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
+      <div style={{ height:50, padding:'0 14px', borderBottom:`1px solid ${colors.borderDefault}`, background:colors.bgCard, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0, overflow:'hidden' }}>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'nowrap',minWidth:0}}>
           <div style={{display:'flex',alignItems:'center',gap:7,flexShrink:1,minWidth:48}}>
             <span style={{ width:26, height:26, borderRadius:8, flexShrink:0, display:'inline-flex', alignItems:'center', justifyContent:'center', background:colors.accentBgSoft, border:`1px solid ${colors.accentBorder}` }}>
@@ -2239,7 +2239,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             <span style={{fontSize:14,fontWeight:600,color:colors.textPrimary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{agentInfo?.name || agentId.slice(0,8)}...</span>
           </div>
           {/* select 收缩容器：flex 容器负责压缩，overflow:hidden 裁剪，杜绝文字溢出覆盖 */}
-          <div style={{flex:'0 1 auto',minWidth:0,maxWidth:180,overflow:'hidden'}}>
+          <div className="chat-topbar-select" style={{flex:'0 1 auto',minWidth:0,maxWidth:180,overflow:'hidden'}}>
             <select
               value={currentSessionId || ''}
               onChange={e => handleSwitchSession(e.target.value)}
@@ -2264,12 +2264,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           </button>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
-          <span style={{fontFamily:fonts.mono,fontSize:11.5,color:colors.textTertiary}}>{modelList.find(m=>m.name===modelUsed)?.name || modelUsed}</span>
+          <span className="chat-topbar-model" style={{fontFamily:fonts.mono,fontSize:11.5,color:colors.textTertiary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',maxWidth:140}}>{modelList.find(m=>m.name===modelUsed)?.name || modelUsed}</span>
           {contextLimit > 0 && (
             <div
               title={`当前会话上下文估算：约 ${tokenUsed} / 上限 ${contextLimit}（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）`}
               style={{display:'flex',alignItems:'center',gap:6,fontSize:11, cursor:'help'}}>
-              <span style={{color:colors.textTertiary, whiteSpace:'nowrap'}}>上下文 ≈{tokenUsed} / {contextLimit}</span>
+              <span className="chat-topbar-ctx-text" style={{color:colors.textTertiary, whiteSpace:'nowrap'}}>上下文 ≈{tokenUsed} / {contextLimit}</span>
               <div style={{width:64,height:4,background:colors.borderSubtle,borderRadius:2,overflow:'hidden'}}>
                 <div style={{
                   width: Math.min(100, tokenRatio * 100) + '%',
@@ -2281,7 +2281,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             </div>
           )}
           {contextLimit === 0 && contextSource === 'error' && (
-            <span style={{color:colors.dangerText,fontSize:11}}>上下文：获取失败</span>
+            <span className="chat-topbar-ctx-text" style={{color:colors.dangerText,fontSize:11}}>上下文：获取失败</span>
           )}
           {currentSessionId && (
             <>
