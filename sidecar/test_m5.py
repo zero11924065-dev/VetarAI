@@ -16,7 +16,7 @@
 # You should have received a copy of the GNU General Public License
 # along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """TS-111 M5 稳定性与降级专项单测（TestClient，venv 内直接跑，需 PYTHONPATH）。
-覆盖：心跳动态公式 / model-status 三态 / 配置校验 / 项目改名端点。
+覆盖：心跳动态公式 / 配置校验 / 项目改名端点。
 只输出 PASS/FAIL 摘要。
 """
 import sys
@@ -61,57 +61,8 @@ def main():
     check("1e 零间隔防护 → 回退 base",
           compute_heartbeat_interval([5, 5, 5], 15.0) == 15.0)
 
-    # ══ 2. model-status 三态（mock httpx）══
-    import httpx
-    orig_client = httpx.AsyncClient
-
-    class TagsClient:
-        def __init__(self, models=None, fail=False, **kw):
-            self._models = models or []
-            self._fail = fail
-
-        async def __aenter__(self): return self
-
-        async def __aexit__(self, *a): return False
-
-        async def get(self, url, **kw):
-            if self._fail:
-                raise httpx.ConnectError("ollama down")
-
-            class R:
-                def raise_for_status(self): pass
-
-                @staticmethod
-                def json():
-                    return {"models": [{"name": n} for n in models_holder["v"]]}
-            return R()
-
-    models_holder = {"v": ["qwen3.8:latest", "qwen2.5:7b"]}
-    appmod.get_config = lambda: {"ollama_base_url": "http://localhost:11434",
-                                 "network_switch": "auto", "reconnect_max_attempts": 3,
-                                 "heartbeat_interval": 15.0}
-
     from fastapi.testclient import TestClient
     client = TestClient(appmod.app)
-
-    httpx.AsyncClient = lambda **kw: TagsClient()
-    r = client.get("/api/ollama/model-status", params={"model": "qwen3.8"})
-    d = r.json()
-    check("2a 模型在线 → online + 模型列表",
-          r.status_code == 200 and d["status"] == "online" and "qwen3.8:latest" in d["models"], str(d))
-    r = client.get("/api/ollama/model-status", params={"model": "ghost-model"})
-    d = r.json()
-    check("2b 模型缺失 → missing + 可用名单提示",
-          d["status"] == "missing" and "ghost-model" in d["detail"] and "qwen2.5:7b" in d["detail"], str(d))
-    r = client.get("/api/ollama/model-status")
-    check("2c 不指定模型 → 仅探测可达性", r.json()["status"] == "online")
-
-    httpx.AsyncClient = lambda **kw: TagsClient(fail=True)
-    r = client.get("/api/ollama/model-status", params={"model": "qwen3.8"})
-    d = r.json()
-    check("2d Ollama 不可达 → error + 原因",
-          d["status"] == "error" and d["detail"].startswith("Ollama 不可达"), str(d))
-    httpx.AsyncClient = orig_client
 
     # ══ 3. 配置校验（越界拒绝）══
     from sidecar.config import reload_config, get_config

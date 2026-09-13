@@ -40,7 +40,7 @@ from sidecar.storage.store import (
     update_agent_config, get_agent_config,
     create_session, list_sessions, rename_session, delete_session,
     save_message, load_messages, save_session_summary,
-    log_compact, load_compact_log, delete_messages_before,
+    load_compact_log,
     list_agent_tasks, get_agent_task,
     # C7（0.4.18）：聊天附件落盘与会话级清理
     save_attachment, delete_session_attachments,
@@ -427,35 +427,6 @@ async def api_inference_models():
             entry["context_length"] = ctx
         out.append(entry)
     return out
-
-@app.get("/api/ollama/model-status")
-async def api_model_status(model: str = ""):
-    """M5（TS-111）：模型状态探测（前端降级引导数据源）。
-
-    返回 {"status": "online"|"missing"|"error", "models": [...], "detail": str}
-    - online：指定模型在本地可用（model 为空时仅探测 Ollama 可达性）
-    - missing：Ollama 可达但模型未安装
-    - error：Ollama 不可达（detail 含原因）
-    """
-    import httpx as _httpx2
-    cfg = get_config()
-    base = cfg.get("ollama_base_url", "").rstrip("/")
-    try:
-        async with _httpx2.AsyncClient(timeout=_httpx2.Timeout(5.0, connect=5.0),
-                                       trust_env=False) as client:
-            r = await client.get(f"{base}/api/tags")
-            r.raise_for_status()
-            names = [m.get("name", "") for m in r.json().get("models", [])]
-    except Exception as e:
-        return {"status": "error", "models": [], "detail": f"Ollama 不可达：{e}"}
-    if not model:
-        return {"status": "online", "models": names, "detail": ""}
-    hit = any(n == model or n.startswith(model + ":") for n in names)
-    if hit:
-        return {"status": "online", "models": names, "detail": ""}
-    return {"status": "missing", "models": names,
-            "detail": f"模型 {model} 未安装。本地可用：{'、'.join(names) if names else '（无）'}"}
-
 
 @app.get("/api/context/limit")
 async def api_context_limit(model: str = "qwen3.8"):
@@ -930,13 +901,12 @@ from sidecar.agent_engine.app_events import (
 )
 
 
-def compute_heartbeat_interval(event_times: list, base: float,
-                               now: float | None = None) -> float:
+def compute_heartbeat_interval(event_times: list, base: float) -> float:
     """M5（TS-111）：心跳动态间隔公式（模块级，可单测）。
 
     间隔 = max(base, 近 10 次事件间隔均值 × 1.5)。
     事件少于 2 个（无法算间隔）→ 返回 base。
-    event_times：事件到达时间戳列表（升序）；now 缺省取最后一个时间戳。
+    event_times：事件到达时间戳列表（升序）。
     """
     if len(event_times) < 2:
         return base
@@ -2356,14 +2326,6 @@ async def api_knowledge_list(scope: str | None = None, project_id: str | None = 
     """列出知识条目（可按作用域/项目过滤）。读取前对账：外部删除的 .md 同步清出索引。"""
     _wh.prune_missing()
     return _wh.list_entries(scope, project_id)
-
-
-@app.delete("/api/knowledge/entries/{entry_id}")
-async def api_knowledge_delete(entry_id: str):
-    ok = _wh.delete_entry(entry_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="知识条目不存在")
-    return {"ok": True}
 
 
 @app.get("/api/knowledge/search")

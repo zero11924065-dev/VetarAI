@@ -74,10 +74,6 @@ def is_parseable(path: Path) -> bool:
     return ext in DOC_EXTS or ext in LEGACY_EXTS
 
 
-def is_legacy_office(path: Path) -> bool:
-    return path.suffix.lower() in LEGACY_EXTS
-
-
 def _convert_legacy(path: Path) -> tuple[Any, Path, str] | None:
     """旧式 Office → OOXML 临时文件，复用既有解析链。
 

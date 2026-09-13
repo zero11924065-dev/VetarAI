@@ -229,10 +229,8 @@ def write_memory(scope: str, content: str, project_id: str | None = None) -> boo
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         text = content or ""
-        truncated = False
         if len(text) > _MEMORY_MAX_CHARS:
             text = text[:_MEMORY_MAX_CHARS] + "\n（超长已截断）"
-            truncated = True
         p.write_text(text, encoding="utf-8")
         return True
     except Exception:

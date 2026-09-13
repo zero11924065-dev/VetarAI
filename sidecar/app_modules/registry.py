@@ -565,12 +565,8 @@ APP_MODULE_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
-def list_actions(needs_confirm_list: list[str] | None = None) -> list[str]:
-    """列出全部动作名（形如 workflow_run / knowledge_search）。
-
-    needs_confirm_list 由配置 app_control_confirm 提供，用于在清单中标注哪些需确认
-    （注册表里的 needs_confirm 是默认值，配置可覆盖）。
-    """
+def list_actions() -> list[str]:
+    """列出全部动作名（形如 workflow_run / knowledge_search）。"""
     out = []
     for mod, spec in APP_MODULE_REGISTRY.items():
         for act in spec.get("actions", {}):

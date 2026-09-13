@@ -37,8 +37,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-SUPPORTED_DOC_TYPES = {"docx", "xlsx", "pptx", "md", "markdown"}
-
 
 def _clean_text(v: Any) -> str:
     return str(v) if v is not None else ""

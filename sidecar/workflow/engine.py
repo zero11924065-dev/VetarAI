@@ -958,7 +958,7 @@ class WorkflowEngine:
                 try:
                     from sidecar.attachments.parser import parse_attachment
                     # ⛔ sync + CPU 密集 → 丢线程池，不阻塞事件循环
-                    text, kind = await loop.run_in_executor(
+                    text, _ = await loop.run_in_executor(
                         None, parse_attachment, f.name, raw)
                 except Exception as e:
                     return NodeResult(node["id"], ok=False,

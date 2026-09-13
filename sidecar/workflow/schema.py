@@ -40,7 +40,6 @@
 """
 from __future__ import annotations
 
-import re
 from typing import Any
 
 NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",

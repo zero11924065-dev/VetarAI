@@ -65,7 +65,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from collections import deque
 from typing import Any, AsyncIterator
 

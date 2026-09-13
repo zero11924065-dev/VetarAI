@@ -61,7 +61,7 @@ import re
 import subprocess
 import sys
 import time
-from ctypes import POINTER, Structure, byref, c_bool, c_double, c_int64, c_uint16, c_uint32, c_void_p
+from ctypes import POINTER, Structure, c_bool, c_double, c_int64, c_uint16, c_uint32, c_void_p
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -73,7 +73,6 @@ OSASCRIPT_TIMEOUT = 12.0        # 单次 osascript 调用超时（秒；仅前�
 CAPTURE_TIMEOUT = 15.0          # 单次截屏超时（秒）
 MAX_TYPE_CHARS = 2000           # 单次输入字符上限（防超长文本卡死）
 TYPE_CHUNK_CHARS = 32           # 单个键盘事件承载的字符数（分块发送，避免超长事件被截断）
-LOG_KEEP = 500                  # 动作日志保留条数（内存环形；落盘为 append）
 
 # ── CoreGraphics 事件常量（CGEventTypes.h / CGEventSource.h）──────────────
 _K_CG_HID_EVENT_TAP = 0          # kCGHIDEventTap：硬件通道，事件与物理键鼠同源

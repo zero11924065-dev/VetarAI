@@ -451,7 +451,6 @@ def t8_error_paths(tmp: Path) -> None:
 
 def t9_legacy_doc(tmp: Path) -> None:
     print("\nT9 旧式 .doc：textutil 转换 / 不可用时如实提示")
-    check(".doc 被判定为旧式 Office", dr.is_legacy_office(Path("a.doc")) is True)
     check(".doc 纳入可解析范围", dr.is_parseable(Path("a.doc")) is True)
     check(".xls/.ppt 同样纳入", dr.is_parseable(Path("a.xls")) and dr.is_parseable(Path("a.ppt")))
     check(".txt 不走解析分支", dr.is_parseable(Path("a.txt")) is False)

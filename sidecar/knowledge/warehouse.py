@@ -184,7 +184,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     """)
 
 
-def _iconn(write: bool = False) -> sqlite3.Connection:
+def _iconn() -> sqlite3.Connection:
     path = _index_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=10.0)
@@ -607,16 +607,6 @@ def _embed_entry(entry_id: str, title: str, body: str, keywords: list[str]) -> b
     finally:
         conn.close()
     return True
-
-
-def _remove_embedding(entry_id: str) -> None:
-    """删除条目的向量记录（条目删除时同步清理）。"""
-    conn = _iconn()
-    try:
-        conn.execute("DELETE FROM knowledge_embeddings WHERE entry_id = ?", (entry_id,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _iter_indexable(kdir: Path):

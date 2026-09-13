@@ -23,7 +23,6 @@
   E3 注入：/api/knowledge/inject 勾选条目拼成文本
   E4 分组：/api/knowledge/groups 返回全局+项目分组（含条数/目录）
   E5 上下文跳过：已归档消息不出现在发给模型的消息里（前端过滤，后端总结跳过）
-  E6 删除：/api/knowledge/entries/{id} DELETE 删文件+索引
 
 venv 内 PYTHONPATH=.. python knowledge/test_warehouse_api.py 直接跑。
 """
@@ -117,12 +116,6 @@ def main():
     r3 = client.post("/api/knowledge/inject", json={"entry_ids": [entry_id]})
     check("E3a 注入成功", r3.status_code == 200 and r3.json().get("ok"), r3.text[:100])
     check("E3b 注入文本含知识内容", "地球是圆的" in r3.json().get("text", ""), r3.json().get("text", "")[:80])
-
-    # E6 删除
-    r6 = client.delete(f"/api/knowledge/entries/{entry_id}")
-    check("E6a 删除成功", r6.status_code == 200 and r6.json().get("ok"), r6.text[:100])
-    r6b = client.get("/api/knowledge/search", params={"q": "地球", "scope": "global"})
-    check("E6b 删除后检索不到", all(x["id"] != entry_id for x in r6b.json()), r6b.text[:100])
 
     # 清理
     wh._DATA_ROOT_OVERRIDE = None

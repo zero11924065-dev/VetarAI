@@ -131,8 +131,7 @@ class PluginLoader:
         - switch=off 且被拒 → 抛 NetworkGuardError（安装前拒绝）
         - switch=on 且非名单 → 返回 ["-c http.proxy=<配置代理>", "-c https.proxy=<配置代理>"]
         """
-        from sidecar.network.guard import assert_guard, guard_request
-        from sidecar.config import get_config
+        from sidecar.network.guard import guard_request
         # 取 host：URL 取 hostname；本地路径取不到 → 视为本地
         host = ""
         if not repo_url.startswith("/"):
@@ -150,7 +149,6 @@ class PluginLoader:
 
     async def install_from_github(self, repo_url: str) -> dict[str, Any]:
         """Clone a plugin repo into ~/.subagent/plugins/<repo-name>/."""
-        import re
         # P1-4：出站必须过 guard（本地路径/allowlist 直连，走代理挂配置代理，熔断秒拒）
         git_proxy_args = self._egress(repo_url)
         # 2026-08-28 融合方案：提取 host 用于熔断上报（失败计入，防无代理空转）
@@ -181,7 +179,7 @@ class PluginLoader:
             match = _re.search(r'/([^/]+)/([^/.]+?)(?:\.git)?$', repo_url)
             if not match:
                 raise ValueError(f"Invalid GitHub URL: {repo_url}")
-            owner, name = match.group(1), match.group(2)
+            name = match.group(2)
             plugin_dir = PLUGINS_ROOT / name
             if plugin_dir.exists():
                 import shutil as _shutil

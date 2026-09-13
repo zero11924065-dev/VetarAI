@@ -54,7 +54,6 @@ COMPUTER_USE_MAX_STRIKES = 2    # 0.4.11：同一 Computer Use 动作连续失�
                                 #   用户连点十几二十个仍停不下来。截屏不计入——它只读无弹窗）
 SEARCH_CIRCUIT_STOP = 1        # TS-105：web_search 返回 circuit_open=True → 立即停止（熔断器已确认重试无意义；任务单写 2 但实际时序导致第 1 次 False 第 2 次 True，strikes 永远到不了 2，故改为 1）
 SUMMARY_MAX_CHARS = 200         # tool_result 摘要截断长度（协议常量）
-HEARTBEAT_INTERVAL = 15.0       # SSE 空闲心跳间隔（M5 正式做，M1-2 占位）
 # 0.4.9（3.47.3 委派模型换装）：⛔ 0.4.7 回退教训——卸载必须带独立超时，
 # 且卸载前先查 /api/ps 确认模型确在内存（Ollama 对未加载模型会"先加载再卸载"）。
 SWAP_TIMEOUT = 20.0             # 单次 unload_model 的独立超时上限（秒）；超时即放弃卸载，绝不阻塞委派
