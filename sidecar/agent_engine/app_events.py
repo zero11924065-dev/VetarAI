@@ -68,6 +68,8 @@ import threading
 from collections import deque
 from typing import Any, AsyncIterator
 
+from sidecar.agent_engine._bus_common import _deliver
+
 # ── 资源类型常量（前端按此字段决定重拉哪个面板）──
 RESOURCE_WORKFLOW = "workflow"      # → WorkflowPanel
 RESOURCE_PROJECT = "project"        # → ProjectPanel
@@ -116,45 +118,7 @@ _BUS = _Bus()
 _LOCK = threading.Lock()
 
 
-def _deliver(q: asyncio.Queue, loop: asyncio.AbstractEventLoop | None,
-             item: Any) -> None:
-    """把一条事件投进某个订阅者的队列。
-
-    ⛔ **必须跨事件循环安全**（复用 delegation_events._deliver 的实测经验）：
-    `asyncio.Queue` 绑定创建它的 loop，而 `notify()` 可能来自**另一个** loop
-    （TestClient.stream 把应用跑在独立线程的 loop；将来任何同步上下文调用也一样）。
-    跨 loop 直接 `put_nowait()` 不报错，但**订阅者不会被唤醒** → SSE 端点静默卡在
-    心跳上，前端永远收不到事件。
-
-    做法：先判断当前是否就在目标 loop 上——
-      * 是 → 直接 `put_nowait()`（零开销，生产路径：Agent 协程与 SSE 端点同 loop）
-      * 否 → `call_soon_threadsafe()` 把投递动作排进目标 loop
-    队列满时丢最旧一条：慢消费者不拖垮总线，该订阅者随后靠 seq 断档检测自行对齐。
-    """
-    def _put() -> None:
-        if q.full():
-            try:
-                q.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-        try:
-            q.put_nowait(item)
-        except asyncio.QueueFull:
-            pass
-
-    if loop is None or loop.is_closed():
-        return
-    try:
-        running = asyncio.get_running_loop()
-    except RuntimeError:
-        running = None
-    if running is loop:
-        _put()
-    else:
-        try:
-            loop.call_soon_threadsafe(_put)
-        except RuntimeError:
-            pass          # 目标 loop 正在关闭：事件已入 buf，重连可补发
+# _deliver 已收敛到 _bus_common.py（2026-09-11 跨 loop 踩坑留痕随函数整体搬迁，勿在此复制改写）
 
 
 def notify(resource: str, action: str, project_id: str | None = None,

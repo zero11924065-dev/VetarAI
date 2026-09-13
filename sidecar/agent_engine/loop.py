@@ -1099,9 +1099,6 @@ async def run_tool_loop(
     conn = connector or get_ollama_connector()  # TS-103 B18：默认走单例，连接池复用
 
     msgs = [m for m in (messages or [])]
-    if not any(m.get("role") == "system" for m in msgs):
-        # M1-3：调用方未注入 system prompt 时兜底（调用方一般已注入，见 app.py）
-        pass
     tokens_used = 0
     consecutive_fail_rounds = 0
     search_circuit_strikes = 0  # TS-105：web_search 熔断计数（连续 circuit_open 次数）
