@@ -357,7 +357,6 @@ async def api_ollama_chat(req: ChatReq):
     c = get_ollama_connector()
     reply = await c.chat(model=req.model, messages=req.messages, images=req.images)
 
-    # 持久化到 session
     last_msg = req.messages[-1]
     user_content = last_msg.get("content", "") if isinstance(last_msg, dict) else str(last_msg)
     save_message(project_id, req.session_id, req.agent_id, "user", user_content,
@@ -555,7 +554,6 @@ async def api_summarize_session(session_id: str, project_id: str | None = None, 
     if not msgs:
         raise HTTPException(status_code=404, detail="会话不存在或无消息，无法总结")
 
-    # 拼接对话原文（角色 + 内容），超长截断
     lines = []
     total = 0
     for m in msgs:
@@ -747,7 +745,6 @@ async def api_plugin_install(req: PluginInstallReq):
 @app.get("/api/plugins")
 async def api_plugin_list():
     plugins = loader.list_installed()
-    # 补充 entry_point 和 hooks 信息
     for p in plugins:
         if "entry_point" not in p:
             p["entry_point"] = "plugin.py"
@@ -1369,7 +1366,7 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                         if isinstance(_d.get("content"), str):
                             _state["text"] = _d["content"]
                         _persist_assistant(truncated=False)
-                        _flush_exec_state(status="done")  # 终态落盘
+                        _flush_exec_state(status="done")
                     yield _sse_format(_e, _d)
                 elif timer in done:
                     yield ": ping\n\n"  # 空闲心跳，客户端忽略
@@ -2272,7 +2269,6 @@ async def api_knowledge_transfer(req: KnowledgeTransferReq):
     picked = [m for m in msgs if m.get("id") in id_set and not m.get("archived")]
     if not picked:
         raise HTTPException(status_code=404, detail="未找到指定消息（或消息已在知识仓库中）")
-    # 组装正文（角色: 内容）
     body_lines = []
     for m in picked:
         role = m.get("role", "?")
@@ -2393,11 +2389,9 @@ async def api_knowledge_groups():
     from sidecar.storage.store import list_projects
     _wh.prune_missing()
     groups = []
-    # 全局
     g_entries = _wh.list_entries("global")
     groups.append({"scope": "global", "project_id": None, "project_name": "全局",
                    "count": len(g_entries), "dir": str(_wh.global_knowledge_dir())})
-    # 各项目
     try:
         projects = list_projects()
     except Exception:
