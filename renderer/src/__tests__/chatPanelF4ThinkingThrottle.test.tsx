@@ -47,6 +47,7 @@ import { render, waitFor, act } from '@testing-library/react';
 import React, { Profiler } from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 import { jsonRes, sseEvent } from './helpers/fetchMock';
+import { readChatPanelSource } from './helpers/chatSource';
 
 // ── 手动帧调度：把 rAF 回调收进队列，由测试决定何时"过一帧" ──────────────
 let rafSeq = 0;
@@ -229,7 +230,7 @@ describe('F4 thinking delta 按帧合并（不再每 delta 触发整列表重渲
 
 describe('F4 源码契约（防回归到"每 delta 一次 patchStreamMsg"）', () => {
   it('⛔ thinking 分支不得再直接 patchStreamMsg 写 thinkingPreview（必须走累积 + rAF）', async () => {
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     expect(src.length).toBeGreaterThan(10000);
 
     // ① thinkingPreview 只允许在 flush（合并提交）里写入一次；
@@ -244,7 +245,7 @@ describe('F4 源码契约（防回归到"每 delta 一次 patchStreamMsg"）', (
   });
 
   it('⛔ 每条终结路径都清 accThinking（不得把上一段的思考预览写进新气泡）', async () => {
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     // accContent 被清理的地方（切会话守卫 / 分裂定格 / cancelled / done / 两处 AbortError）
     // accThinking 必须同等对待：清零次数不得少于 accContent 的清零次数
     const clearContent = (src.match(/accContent = ''/g) || []).length;

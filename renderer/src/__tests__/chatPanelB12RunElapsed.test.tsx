@@ -40,6 +40,7 @@ import { ChatPanel } from '../panels/ChatPanel';
 import {
   jsonRes, sseEvent, tokenEvent, doneEvent, sseResControllable,
 } from './helpers/fetchMock';
+import { readChatPanelSource } from './helpers/chatSource';
 
 if (typeof (globalThis as any).localStorage === 'undefined') {
   (globalThis as any).localStorage = {
@@ -380,7 +381,7 @@ describe('B12 整轮进行计时（runElapsed）', () => {
     // ⛔ 源码级守护：流级计时器只能有**一个** setInterval 每秒驱动，
     //   不得为 runElapsed 另建第二个计时器（否则思考态期间每秒两次 setLocalMessages，
     //   消息列表重渲染翻倍 —— ChatPanel 已 2425 行，是 B6/B7 性能瓶颈区）。
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     expect(src.length).toBeGreaterThan(10000);
     // 思考计时 + 等待计时 + 流级计时：全文件 setInterval 总数不得超过 3
     const intervals = (src.match(/setInterval\(/g) || []).length;
@@ -447,7 +448,7 @@ describe('B12 源码契约（防回归到"两个计时器"或"漏清理"）', ()
   });
 
   it('⛔ 流级计时器在【finally】与【卸载 cleanup】两处都被清理', async () => {
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     expect(src.length).toBeGreaterThan(10000);
 
     // ① finally 是流的正常结束出口（done/error/abort），必须清理

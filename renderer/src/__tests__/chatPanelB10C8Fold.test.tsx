@@ -23,6 +23,7 @@ import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
 import { jsonRes } from './helpers/fetchMock';
+import { readChatPanelSource } from './helpers/chatSource';
 
 /**
  * #11（0.4.19）· 删除正文折叠后的【反向守护】测试。
@@ -173,7 +174,7 @@ describe('#11 删除正文折叠 · 反向守护', () => {
 
   // ── R6 源码层：折叠组件与阈值常量已彻底移除（防回潮）──
   it('R6 源码不含 FoldSection/UserBody/AssistantBody/BODY_FOLD_*（折叠不可回潮）', async () => {
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     // ⛔ 一律匹配【声明形态】（function/const 前缀），不用裸名——
     //    否则注释里提到旧名（如本文件 R6 标题、ChatPanel 的历史注释）就会误命中、误报。
     expect(src.includes('function FoldSection')).toBe(false);

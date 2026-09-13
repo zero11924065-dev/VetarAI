@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { describe, it, expect } from 'vitest';
+import { readChatPanelSource } from './helpers/chatSource';
 
 // TS-116（3.28/3.29）：formatTime + completedDuration 契约
 // 注：formatTime 是 ChatPanel.tsx 内部函数，无法直接 import。
@@ -116,7 +117,7 @@ describe('ChatPanel 源码契约（TS-116 3.28/3.29）', () => {
   //   ✅ 改为真读源码（范式同 chatPanelC2ToolSteps / chatPanelB10C8Fold 的 `?raw` 导入）。
   //   📌 这是本项目第 4 次踩"空转断言"（前 3 次见验证纪律第 19 条：0.4.18 三处、#15 T14b/S4、test_loop 10d3）。
   it('ChatPanel.tsx 真实包含 formatTime + 时间戳显示 + completedDuration 契约', async () => {
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     expect(src.length).toBeGreaterThan(10000);           // 确实读到了源码，不是空串
 
     // ① formatTime 函数真实存在（且被调用，不是死代码）

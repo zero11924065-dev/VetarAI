@@ -23,6 +23,7 @@ import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 
 import { jsonRes, sseRes, sseEvent } from './helpers/fetchMock';
+import { readChatPanelSource } from './helpers/chatSource';
 
 /**
  * 第 3 批（0.4.16）C2 **根因③** 专项：停止后最后一个工具不得仍显示"正在调用…"。
@@ -157,7 +158,7 @@ describe('C2 根因③：停止后工具步骤不得仍显示"正在调用"', ()
     // ⛔ 用正则核查**真实代码**，不靠文本子串（注释里的字样会误伤，C5 已踩过）。
     // ⛔ 不留"读不到就假通过"的兜底分支：?raw 失效时必须**失败**而非空转
     //   （空转断言比没有断言更危险——它给出虚假的安全感）。
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     expect(src.length).toBeGreaterThan(10000);      // 确实读到了源码
     // 调用点统一写法 `toolSteps: convergeRunningSteps(`（定义处是
     // `function convergeRunningSteps(steps:`，不含该前缀，不会误计）

@@ -43,6 +43,7 @@ import { render, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { ChatPanel } from '../panels/ChatPanel';
 import { jsonRes, sseRes, sseResSlow, tokenEvent, doneEvent, sseEvent } from './helpers/fetchMock';
+import { readChatPanelSource } from './helpers/chatSource';
 
 const CACHE_KEY = 'subagent_messages_v4';
 
@@ -181,7 +182,7 @@ describe('止血 · 计时器 tick 不得触发缓存全量重写', () => {
     //            若我过度修复删掉写穿，那些测试会先红；
     //         ③ 源码契约直接钉死"过度修复的形态"——只要这两个函数里还有 scheduleStreamCacheSync，
     //            正文/工具步骤/收尾的写穿就在，计时器只是显式选择不走它。
-    const src = await import('../panels/ChatPanel?raw').then(m => (m as any).default as string);
+    const src = await readChatPanelSource();
     expect(src.length).toBeGreaterThan(10000);
 
     const patchIdx = src.indexOf('const patchStreamMsg');
