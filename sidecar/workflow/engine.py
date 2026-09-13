@@ -1093,7 +1093,6 @@ class WorkflowEngine:
                 else:
                     res = await self._execute_node(node)
 
-                # 结果写入变量空间
                 self.variables[node_id] = {"output": res.output}
                 if node.get("type") == "end":
                     out_ref = node.get("output")
