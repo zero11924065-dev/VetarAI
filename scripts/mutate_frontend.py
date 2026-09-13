@@ -247,6 +247,61 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/chatPanelCacheWriteThrottle.test.tsx",
         "expect_fail": ["W2"],
     },
+    # ── F6（0.4.24）图片 base64 移出会话缓存 ──────────────────────────────
+    {
+        "id": 15,
+        "name": "F6 撤掉 syncSessionLocal 的图片剥离（写出口层）",
+        "why": "真凶＝会话缓存 47MB（图片 base64 占 95.3%），syncSessionLocal 每次写入都 parse+stringify"
+               " 整个 store 全同步阻塞主线程（真机单次约 400ms → 803ms/秒）。撤掉剥离 → 47MB 回来 → P1/P2/P4 红。",
+        "file": RENDERER / "src" / "hooks" / "useMessages.ts",
+        "anchor": """    store[sessionId] = stripMsgImages(messages);
+    localStorage.setItem(key, JSON.stringify(stripStoreImages(store)));""",
+        "mutant": """    store[sessionId] = messages;  // MUTATE-15：撤掉剥离
+    localStorage.setItem(key, JSON.stringify(store));""",
+        "test": "src/__tests__/chatPanelF6ImageCache.test.tsx",
+        "expect_fail": ["P1", "P2", "P4", "P5"],
+    },
+    {
+        "id": 16,
+        "name": "F6 只剥当前会话（漏掉整 store 迁移 = F6 无效）",
+        "why": "⛔ 计划 2.0 节的关键约束：syncSessionLocal parse 的是整个 store，只剥当前会话时"
+               "其他会话的 45MB 仍在 → parse/stringify 照样约 400ms → F6 完全无效。P2 专门测这个。",
+        "file": RENDERER / "src" / "hooks" / "useMessages.ts",
+        "anchor": "    localStorage.setItem(key, JSON.stringify(stripStoreImages(store)));",
+        "mutant": "    localStorage.setItem(key, JSON.stringify(store));  // MUTATE-16：只剥当前会话",
+        "test": "src/__tests__/chatPanelF6ImageCache.test.tsx",
+        # ⛔ P5 源码契约不该列入：本变异只删调用点，`stripMsgImages` 仍在 syncSessionLocal 内，
+        #   故 P5 的正则仍命中（P5 绿是正确的）。真正守护"整 store 迁移"的是 P2。
+        "expect_fail": ["P2"],
+    },
+    {
+        "id": 17,
+        "name": "F6 撤掉 persist() 的剥离（另一个写出口漏网）",
+        "why": "persist() 是 addMessage/clear/loadFromAPI/purge 共用的写出口。只改 syncSessionLocal"
+               "会让这条路径把 45MB base64 原样写回。P3 专门测 addMessage 路径。",
+        "file": RENDERER / "src" / "hooks" / "useMessages.ts",
+        "anchor": "function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(stripStoreImages(_store))); }",
+        "mutant": "function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(_store)); }  // MUTATE-17",
+        "test": "src/__tests__/chatPanelF6ImageCache.test.tsx",
+        "expect_fail": ["P3", "P5"],
+    },
+    {
+        "id": 18,
+        "name": "F6 改成原地修改传入数组（界面图片会当场消失）",
+        "why": "⛔ syncSessionLocal 收的是 React state 里的消息对象；原地 `m.images=undefined` 会让"
+               "**界面上正在显示的图片当场消失**（比重写慢更糟）。P1 专门守护传入数组不被改。",
+        "file": RENDERER / "src" / "hooks" / "useMessages.ts",
+        "anchor": """    if (!hasHeavyImg && !hasHeavyPending) return m;      // ⛔ 原样返回引用，不造新对象
+    changed = true;
+    const next: Message = { ...m };""",
+        "mutant": """    if (!hasHeavyImg && !hasHeavyPending) return m;
+    changed = true;
+    if (hasHeavyImg) m.images = keepLight(m.images!);            // MUTATE-18：原地修改
+    if (hasHeavyPending) delete (m as any).pending_images;
+    const next: Message = m;""",
+        "test": "src/__tests__/chatPanelF6ImageCache.test.tsx",
+        "expect_fail": ["P1"],
+    },
 ]
 
 

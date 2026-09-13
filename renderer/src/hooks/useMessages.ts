@@ -93,11 +93,81 @@ export interface Message {
 
 const STORAGE_KEY = 'subagent_messages_v4';
 
+// ── F6（0.4.24，checkpoint-111）：图片 base64 移出会话缓存 ──────────────────
+/**
+ * 真凶（2026-09-13 用户真机复测 + 实测坐实，详见 `39-…执行计划.md` 第一节）：
+ *   会话缓存实测 **47185498 字节，其中图片 base64 44973802 = 95.3%**（124 张）。
+ *   `syncSessionLocal` 每次写入都对**整个 store** 做 `JSON.parse` → 改一个字段 →
+ *   `JSON.stringify` → `setItem`，**全同步阻塞主线程**，真机单次约 **400ms**
+ *   （M6 切会话独立实测 406ms、探针 longTaskMaxMs 439ms 互证）
+ *   → 主线程被占 803ms/秒，fps 掉到 2.7~3.8、Electron 渲染进程烧到 94~103%。
+ *
+ * ⛔⛔ 关键约束（决定方案，不可省）：`syncSessionLocal` parse 的是**整个 store**，
+ *   故只剥离"当前会话"的图片毫无意义——其他会话的 45MB 仍在，parse/stringify 照样慢。
+ *   **必须整体迁移**：两个写出口都对 store 的**所有会话**剥离。
+ *
+ * ✅ 为什么剥离是安全的（四个卡点逐个代码核实）：
+ *   · **DB 才是权威源**：`session_messages.images TEXT`（`sidecar/storage/store.py:77`），
+ *     user 消息图片在 `app.py:1134` 落库，**早于** `return StreamingResponse`(:1481)
+ *     → 流开始前 DB 已有图，不存在窗口期；且 `:1809` 的 images 只用于视觉识别、非落库路径，
+ *     **落库唯一路径就是 `:1134`**。
+ *   · **恢复有保障**：`mergeDbWithLocal` 返回 `[...dbMsgs, ...extra]`（`ChatPanel.tsx:665`），
+ *     DB 消息是基底 → 缓存无图时 DB 的 images 自动补回。
+ *   · **老缓存自动迁移**：`loadSessionMessages` 每次都 `syncSessionLocal(sid, merged)`（`:690`）
+ *     → 切换会话即触发整 store 剥离，无需单独的迁移代码。
+ *   · 内存态不受影响：渲染走 ChatPanel 的 `localMessages`（`msgHistory` 在 `:768` 只声明未使用），
+ *     本函数只改**落盘副本**。
+ *
+ * ⛔ 已知代价（如实标注，不隐瞒）：「乐观追加 user 气泡 → POST 落库」这个**几十毫秒窗口**内
+ *   若刷新，DB 尚无该消息 → 缓存副本恢复后气泡与正文仍在、但**该条的图片丢失**。
+ *   改前此窗口刷新会得到完整气泡（含图）。窗口极小，且图片在 DB 落库后即永久安全。
+ */
+const HEAVY_PREFIX = 'data:';
+const isHeavy = (s: unknown): boolean => typeof s === 'string' && s.startsWith(HEAVY_PREFIX);
+/** 只留非 base64 项（http(s) URL 体积小、且 DB 未必有副本 → 保留，避免误丢） */
+const keepLight = (arr: string[]): string[] => arr.filter(s => !isHeavy(s));
+
+/**
+ * 剥离一组消息里的图片 base64（**缓存副本专用**）。
+ * ⛔⛔ 绝不原地修改传入数组/对象：调用方传的是 React state 里的消息对象，
+ *   原地改会让**界面上正在显示的图片当场消失**（比重写慢更糟）。
+ *   → 一律 `{ ...m }` 造新对象；无重图的消息**原样返回引用**（零开销、幂等）。
+ */
+function stripMsgImages(msgs: Message[]): Message[] {
+  if (!Array.isArray(msgs)) return msgs;
+  let changed = false;
+  const out = msgs.map(m => {
+    if (!m || typeof m !== 'object') return m;
+    const hasHeavyImg = Array.isArray(m.images) && m.images.some(isHeavy);
+    const hasHeavyPending = Array.isArray(m.pending_images) && m.pending_images.some(isHeavy);
+    if (!hasHeavyImg && !hasHeavyPending) return m;      // ⛔ 原样返回引用，不造新对象
+    changed = true;
+    const next: Message = { ...m };
+    if (hasHeavyImg) next.images = keepLight(m.images!);
+    // ⛔ pending_images 是"本地流式附着图"、DB 无对应列，故整个删除（其 base64 全是重图）。
+    //   刷新后该 user 消息从 DB 恢复时带的是 `images` 字段（app.py:1134 落库），图片仍在。
+    if (hasHeavyPending) delete (next as any).pending_images;
+    return next;
+  });
+  return changed ? out : msgs;
+}
+
+/** 剥离整个 store（所有会话）的图片 base64 —— ⛔ 整体迁移，见上方关键约束 */
+function stripStoreImages(store: Record<string, Message[]>): Record<string, Message[]> {
+  const out: Record<string, Message[]> = {};
+  for (const sid of Object.keys(store)) {
+    out[sid] = stripMsgImages(store[sid]);
+  }
+  return out;
+}
+
 // Global mutable store — keyed by sessionId
 let _store: Record<string, Message[]> = {};
 try { _store = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch {}
 
-function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(_store)); }
+// ⛔ F6：落盘前剥离图片 base64。内存态 `_store` **保持完整**（正常使用零变化），
+//   只有写进 localStorage 的副本被剥离 → 每次 persist 都幂等地再剥一次，开销极小。
+function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(stripStoreImages(_store))); }
 
 export function useSessionMessages(sessionId: string) {
   const storeKey = sessionId;
@@ -133,8 +203,12 @@ export function syncSessionLocal(sessionId: string, messages: Message[]) {
   try {
     const key = 'subagent_messages_v4';
     const store: Record<string, any> = JSON.parse(localStorage.getItem(key) || '{}');
-    store[sessionId] = messages;
-    localStorage.setItem(key, JSON.stringify(store));
+    // ⛔⛔ F6：本会话的图片先剥离，再对**整个 store** 剥离一次后落盘。
+    //   只剥本会话毫无意义——parse/stringify 处理的是整个 store，其他会话的 45MB 仍在，
+    //   单次写入照样约 400ms（计划 2.0 节的关键约束）。整 store 剥离同时完成老缓存迁移：
+    //   `loadSessionMessages` 每次都会调本函数 → 用户一切会话，存量 45MB 即被清掉。
+    store[sessionId] = stripMsgImages(messages);
+    localStorage.setItem(key, JSON.stringify(stripStoreImages(store)));
   } catch {}
 }
 
