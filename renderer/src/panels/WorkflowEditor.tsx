@@ -24,7 +24,7 @@
  * 节点类型与后端 schema.py 的 NODE_TYPES 一致。
  */
 import React, { useState } from 'react';
-import { colors, fonts, radius, input, textarea, select, btnPrimary, btnSecondary, btnDangerSoft } from '../theme';
+import { colors, fonts, input, textarea, select, btnPrimary, btnSecondary, btnDangerSoft } from '../theme';
 import { Icon } from '../Icon';
 
 const NODE_TYPE_OPTIONS = [

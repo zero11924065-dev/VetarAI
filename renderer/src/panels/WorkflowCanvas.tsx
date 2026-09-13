@@ -62,11 +62,6 @@ export function WorkflowCanvas({ definition, selectedNodeId, nodeStatus, onSelec
   const { w, h } = React.useMemo(() => layoutSize(positions), [positions]);
   const nodes = definition.nodes || [];
   const edges = definition.edges || [];
-  const nodeById = React.useMemo(() => {
-    const m: Record<string, any> = {};
-    nodes.forEach(n => { m[n.id] = n; });
-    return m;
-  }, [nodes]);
 
   const statusRing = (id: string): string | null => {
     const st = nodeStatus?.[id];

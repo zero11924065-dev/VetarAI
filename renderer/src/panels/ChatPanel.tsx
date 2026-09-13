@@ -21,9 +21,9 @@ import { getApiBase } from '../apiBase';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useSessionMessages, purgeSessionLocal, syncSessionLocal, Message, ToolStep } from '../hooks/useMessages';
+import { purgeSessionLocal, syncSessionLocal, Message, ToolStep } from '../hooks/useMessages';
 import { SSEStreamParser } from '../lib/sseParser';
-import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, btnGhost, btnDanger, btnDangerSoft, select as selectStyle, calloutStyle, iconBtn, menuCard } from '../theme';
+import { colors, fonts, radius, shadow, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, select as selectStyle, calloutStyle, iconBtn, menuCard } from '../theme';
 import { Icon, Spinner, IconName } from '../Icon';
 import { confirmDialog, promptDialog } from '../Dialog';
 import { on } from '../events';
@@ -138,7 +138,6 @@ function formatTime(isoString: string): string {
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) + ' ' +
          date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
-const IMAGE_MIMES = ['image/png','image/jpeg','image/webp','image/gif','image/bmp'];
 // checkpoint-048：聊天上传支持办公文档（走后端附件解析端点）
 // ⛔ C3 局部去重（0.4.18）：此处原有 `PARSEABLE_EXTS` 白名单，是后端
 //    `attachments/parser.py: SUPPORTED_EXTS` 的**第二份真相源**，且已**漂移**：
@@ -809,7 +808,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
   useEffect(() => { fetchContextLimit(); }, [fetchContextLimit]);
 
-  const msgHistory = useSessionMessages(currentSessionId || 'none');
   // H17 问题3（问题4重构）：恢复上下文用量指示器——改为对（未归档）消息实时估算，
   // 取最后一条带 prompt_eval_count 的历史值仅作为无消息可估时的兜底。
   function restoreTokenIndicator(msgs: Message[]) {

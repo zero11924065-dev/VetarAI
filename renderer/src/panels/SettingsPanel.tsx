@@ -21,7 +21,6 @@ import { getApiBase, setApiBase, getInjected } from '../apiBase';
 import React, { useEffect, useState } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, input, select, calloutStyle } from '../theme';
 import { Icon } from '../Icon';
-import { alertDialog } from '../Dialog';
 
 interface Config {
   ollama_base_url: string;

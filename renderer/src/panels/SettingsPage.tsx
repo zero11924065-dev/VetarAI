@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { PluginPanel } from './PluginPanel';
 import { KnowledgePanel } from './KnowledgePanel';

@@ -18,7 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 /** Per-session message history with localStorage + API persistence. */
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 
 export interface ToolStep {
   id: string;
@@ -115,7 +115,7 @@ const STORAGE_KEY = 'subagent_messages_v4';
  *     DB 消息是基底 → 缓存无图时 DB 的 images 自动补回。
  *   · **老缓存自动迁移**：`loadSessionMessages` 每次都 `syncSessionLocal(sid, merged)`（`:690`）
  *     → 切换会话即触发整 store 剥离，无需单独的迁移代码。
- *   · 内存态不受影响：渲染走 ChatPanel 的 `localMessages`（`msgHistory` 在 `:768` 只声明未使用），
+ *   · 内存态不受影响：渲染走 ChatPanel 的 `localMessages`，
  *     本函数只改**落盘副本**。
  *
  * ⛔ 已知代价（如实标注，不隐瞒）：「乐观追加 user 气泡 → POST 落库」这个**几十毫秒窗口**内

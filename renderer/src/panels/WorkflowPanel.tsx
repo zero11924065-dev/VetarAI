@@ -24,9 +24,9 @@
  * 运行：POST /api/workflows/{id}/run（SSE），实时刷新节点状态与事件流；
  * 审批节点弹出审批卡片（批准/驳回）；支持停止。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { colors, fonts, radius, btnPrimary, btnSecondary, btnDangerSoft, input, textarea, calloutStyle } from '../theme';
+import { colors, fonts, radius, btnPrimary, btnSecondary, btnDangerSoft, input, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { alertDialog, confirmDialog } from '../Dialog';
 import { reportBusy } from '../busyState';

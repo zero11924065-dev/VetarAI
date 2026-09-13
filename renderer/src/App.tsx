@@ -33,7 +33,7 @@ import { Accordion } from './Accordion';
 import { getApiBase } from './apiBase';
 import { startAppEventStream } from './appEvents';
 import { colors, fonts, shadow } from './theme';
-import { Icon, Spinner } from './Icon';
+import { Icon } from './Icon';
 import { alertDialog } from './Dialog';
 
 export default function App() {

@@ -20,7 +20,7 @@
 import { getApiBase } from '../apiBase';
 import { reportBusy } from '../busyState';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, badge, calloutStyle, select as selectStyle } from '../theme';
+import { colors, fonts, radius, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, badge, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog } from '../Dialog';
 import { Accordion } from '../Accordion';

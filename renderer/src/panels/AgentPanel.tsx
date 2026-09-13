@@ -18,8 +18,8 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
-import React, { useEffect, useState } from 'react';
-import { colors, fonts, radius, shadow, typo, btnPrimary, btnSecondary, btnGhost, input, textarea as textareaStyle, select as selectStyle, badge, calloutStyle } from '../theme';
+import { useEffect, useState } from 'react';
+import { colors, fonts, radius, shadow, typo, btnPrimary, btnSecondary, btnGhost, input, textarea as textareaStyle, select as selectStyle, badge } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog, alertDialog } from '../Dialog';
 import { emit } from '../events';
