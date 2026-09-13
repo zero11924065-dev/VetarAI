@@ -133,12 +133,6 @@ def make_cancel_check(session_id: str) -> Callable[[], bool]:
     return lambda: is_chat_cancelled(session_id)
 
 
-def active_streams() -> list[str]:
-    """诊断用：当前有活流的会话列表。"""
-    with _LOCK:
-        return sorted(_EVENTS.keys())
-
-
 def clear_all() -> None:
     """测试用：清空全部注册。"""
     with _LOCK:

@@ -213,11 +213,6 @@ async def api_update_config(body: dict):
     return cfg
 
 
-@app.get("/api/config/path")
-async def api_config_path():
-    return {"path": str(get_config_path())}
-
-
 class ChatReq(BaseModel):
     agent_id: str
     model: str
@@ -637,17 +632,6 @@ async def api_compact_log(session_id: str, project_id: str):
     logs = load_compact_log(project_id, session_id, limit=3)
     return {"logs": logs}
 
-
-class SummaryReq(BaseModel):
-    project_id: str
-    agent_id: str
-    session_id: str
-    summary_text: str
-
-@app.post("/api/summaries")
-async def api_save_summary(req: SummaryReq):
-    fpath = save_session_summary(req.project_id, req.session_id, req.agent_id, req.summary_text)
-    return {"saved_file": str(fpath)}
 
 # ── Session CRUD ──────────────────────────────
 
@@ -2372,15 +2356,6 @@ async def api_knowledge_list(scope: str | None = None, project_id: str | None = 
     """列出知识条目（可按作用域/项目过滤）。读取前对账：外部删除的 .md 同步清出索引。"""
     _wh.prune_missing()
     return _wh.list_entries(scope, project_id)
-
-
-@app.get("/api/knowledge/entries/{entry_id}")
-async def api_knowledge_get(entry_id: str):
-    _wh.prune_missing()  # 查虫K-1：外部删除后单条读取也同步，不返回幽灵条目
-    entry = _wh.get_entry(entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="知识条目不存在")
-    return entry
 
 
 @app.delete("/api/knowledge/entries/{entry_id}")

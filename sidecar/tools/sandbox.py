@@ -30,27 +30,6 @@ from __future__ import annotations
 from pathlib import Path
 
 
-class SandboxViolation(Exception):
-    def __init__(self, path: str):
-        self.path = path
-        super().__init__(f"outside_sandbox: {path}")
-
-
-def ensure_inside(sandbox_root: str | Path, target: str | Path) -> Path:
-    """校验 target 在 sandbox_root 内（含自身）。越界 raise SandboxViolation。"""
-    root = Path(sandbox_root).expanduser().resolve()
-    t = Path(target).expanduser()
-    # 相对路径视为相对 sandbox_root
-    if not t.is_absolute():
-        t = root / t
-    t = t.resolve()
-    if t == root:
-        return t
-    if not t.is_relative_to(root):
-        raise SandboxViolation(str(target))
-    return t
-
-
 # ── 敏感路径清单（2026-08-28 权限重构）──────────────────────────────
 # 仅对这些位置的"删除"需要用户确认；其余位置默认放行。
 # 绝对路径目录（系统级）：
