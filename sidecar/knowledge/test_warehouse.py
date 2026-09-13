@@ -27,6 +27,8 @@
   W7 消息归档：archive_messages 标记 + load_messages 返回 archived
   W8 标题自动生成：转移时留空取首条前 20 字
   W9 frontmatter 往返：_entry_to_md → _parse_md 无损
+  W10 search_scoped 编排（B9-2/R4-S3 收敛）：scope 隔离 / all 合并按分降序 /
+      limit 钳制（<1→1、>20→20、非数字→默认 5）/ prune_missing 对账生效
 
 venv 内 PYTHONPATH=.. python knowledge/test_warehouse.py 直接跑。
 """
@@ -165,6 +167,68 @@ def main():
               all(x["id"] != e1["id"] for x in wh.search_entries("外部删除测试", "global")))
         # 第二次对账应清除 0 条（幂等）
         check("W9e 二次对账清除 0 条", wh.prune_missing() == 0)
+
+    # W10 search_scoped 编排收敛（B9-2/R4-S3：loop.py 与 registry.py 双实现 → warehouse 单一实现）
+    # ① scope=project/global 各自只查对应库（真实条目 + keyword 模式，确定性不依赖向量模型）
+    pa = wh.add_entry("project", pid, "边界奇点项目条目", "边界奇点只应出现在项目库")
+    ga = wh.add_entry("global", None, "边界奇点全局条目", "边界奇点只应出现在全局库")
+    check("W10a 双库条目准备", pa is not None and ga is not None)
+    rp = wh.search_scoped("边界奇点", "project", pid, 10, mode="keyword")
+    check("W10b scope=project 只查项目库",
+          any(x["id"] == pa["id"] for x in rp) and all(x["scope"] == "project" for x in rp),
+          str([(x["title"], x["scope"]) for x in rp]))
+    rg = wh.search_scoped("边界奇点", "global", pid, 10, mode="keyword")
+    check("W10c scope=global 只查全局库",
+          any(x["id"] == ga["id"] for x in rg) and all(x["scope"] == "global" for x in rg),
+          str([(x["title"], x["scope"]) for x in rg]))
+
+    # ②③ scope=all 合并/降序/截断 + limit 钳制：桩 hybrid_search 灌入确定性分数
+    #    （keyword 模式下条目无 score 字段，无法驱动排序断言；桩掉不影响被测的编排逻辑本身）
+    _orig_hybrid = wh.hybrid_search
+    try:
+        def _fake_hybrid(q, scope, pid_, limit, mode="hybrid"):
+            if scope == "project":
+                return [{"id": "p1", "title": "P1", "scope": "project", "score": 0.5, "body": ""}]
+            return [{"id": "g1", "title": "G1", "scope": "global", "score": 0.9, "body": ""},
+                    {"id": "g2", "title": "G2", "scope": "global", "score": 0.1, "body": ""}]
+        wh.hybrid_search = _fake_hybrid
+        hits = wh.search_scoped("x", "all", pid, 10)
+        check("W10d scope=all 合并按 score 降序",
+              [h["id"] for h in hits] == ["g1", "p1", "g2"], str([h["id"] for h in hits]))
+
+        _calls = []
+
+        def _fake_hybrid_many(q, scope, pid_, limit, mode="hybrid"):
+            _calls.append((scope, limit))
+            # 单库分支由 hybrid_search 内部截断（与真实实现一致），桩照做
+            return [{"id": f"{scope}{i}", "title": str(i), "scope": scope,
+                     "score": float(i), "body": ""} for i in range(30)][:limit]
+        wh.hybrid_search = _fake_hybrid_many
+        h = wh.search_scoped("x", "global", pid, -3)
+        check("W10e limit<1 钳到 1", len(h) == 1 and _calls[-1][1] == 1,
+              f"len={len(h)} limit={_calls[-1][1]}")
+        h = wh.search_scoped("x", "global", pid, 99)
+        check("W10f limit>20 钳到 20", len(h) == 20 and _calls[-1][1] == 20,
+              f"len={len(h)} limit={_calls[-1][1]}")
+        h = wh.search_scoped("x", "global", pid, "abc")
+        check("W10g 非数字 limit 回默认 5", len(h) == 5 and _calls[-1][1] == 5,
+              f"len={len(h)} limit={_calls[-1][1]}")
+        h = wh.search_scoped("x", "all", pid, 5)
+        check("W10h scope=all 合并后截断到 limit", len(h) == 5, f"len={len(h)}")
+    finally:
+        wh.hybrid_search = _orig_hybrid
+
+    # ④ prune_missing 生效：外部删掉 .md 后条目不出现在 search_scoped 结果
+    pe = wh.add_entry("global", None, "对账幽灵条目", "对账幽灵条目的正文内容")
+    check("W10i 幽灵条目创建", pe is not None)
+    if pe:
+        r1 = wh.search_scoped("对账幽灵", "global", pid, 10, mode="keyword")
+        check("W10j 删除前可搜到", any(x["id"] == pe["id"] for x in r1),
+              str([x["title"] for x in r1]))
+        Path(pe["file_path"]).unlink()  # 模拟用户在 Finder 直接删除 .md
+        r2 = wh.search_scoped("对账幽灵", "global", pid, 10, mode="keyword")
+        check("W10k 外部删除后 search_scoped 不再返回（内部已对账）",
+              all(x["id"] != pe["id"] for x in r2), str([x["title"] for x in r2]))
 
     # 清理
     wh._DATA_ROOT_OVERRIDE = None

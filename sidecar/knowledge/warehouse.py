@@ -573,6 +573,40 @@ def prune_missing() -> int:
     return len(missing)
 
 
+def search_scoped(query: str, scope: str = "all", project_id: str | None = None,
+                  limit: int = 5, mode: str = "hybrid") -> list[dict[str, Any]]:
+    """search_knowledge 检索编排的**单一实现**（B9-2/R4-S3 收敛）。
+
+    原为 loop.py（search_knowledge 工具路由）与 app_modules/registry.py
+    （knowledge_search 模块动作）两份逐行同构副本：scope/mode 默认 →
+    limit clamp(1,20) → 外部删除对账 → project/global/all 三分支 →
+    all 合并按分降序截断。双实现必漂移，故收敛至此；两处调用点只保留各自的
+    参数提取、错误文案与 item 塑形（body 截断长度、字段取舍不同）。
+
+    返回标准化 hit dict（get_entry 全字段 + score；keyword 模式无 score 时
+    all 分支按 0 处理，与原行为一致），由调用点自行塑形。
+    """
+    scope = str(scope or "all").strip()
+    mode = str(mode or "hybrid").strip()
+    try:
+        limit = max(1, min(int(limit or 5), 20))
+    except (TypeError, ValueError):
+        limit = 5
+    # K-1 外部删除对账（权威注释，自两处调用点整体搬迁至此，只留这一处）：
+    # 用户在 Finder 直接删 .md 后索引里会留"幽灵条目"，检索前先对账清除
+    # （文件是本体，索引单向跟随），不返回幽灵条目。
+    prune_missing()
+    pid = project_id or None
+    if scope == PROJECT_SCOPE:
+        return hybrid_search(query, PROJECT_SCOPE, pid, limit, mode=mode)
+    if scope == GLOBAL_SCOPE:
+        return hybrid_search(query, GLOBAL_SCOPE, None, limit, mode=mode)
+    # all：两作用域合并取分高者
+    h1 = hybrid_search(query, PROJECT_SCOPE, pid, limit, mode=mode)
+    h2 = hybrid_search(query, GLOBAL_SCOPE, None, limit, mode=mode)
+    return sorted(h1 + h2, key=lambda e: -float(e.get("score") or 0))[:limit]
+
+
 # ---------- TS-120 阶段二：语义向量挂钩 ----------
 def _embed_entry(entry_id: str, title: str, body: str, keywords: list[str]) -> bool:
     """给条目编码并写入向量表。模型不可用 → 静默跳过（检索降级为纯关键词）。

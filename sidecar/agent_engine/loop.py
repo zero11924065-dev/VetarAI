@@ -1548,16 +1548,8 @@ async def run_tool_loop(
                         _limit = 5
                     try:
                         from sidecar.knowledge import warehouse as _wh
-                        _wh.prune_missing()  # 外部删除对账
                         _pid_k = knowledge_ctx.get("project_id") or ""
-                        if _scope == "project":
-                            hits = _wh.hybrid_search(_q, "project", _pid_k, _limit, mode=_mode)
-                        elif _scope == "global":
-                            hits = _wh.hybrid_search(_q, "global", None, _limit, mode=_mode)
-                        else:  # all：两作用域合并取分高者
-                            _h1 = _wh.hybrid_search(_q, "project", _pid_k, _limit, mode=_mode)
-                            _h2 = _wh.hybrid_search(_q, "global", None, _limit, mode=_mode)
-                            hits = sorted(_h1 + _h2, key=lambda e: -float(e.get("score") or 0))[:_limit]
+                        hits = _wh.search_scoped(_q, _scope, _pid_k, _limit, mode=_mode)
                         _items = [{"title": h.get("title"), "scope": h.get("scope"),
                                    "score": h.get("score"), "body": (h.get("body") or "")[:2000]}
                                   for h in hits]

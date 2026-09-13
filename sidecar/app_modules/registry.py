@@ -197,16 +197,8 @@ async def _knowledge_search(params: dict, ctx: dict) -> dict:
         limit = max(1, min(int(params.get("limit") or 5), 20))
     except (TypeError, ValueError):
         limit = 5
-    _wh.prune_missing()   # 外部删除对账，不返回幽灵条目
     pid = str(params.get("project_id") or ctx.get("project_id") or "") or None
-    if scope == "project":
-        hits = _wh.hybrid_search(q, "project", pid, limit, mode=mode)
-    elif scope == "global":
-        hits = _wh.hybrid_search(q, "global", None, limit, mode=mode)
-    else:
-        h1 = _wh.hybrid_search(q, "project", pid, limit, mode=mode)
-        h2 = _wh.hybrid_search(q, "global", None, limit, mode=mode)
-        hits = sorted(h1 + h2, key=lambda e: -float(e.get("score") or 0))[:limit]
+    hits = _wh.search_scoped(q, scope, pid, limit, mode=mode)
     items = [{"id": h.get("id"), "title": h.get("title"), "scope": h.get("scope"),
               "score": h.get("score"), "body": (h.get("body") or "")[:1500]} for h in hits]
     return {"ok": True, "count": len(items), "items": items,
