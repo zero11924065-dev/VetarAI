@@ -694,10 +694,9 @@ async def api_auth_respond(req: AuthRespondReq):
 
 # ── Agent update ─────────────────────────────
 
-class AgentUpdateReq(BaseModel):
-    name: str | None = None
-    model_name: str | None = None
-    system_prompt: str | None = None
+# R4-M3：字段集与 IndepAgentUpdateReq（:271）全同
+# （name/model_name/system_prompt 均 str|None=None），别名为兼容既有路由签名保留。
+AgentUpdateReq = IndepAgentUpdateReq
 
 @app.put("/api/agents/{project_id}/{agent_id}")
 async def api_update_agent(project_id: str, agent_id: str, req: AgentUpdateReq):

@@ -339,16 +339,17 @@ def _validate(cur: dict[str, Any]) -> None:
     if vpa is not None and not isinstance(vpa, bool):
         raise ValueError("vision_parse_attachments 必须是 bool")
     # checkpoint-068：委派健壮性与并发开关校验
-    dat = cur.get("delegation_activity_timeout")
-    if dat is not None and (not isinstance(dat, (int, float)) or isinstance(dat, bool) or not (0 <= float(dat) <= 86400)):
-        raise ValueError("delegation_activity_timeout 必须是 0-86400 的秒数（0=关闭）")
+    # 0.4.12（B2）：权限弹窗超时。0=无限等待，上限 24h（86400s）防误填天文数字。
+    # R4-S6：两条超时校验规则同构（0-86400 的秒数，0=不限），仅字段名/文案后缀不同，归一为循环；
+    # ⛔ 规则与错误文案逐字不变，默认值/取值范围不动。
+    for key, label in (("delegation_activity_timeout", "0=关闭"),
+                       ("auth_confirm_timeout", "0=无限等待")):
+        v = cur.get(key)
+        if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= float(v) <= 86400)):
+            raise ValueError(f"{key} 必须是 0-86400 的秒数（{label}）")
     dmr = cur.get("delegation_max_retries")
     if dmr is not None and (not isinstance(dmr, int) or isinstance(dmr, bool) or not (0 <= dmr <= 10)):
         raise ValueError("delegation_max_retries 必须是 0-10 的整数（0=不限）")
-    # 0.4.12（B2）：权限弹窗超时。0=无限等待，上限 24h（86400s）防误填天文数字。
-    act = cur.get("auth_confirm_timeout")
-    if act is not None and (not isinstance(act, (int, float)) or isinstance(act, bool) or not (0 <= float(act) <= 86400)):
-        raise ValueError("auth_confirm_timeout 必须是 0-86400 的秒数（0=无限等待）")
     for k in ("delegation_auto_cleanup", "model_parallel", "task_concurrency"):
         v = cur.get(k)
         if v is not None and not isinstance(v, bool):
