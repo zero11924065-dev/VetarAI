@@ -247,7 +247,6 @@ def _extract_json_candidate(text: str) -> str | None:
     if not text:
         return None
     t = text.strip()
-    # 优先剥 markdown 围栏
     if "```" in t:
         for seg in t.split("```"):
             s = seg.strip()
@@ -742,7 +741,7 @@ async def run_delegated_task(
             if not _mp:
                 _last_model = _LAST_DELEGATED_MODEL.get(project_id)
                 if _last_model and _last_model != model:
-                    await asyncio.sleep(5)  # 等待 Ollama 自动 GC 旧模型
+                    await asyncio.sleep(5)
             _LAST_DELEGATED_MODEL[project_id] = model
             # 上下文隔离（决策 2）：为子 Agent 新建独立会话，只有任务书，无主对话历史
             child_sid = create_session(project_id, target_agent_id, title=f"委派任务 {task_id[:8]}")
