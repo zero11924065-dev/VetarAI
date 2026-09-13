@@ -33,17 +33,18 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   inference: { label: '推理', color: colors.accent },
   tool: { label: '工具', color: colors.warn },
   condition: { label: '条件', color: colors.warn },
-  parallel: { label: '并行', color: '#8B5CF6' },
-  loop: { label: '循环', color: '#8B5CF6' },
+  // A12：分类色降饱和（方向A 语义色柔和化；结构/布局零改动）
+  parallel: { label: '并行', color: '#8578C8' },
+  loop: { label: '循环', color: '#8578C8' },
   approval: { label: '审批', color: colors.danger },
-  file_input: { label: '文件输入', color: '#0EA5E9' },
-  file_read: { label: '文件读取', color: '#0EA5E9' },
-  file_output: { label: '文件输出', color: '#0EA5E9' },
+  file_input: { label: '文件输入', color: '#5B8DB8' },
+  file_read: { label: '文件读取', color: '#5B8DB8' },
+  file_output: { label: '文件输出', color: '#5B8DB8' },
   // TS-121（0.3.1 补遗1）
-  text_output: { label: '文本输出', color: '#10B981' },
-  variable_set: { label: '变量赋值', color: '#10B981' },
-  code: { label: '代码执行', color: '#F59E0B' },
-  reply: { label: '消息回复', color: '#10B981' },
+  text_output: { label: '文本输出', color: '#5FA388' },
+  variable_set: { label: '变量赋值', color: '#5FA388' },
+  code: { label: '代码执行', color: colors.warn },
+  reply: { label: '消息回复', color: '#5FA388' },
   end: { label: '结束', color: colors.textSecondary },
 };
 
