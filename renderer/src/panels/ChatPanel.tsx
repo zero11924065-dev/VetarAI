@@ -296,7 +296,6 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
   // = C8"不可折叠"症状），也不算 failed（否则 B4 约束①的警示色会谎报"失败"，
   // 而用户主动停止并不是工具出错）。
   const interrupted = steps.filter(s => s.status === 'interrupted').length;
-  // 自动收拢条件：外层已告知流结束，且没有仍在跑的步骤
   const shouldCollapse = done && running === 0;
   const [userToggled, setUserToggled] = useState(false);
   const [open, setOpen] = useState(false);
@@ -340,7 +339,7 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
   }, [collapsed]);
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
 
-  const handleBarClick = () => {   // 收拢 → 展开
+  const handleBarClick = () => {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
     setUserClosing(false);
     setUserToggled(true); setOpen(true);
@@ -488,7 +487,6 @@ function VisionRescueCard({ projectId, agentId, currentModel, onSwitched }: {
     }).catch(() => {});
   }, [API2]);
 
-  // 视觉模型候选：名称含 vl / vision（排除当前模型）
   const visionCandidates = models.filter(m =>
     m.name !== currentModel && /vl|vision/i.test(m.name));
 
@@ -910,7 +908,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     }
     return null;
   }, [projectId, agentId]);
-  // 刷新按钮 loading 态
   const [refreshing, setRefreshing] = useState(false);
   const handleRefreshSessions = useCallback(async () => {
     setRefreshing(true);
@@ -952,7 +949,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (data.length > 0) {
         targetSessionId = data[0].id;
       } else {
-        // 没有会话，自动新建一个
         try {
           const res = await fetch(`${API}/sessions`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1020,7 +1016,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       const newSession: Session = { id: d.session_id, title: `会话 ${sessions.length + 1}`, message_count: 0 };
       setSessions(prev => [newSession, ...prev]);
       setCurrentSessionId(d.session_id);
-      setLocalMessages([]); // 新会话 = 空白
+      setLocalMessages([]);
     } catch (e) { console.error('new session:', e); }
   }
 
@@ -1211,7 +1207,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (currentSessionId === sid) {
         setCurrentSessionId(null);
         setLocalMessages([]);
-        // 如果还有其他会话，切到第一个
         const remaining = sessions.filter(s => s.id !== sid);
         if (remaining.length > 0) {
           handleSwitchSession(remaining[0].id);
@@ -1376,7 +1371,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
     const userMsg: Message = { id: newLocalMsgId(), role: 'user', content: parts.join('\n'), pending_images: imageItems.map(i => i.dataUri) };
 
-    // 立即更新 UI
     const newLocal = [...localMessages, userMsg];
     setLocalMessages(newLocal);
     // checkpoint-055：user 消息立即写缓存（此前仅 done 时同步 assistant，缓存残缺是切回丢消息根因之一）
@@ -1482,7 +1476,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         lastCacheSync = Date.now();
         setLocalMessages(prev => { syncSessionLocal(streamSid, prev); return prev; });
       };
-      if (cacheSyncTimerRef.current) return; // 已有挂起的同步
+      if (cacheSyncTimerRef.current) return;
       const elapsed = Date.now() - lastCacheSync;
       if (elapsed >= 500) doSync();
       else cacheSyncTimerRef.current = setTimeout(doSync, 500 - elapsed);
@@ -1596,7 +1590,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // ⛔ B12：计时器已上移为流级，本函数**不再创建/清除计时器**，只负责置思考态与记录起点。
     let thinkingPhaseOpen = false;
     const startThinkingPhase = () => {
-      if (thinkingPhaseOpen) return; // 阶段已开
+      if (thinkingPhaseOpen) return;
       thinkingPhaseOpen = true;
       thinkingStartedAt = Date.now();
       patchStreamMsg(m => m.thinking ? m : { ...m, thinking: true, thinkingElapsed: 0 });
@@ -2028,7 +2022,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           //   逐行同构，事件同步派发时序不变）。⛔ 仅换循环壳，applyEventWrapped/F4 节流等不动。
           await consumeSSE(res.body, applyEventWrapped);
           stopWaitTimer();
-          break; // 流正常读完 → 结束
+          break;
         } catch (e: any) {
           stopWaitTimer();
           if (e?.name === 'AbortError') {
@@ -2457,7 +2451,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           const bubblePadding = isUser || isSystem ? '10px 14px' : '2px 0';
           return (
             <div key={msg.id || i} className="ui-rise-in" style={{ maxWidth:820, margin:'0 auto 14px', display:'flex', flexDirection:'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
-              {/* 角色标签行 */}
               <div style={{fontSize:11,color:colors.textTertiary,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
                 {/* TS-120：勾选模式下显示复选框（系统消息不可勾选）。TS-121：流结束后
                     alignLocalIdsWithDb 已把 local_ 临时 id 换成 DB 数字 id，勾选即刻可用。
@@ -2471,7 +2464,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 {isUser ? '你' : isSystem ? '系统' : (msg.model_used || 'AI')}
                 {msg.created_at && <span style={{marginLeft:4,opacity:0.7}}>{formatTime(msg.created_at)}</span>}
               </div>
-              {/* 气泡 */}
               {/* B3：maxWidth 已封顶，但 flex 子项默认 min-width:auto（不得小于内容宽度），
                   长串会把气泡顶开并在消息区拉出横向滚动条；minWidth:0 解开该下限即可让
                   overflow-wrap:anywhere 生效。⛔ 这里**故意不加 overflow:hidden**——那会把仍溢出的
@@ -2555,7 +2547,6 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 {msg.role === 'user'
                   ? <div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word',fontSize:14,lineHeight:1.65,minWidth:0,maxWidth:'100%'}}>{msg.content}</div>
                   : <StreamingMarkdown text={msg.content} />}
-                {/* 流式打字机光标 */}
                 {msg.role === 'assistant' && isStreamingThis && (
                   <span className="ui-caret" style={{height:16,verticalAlign:'middle'}}>&nbsp;</span>
                 )}
