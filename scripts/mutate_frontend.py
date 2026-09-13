@@ -94,8 +94,8 @@ MUTATIONS: list[dict] = [
         "why": "streamOn 驱动标题行的实时连接指示点（绿=已连 / 灰=需手动刷新）。"
                "撤掉后指示器恒为灰，用户无法分辨是'没进展'还是'没连上'。",
         "file": PANELS / "TaskPanel.tsx",
-        "anchor": "        setStreamOn(true);",
-        "mutant": "        // MUTATE-4：不标记已连接",
+        "anchor": "      onConnect: () => setStreamOn(true),",
+        "mutant": "      onConnect: () => {},  // MUTATE-4：不标记已连接",
         "test": "src/__tests__/taskPanel.test.tsx",
         "expect_fail": ["S8"],
     },
