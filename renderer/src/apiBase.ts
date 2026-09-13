@@ -58,15 +58,3 @@ export function getApiBase(): string {
 export function setApiBase(url: string): void {
   localStorage.setItem(LS_KEY, url.replace(/\/$/, ''));
 }
-
-/** Ask the sidecar for its config; returns { ok, base?, config? } */
-export async function probeConfig(currentBase: string): Promise<{ ok: boolean; config?: any; base?: string }> {
-  try {
-    const r = await fetch(`${currentBase}/config`, { signal: AbortSignal.timeout(2500) });
-    if (!r.ok) return { ok: false };
-    const cfg = await r.json();
-    return { ok: true, config: cfg, base: currentBase };
-  } catch {
-    return { ok: false };
-  }
-}

@@ -217,11 +217,3 @@ export function purgeSessionLocal(sessionId: string) {
   delete _store[sessionId];
   persist();
 }
-
-/** 删除某个 agent 的所有本地缓存（配合 API 删除 agent） */
-export function purgeAgentLocal(agentSessionIds: string[]) {
-  for (const sid of agentSessionIds) {
-    delete _store[sid];
-  }
-  persist();
-}

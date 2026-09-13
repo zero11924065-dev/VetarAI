@@ -67,11 +67,6 @@ export function jsonRes(data: unknown, status = 200): Response {
   });
 }
 
-/** 纯文本响应（用于 res.text() 路径，如错误详情读取）。 */
-export function textRes(text: string, status = 200): Response {
-  return new Response(text, { status, headers: { 'Content-Type': 'text/plain' } });
-}
-
 /**
  * SSE 流式响应：body 是真实 ReadableStream，可被 res.body.getReader() 消费。
  * 用于 /ollama/chat/stream 这类流式端点。
