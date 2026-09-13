@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson } from '../lib/api';
 import React, { useEffect, useState, useCallback } from 'react';
 import { Roundtable } from './RoundtableView';
 import { colors, fonts, radius, typo, btnPrimary, btnGhost, input, select as selectStyle, badge, calloutStyle } from '../theme';
@@ -114,7 +115,7 @@ export function RoundtablePanel({ projectId, selectedId, onSelect }: {
     if (moderator === 'ai' && !moderatorAgentId) { setError('请选择 AI 主持人'); return; }
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${API}/projects/${projectId}/roundtables`, {
+      const data = await apiJson(`/projects/${projectId}/roundtables`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           topic: topic.trim(), agent_ids: selectedAgents,
@@ -123,8 +124,6 @@ export function RoundtablePanel({ projectId, selectedId, onSelect }: {
           attachments: pendingFiles,
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
       setTopic(''); setSelectedAgents([]); setModerator('user'); setModeratorAgentId('');
       setPendingFiles([]);
       fetchRoundtables();

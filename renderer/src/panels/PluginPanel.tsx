@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson } from '../lib/api';
 import React, { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, btnDangerSoft, btnGhost, input, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
@@ -148,15 +149,11 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`${API}/plugins/${encodeURIComponent(name)}/toggle`, {
+      await apiJson(`/plugins/${encodeURIComponent(name)}/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !currentEnabled }),
       });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail || `HTTP ${res.status}`);
-      }
       setPlugins(prev => prev.map(p => p.name === name ? { ...p, enabled: !currentEnabled } : p));
       setNotice(`插件 "${name}" 已${!currentEnabled ? '启用' : '禁用'}`);
     } catch (e: any) {

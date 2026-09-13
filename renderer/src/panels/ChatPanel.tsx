@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson, flash } from '../lib/api';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -422,11 +423,10 @@ function ModelRescueBar({ projectId, agentId, currentModel, onSwitched }: {
     if (!name || busy) return;
     setBusy(true); setInfo(null);
     try {
-      const res = await fetch(`${API2}/agents/${projectId}/${agentId}`, {
+      await apiJson(`/agents/${projectId}/${agentId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_name: name }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
       setInfo(`已切换到 ${name}，正在重新发送…`);
       setTimeout(() => onSwitched(), 400);
     } catch (e) { setInfo('切换失败: ' + (e as Error).message); }
@@ -437,11 +437,10 @@ function ModelRescueBar({ projectId, agentId, currentModel, onSwitched }: {
     if (pulling) return;
     setPulling(true); setInfo(`正在拉取 ${currentModel} …（首次拉取可能较久）`);
     try {
-      const res = await fetch(`${API2}/ollama/pull`, {
+      await apiJson(`/ollama/pull`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: currentModel }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
       setInfo(`拉取完成：${currentModel}。请点击"重新发送"。`);
     } catch (e) { setInfo('拉取失败: ' + (e as Error).message); }
     finally { setPulling(false); }
@@ -497,11 +496,10 @@ function VisionRescueCard({ projectId, agentId, currentModel, onSwitched }: {
     if (!name || busy) return;
     setBusy(true); setInfo(null);
     try {
-      const res = await fetch(`${API2}/agents/${projectId}/${agentId}`, {
+      await apiJson(`/agents/${projectId}/${agentId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_name: name }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
       setInfo(`已切换到 ${name}，正在重新发送…`);
       setTimeout(() => onSwitched(), 400);
     } catch (e) { setInfo('切换失败: ' + (e as Error).message); }
@@ -512,11 +510,10 @@ function VisionRescueCard({ projectId, agentId, currentModel, onSwitched }: {
     if (pulling) return;
     setPulling(true); setInfo('正在拉取 qwen2.5-vl …（首次拉取可能较久）');
     try {
-      const res = await fetch(`${API2}/ollama/pull`, {
+      await apiJson(`/ollama/pull`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'qwen2.5-vl' }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
       setInfo('拉取完成：qwen2.5-vl。请从上方下拉框切换后自动重发，或点"重新发送"。');
     } catch (e) { setInfo('拉取失败: ' + (e as Error).message); }
     finally { setPulling(false); }
@@ -1051,11 +1048,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       });
       const d = await res.json();
       if (!res.ok) throw new Error(_errMsg(d, res.status));
-      setToast(`已导出：${d.name}`);
-      setTimeout(() => setToast(null), 4000);
+      flash(setToast, `已导出：${d.name}`, 4000);
     } catch (e) {
-      setToast('导出失败: ' + (e as Error).message);
-      setTimeout(() => setToast(null), 4000);
+      flash(setToast, '导出失败: ' + (e as Error).message, 4000);
     }
   }
 
@@ -1073,11 +1068,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       });
       const d = await res.json();
       if (!res.ok) throw new Error(_errMsg(d, res.status));
-      setToast(`总结已保存 ✓（${d.saved_file?.split('/').pop() || ''}）`);
-      setTimeout(() => setToast(null), 5000);
+      flash(setToast, `总结已保存 ✓（${d.saved_file?.split('/').pop() || ''}）`, 5000);
     } catch (e) {
-      setToast('总结失败: ' + (e as Error).message);
-      setTimeout(() => setToast(null), 5000);
+      flash(setToast, '总结失败: ' + (e as Error).message, 5000);
     } finally {
       setSummarizing(false);
     }
@@ -1182,8 +1175,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                                          localMessagesRef.current, selectedMsgIds);
       backendCtxCharsRef.current = _arch.nextCtxChars;
       if (_arch.nextTokenUsed !== null) setTokenUsed(_arch.nextTokenUsed);
-      setToast(`已移入知识仓库 ✓（${d.title}）`);
-      setTimeout(() => setToast(null), 4000);
+      flash(setToast, `已移入知识仓库 ✓（${d.title}）`, 4000);
       // 关闭弹窗、清空勾选；自动展开右侧面板（问题2：转移后即时可见新条目）。
       // 查虫K-3：转移序号递增 + key 含作用域，连续转移同一作用域也能重新定位。
       setShowTransferModal(false);
@@ -1193,8 +1185,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       setWarehouseTransferSeq(v => v + 1);
       setTransferTitle(''); setTransferCategory(''); setTransferKeywords('');
     } catch (e) {
-      setToast('转移失败: ' + (e as Error).message);
-      setTimeout(() => setToast(null), 4000);
+      flash(setToast, '转移失败: ' + (e as Error).message, 4000);
     } finally {
       setTransferring(false);
     }
@@ -2145,8 +2136,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       //   于是提示一闪而过、用户什么也看不到 = **完全感知不到失败**。
       //   toast 不归流生命周期管，能稳定显示 4 秒。
       if (!d.ok) {
-        setToast(d.detail || '当前没有进行中的生成，请直接发送');
-        setTimeout(() => setToast(null), 4000);
+        flash(setToast, d.detail || '当前没有进行中的生成，请直接发送', 4000);
       }
     } catch (e) { console.error('inject failed:', e); }
   }
@@ -2318,8 +2308,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               try {
                 await fetch(`${API}/sessions/${currentSessionId}/compact`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({}) });
                 setCompactWarning(null);
-                setToast('已压缩，继续任务中...');
-                setTimeout(() => setToast(null), 3000);
+                flash(setToast, '已压缩，继续任务中...', 3000);
                 // ⛔⛔ B13 修复（2026-09-11，两条真实 bug）：
                 //   旧实现 `setInput(lastUser.content); setTimeout(()=>handleSend(),500)` 有两个缺陷：
                 //   ① **回填输入框**＝播下重复种子：用户看到输入框里出现刚发过的消息，任何后续回车
@@ -2352,8 +2341,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             <button className="ui-btn ui-btn-secondary" onClick={async () => {
               setCompactWarning(null);
               await handleNewSession();
-              setToast('已开新会话，请重新描述任务');
-              setTimeout(() => setToast(null), 3000);
+              flash(setToast, '已开新会话，请重新描述任务', 3000);
             }} style={{...btnSecondary, height:28}}>清空开新会话</button>
             <button className="ui-btn ui-btn-danger-soft" onClick={async () => {
               try {
@@ -2362,8 +2350,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 await fetch(`${API}/sessions/${currentSessionId}/export`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ dir }) });
                 setCompactWarning(null);
                 await handleNewSession();
-                setToast('已导出并开新会话');
-                setTimeout(() => setToast(null), 3000);
+                flash(setToast, '已导出并开新会话', 3000);
               } catch (e) { setToast('导出失败: ' + (e as Error).message); }
             }} style={{...btnDangerSoft, height:28}}>导出后清空</button>
           </div>
@@ -2775,8 +2762,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         onInject={(text) => {
           // 把勾选知识拼进输入框（作为用户消息注入会话，仅勾选的条目）
           setInput(prev => prev ? prev + '\n\n' + text : text);
-          setToast('知识已注入输入框，确认后发送');
-          setTimeout(() => setToast(null), 3000);
+          flash(setToast, '知识已注入输入框，确认后发送', 3000);
         }}
       />
     )}

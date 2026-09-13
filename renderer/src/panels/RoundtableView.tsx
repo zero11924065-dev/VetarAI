@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson, flash } from '../lib/api';
 import { reportBusy } from '../busyState';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { colors, fonts, radius, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, badge, calloutStyle } from '../theme';
@@ -153,9 +154,7 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
     if (busy) return;
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${API}/roundtables/${roundtableId}/continue?project_id=${projectId}`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      const data = await apiJson(`/roundtables/${roundtableId}/continue?project_id=${projectId}`, { method: 'POST' });
       fetchDetail();
     } catch (e) { setError('继续失败: ' + (e as Error).message); }
     finally { setBusy(false); }
@@ -165,9 +164,7 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
     if (busy) return;
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${API}/roundtables/${roundtableId}/finish?project_id=${projectId}`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      const data = await apiJson(`/roundtables/${roundtableId}/finish?project_id=${projectId}`, { method: 'POST' });
       fetchDetail();
     } catch (e) { setError('结束失败: ' + (e as Error).message); }
     finally { setBusy(false); }
@@ -179,11 +176,8 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
     if (stopping) return;
     setStopping(true); setError(null);
     try {
-      const res = await fetch(`${API}/roundtables/${roundtableId}/stop?project_id=${projectId}`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
-      setNotice('已请求停止，将在当前发言完成后中止');
-      setTimeout(() => setNotice(null), 6000);
+      const data = await apiJson(`/roundtables/${roundtableId}/stop?project_id=${projectId}`, { method: 'POST' });
+      flash(setNotice, '已请求停止，将在当前发言完成后中止', 6000);
       fetchDetail();
     } catch (e) { setError('停止失败: ' + (e as Error).message); }
     finally { setStopping(false); }
@@ -194,11 +188,8 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
     if (busy) return;
     setBusy(true); setError(null); setNotice(null);
     try {
-      const res = await fetch(`${API}/roundtables/${roundtableId}/export?project_id=${projectId}`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
-      setNotice(`已保存：${data.path || data.name || '未知路径'}`);
-      setTimeout(() => setNotice(null), 8000);
+      const data = await apiJson(`/roundtables/${roundtableId}/export?project_id=${projectId}`, { method: 'POST' });
+      flash(setNotice, `已保存：${data.path || data.name || '未知路径'}`, 8000);
     } catch (e) { setError('保存失败: ' + (e as Error).message); }
     finally { setBusy(false); }
   };
@@ -210,9 +201,7 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
     if (!ok) return;
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${API}/roundtables/${roundtableId}?project_id=${projectId}`, { method: 'DELETE' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      const data = await apiJson(`/roundtables/${roundtableId}?project_id=${projectId}`, { method: 'DELETE' });
       onExit();  // 删除成功 → 退出大屏
     } catch (e) { setError('删除失败: ' + (e as Error).message); setBusy(false); }
   };

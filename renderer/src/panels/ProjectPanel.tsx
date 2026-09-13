@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson, flash } from '../lib/api';
 import { useEffect, useRef, useState } from 'react';
 import { colors, fonts, radius, shadow, typo, btnPrimary, btnSecondary, btnGhost, input, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
@@ -48,7 +49,6 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
   // TS-121（0.3.1 补遗2）：工作组 JSON 导出
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const flash = (msg: string) => { setNotice(msg); setTimeout(() => setNotice(null), 6000); };
 
   async function handleExportWorkgroup(pid: string, _pname: string) {
     if (exportingId) return;
@@ -57,9 +57,9 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
       const res = await fetch(`${API}/projects/${encodeURIComponent(pid)}/export-workgroup`, { method: 'POST' });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.detail || `HTTP ${res.status}`);
-      flash(`工作组已导出：${d.name}（目录：${String(d.path).replace(/\/[^/]*$/, '')}）`);
+      flash(setNotice, `工作组已导出：${d.name}（目录：${String(d.path).replace(/\/[^/]*$/, '')}）`, 6000);
     } catch (e: any) {
-      flash(`导出失败：${e?.message || e}`);
+      flash(setNotice, `导出失败：${e?.message || e}`, 6000);
     } finally {
       setExportingId(null);
     }
@@ -199,16 +199,11 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API}/projects`, {
+      const data = await apiJson(`/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: `项目 ${projects.length + 1}`, working_dir }),
       });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
       console.log('Created project:', data);
       setManualMode(false);
       setManualPath('');

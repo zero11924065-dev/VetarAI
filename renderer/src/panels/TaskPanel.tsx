@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson } from '../lib/api';
 import { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, btnSecondary, btnGhost, badge, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
@@ -242,9 +243,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
     setRetryingId(taskId);
     setRetryMsg(null);
     try {
-      const res = await fetch(`${API}/projects/${projectId}/tasks/${taskId}/retry`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      const data = await apiJson(`/projects/${projectId}/tasks/${taskId}/retry`, { method: 'POST' });
       const ok = data?.result?.ok;
       setRetryMsg(ok ? '重试完成：子任务成功交卷' : `重试完成但未成功：${data?.result?.error || '未知原因'}`);
       await fetchTasks();
@@ -260,9 +259,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
     setStoppingId(taskId);
     setStopMsg(null);
     try {
-      const res = await fetch(`${API}/projects/${projectId}/tasks/${taskId}/stop`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      const data = await apiJson(`/projects/${projectId}/tasks/${taskId}/stop`, { method: 'POST' });
       setStopMsg('已请求停止，将在当前步骤完成后中止');
       // 立即刷新一次拿到最新状态（轮询 8s 之外的人工刷新）
       await fetchTasks();

@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson, flash } from '../lib/api';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, btnGhost, input, textarea, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
@@ -186,11 +187,10 @@ function KnowledgeTab({ projectId }: { projectId: string | null }) {
   const saveEdit = async (name: string) => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${API}/projects/${projectId}/knowledge`, {
+      await apiJson(`/projects/${projectId}/knowledge`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, content: editContent }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
       setEditing(null); refresh();
     } catch (e) { setError('保存失败: ' + (e as Error).message); }
     finally { setBusy(false); }
@@ -201,11 +201,10 @@ function KnowledgeTab({ projectId }: { projectId: string | null }) {
     if (!name || name === '.md') { setError('请输入文件名'); return; }
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${API}/projects/${projectId}/knowledge`, {
+      await apiJson(`/projects/${projectId}/knowledge`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, content: '' }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
       setNewName(''); refresh();
     } catch (e) { setError('新建失败: ' + (e as Error).message); }
     finally { setBusy(false); }
@@ -316,12 +315,11 @@ function MemoryTab({ projectId }: { projectId: string | null }) {
   const save = async (scope: string, content: string) => {
     setBusy(true); setMsg(null);
     try {
-      const res = await fetch(`${API}/memory`, {
+      await apiJson(`/memory`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scope, project_id: projectId, content }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
-      setMsg('已保存 ✓'); setTimeout(() => setMsg(null), 2500);
+      flash(setMsg, '已保存 ✓', 2500);
     } catch (e) { setMsg('保存失败: ' + (e as Error).message); }
     finally { setBusy(false); }
   };
@@ -417,12 +415,11 @@ function SkillsTab() {
     if (!form.name.trim()) { setError('请输入技能名'); return; }
     setBusy(true); setError(null);
     try {
-      const url = isNew ? `${API}/skills` : `${API}/skills/${encodeURIComponent(editing || form.name)}`;
-      const res = await fetch(url, {
+      const url = isNew ? `/skills` : `/skills/${encodeURIComponent(editing || form.name)}`;
+      await apiJson(url, {
         method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: form.name.trim(), description: form.description, body: form.body, enabled: true }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
       setCreating(false); setEditing(null); setForm({ name: '', description: '', body: '' });
       refresh();
     } catch (e) { setError('保存失败: ' + (e as Error).message); }
@@ -450,12 +447,10 @@ function SkillsTab() {
     if (!installUrl.trim()) { setError('请输入仓库地址或本地路径'); return; }
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${API}/skills/install`, {
+      const d = await apiJson(`/skills/install`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: installUrl.trim() }),
       });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
       setInstallUrl(''); refresh();
     } catch (e) { setError('安装失败: ' + (e as Error).message); }
     finally { setBusy(false); }

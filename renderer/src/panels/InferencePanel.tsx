@@ -18,6 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { getApiBase } from '../apiBase';
+import { apiJson } from '../lib/api';
 import React, { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, input, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
@@ -78,12 +79,10 @@ export function InferencePanel() {
   const saveBackend = async (patch: any) => {
     setBusy(true); setMsg(null);
     try {
-      const res = await fetch(`${API}/config`, {
+      const d = await apiJson(`/config`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...cfg, ...patch }),
       });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
       setMsg('已保存 ✓');
       refresh();
     } catch (e) { setMsg('保存失败: ' + (e as Error).message); }
@@ -100,12 +99,10 @@ export function InferencePanel() {
     if (!pullName.trim() || busy) return;
     setBusy(true); setMsg(`正在拉取 ${pullName} …（首次拉取可能较久）`);
     try {
-      const res = await fetch(`${API}/ollama/pull`, {
+      const d = await apiJson(`/ollama/pull`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: pullName.trim() }),
       });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
       setMsg(`拉取完成：${pullName}`);
       setPullName('');
       refresh();
@@ -118,9 +115,7 @@ export function InferencePanel() {
     if (!ok) return;
     setBusy(true); setMsg(null);
     try {
-      const res = await fetch(`${API}/ollama/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+      const d = await apiJson(`/ollama/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
       setMsg(`已删除：${name}`);
       refresh();
     } catch (e) { setMsg('删除失败: ' + (e as Error).message); }
