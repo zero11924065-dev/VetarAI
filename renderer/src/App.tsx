@@ -150,14 +150,14 @@ export default function App() {
     selectAgent(agentId);
   };
 
-  // checkpoint-051：手风琴头（规范 §8.3）
+  // A12（0.4.25）「纸面工具」：手风琴头——圆角行 + 微标签字重，去掉分隔线堆叠
   const accordionHeadStyle = (key: PanelKey, open: boolean): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center', gap: 8, width: '100%', height: 36,
-    padding: '8px 12px', border: 'none', boxSizing: 'border-box',
-    background: open || hoverPanel === key ? colors.bgHover : 'transparent',
-    borderTop: `1px solid ${colors.borderSubtle}`,
+    display: 'flex', alignItems: 'center', gap: 7, width: 'calc(100% - 16px)', height: 32,
+    margin: '2px 8px 0', padding: '0 8px', border: 'none', boxSizing: 'border-box',
+    borderRadius: 8,
+    background: open ? colors.bgActive : hoverPanel === key ? colors.bgHover : 'transparent',
     color: open || hoverPanel === key ? colors.textPrimary : colors.textSecondary,
-    fontSize: 13, textAlign: 'left', cursor: 'pointer', fontFamily: fonts.base,
+    fontSize: 12.5, fontWeight: 500, textAlign: 'left', cursor: 'pointer', fontFamily: fonts.base,
     transition: 'background-color .15s ease, color .15s ease',
   });
 
@@ -181,7 +181,7 @@ export default function App() {
       {/* Left sidebar（flexShrink:0 防止被右侧超宽内容挤压出屏幕）
           checkpoint-046：打开整页设置时隐藏左栏（全屏展示，视觉体验优先）
           checkpoint-051：亮色主题（规范 §8.0） */}
-      <div style={{ width: 380, flexShrink: 0, background: colors.bgSidebar, borderRight: `1px solid ${colors.borderDefault}`, display: showSettingsPage ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ width: 320, flexShrink: 0, background: colors.bgSidebar, borderRight: `1px solid ${colors.borderDefault}`, display: showSettingsPage ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
         {/* checkpoint-058：独立 Agent（与项目平级的一等公民）——左栏最上方，
             不依赖任何项目；可单独创建/删除，删项目不影响 */}
         <IndependentAgentsPanel selectedAgentId={selectedAgentId} onSelect={selectIndependentAgent} onAgentDeleted={handleIndependentAgentDeleted} />
@@ -260,9 +260,16 @@ export default function App() {
           </div>
         )}
         {(!selectedProjectId || !viewingRtId) && !activeChatKey && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: colors.textTertiary }}>
-            <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>开始对话</h2>
-            <div style={{ fontSize: 13, color: colors.textTertiary, textAlign: 'center', lineHeight: 1.6 }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: colors.textTertiary }}>
+            <div style={{
+              width: 56, height: 56, borderRadius: 16, background: colors.bgCard,
+              border: `1px solid ${colors.borderSubtle}`, boxShadow: '0 1px 3px rgba(28,28,26,0.04)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDisabled,
+            }}>
+              <Icon name="message-circle" size={26} />
+            </div>
+            <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0, color: colors.textSecondary }}>开始对话</h2>
+            <div style={{ fontSize: 12.5, color: colors.textTertiary, textAlign: 'center', lineHeight: 1.7, maxWidth: 320 }}>
               在左侧选择一个项目和 Agent，或点击顶部「独立 Agent」创建一个不属于任何项目的 Agent。
             </div>
           </div>

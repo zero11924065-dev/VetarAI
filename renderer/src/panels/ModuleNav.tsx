@@ -23,6 +23,9 @@
  * 智能中心（默认）= 现有独立 Agent / 项目组 / 聊天页面（整体包为其二级视图，
  * 页面本身零改动）；流程中心 = 工作流模块。
  * 切换模块采用显示/隐藏（不卸载），聊天流与运行中的工作流在切换后不中断。
+ *
+ * A12（0.4.25）「纸面工具」：52px 细条导航——图标 + 微标签，
+ * 选中态 = 雾蓝浅底 + 左侧 3px 指示条；设置固定底部（两模块共用入口）。
  */
 import React, { useState } from 'react';
 import { colors, fonts } from '../theme';
@@ -43,54 +46,72 @@ const MODULES: { key: ModuleKey; label: string; icon: IconName }[] = [
   { key: 'workflow', label: '流程中心', icon: 'layers' },
 ];
 
+function NavButton({ label, icon, isActive, isHover, onClick, onEnter, onLeave, extraStyle }: {
+  label: string; icon: IconName; isActive: boolean; isHover: boolean;
+  onClick: () => void; onEnter: () => void; onLeave: () => void;
+  extraStyle?: React.CSSProperties;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      data-tip={label}
+      className="tip-right"
+      style={{
+        position: 'relative',
+        width: 42, height: 46, border: 'none', borderRadius: 10, cursor: 'pointer',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
+        background: isActive ? colors.bgSelected : isHover ? colors.bgHover : 'transparent',
+        color: isActive ? colors.accentText : colors.textSecondary,
+        fontFamily: fonts.base, transition: 'background-color .15s ease',
+        ...extraStyle,
+      }}>
+      {isActive && (
+        <span style={{
+          position: 'absolute', left: -5, top: 12, bottom: 12, width: 3,
+          borderRadius: 2, background: colors.accent,
+        }} />
+      )}
+      <Icon name={icon} size={18} />
+      <span style={{ fontSize: 10, fontWeight: isActive ? 600 : 400, letterSpacing: 0.2 }}>{label}</span>
+    </button>
+  );
+}
+
 export function ModuleNav({ active, onSelect, onOpenSettings, settingsActive }: Props) {
   const [hover, setHover] = useState<ModuleKey | 'settings' | null>(null);
   return (
     <div style={{
-      width: 64, flexShrink: 0, background: colors.bgSidebar,
+      width: 52, flexShrink: 0, background: colors.bgCard,
       borderRight: `1px solid ${colors.borderDefault}`,
       display: 'flex', flexDirection: 'column', alignItems: 'center',
-      paddingTop: 10, gap: 6,
+      paddingTop: 8, gap: 4,
     }}>
-      {MODULES.map(m => {
-        const isActive = !settingsActive && active === m.key;
-        const isHover = hover === m.key;
-        return (
-          <button key={m.key}
-            onClick={() => onSelect(m.key)}
-            onMouseEnter={() => setHover(m.key)}
-            onMouseLeave={() => setHover(null)}
-            style={{
-              width: 52, height: 52, border: 'none', borderRadius: 8, cursor: 'pointer',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
-              background: isActive ? colors.bgSelected : isHover ? colors.bgHover : 'transparent',
-              color: isActive ? colors.accentText : colors.textSecondary,
-              fontFamily: fonts.base, transition: 'background-color .15s ease',
-            }}>
-            <Icon name={m.icon} size={20} />
-            <span style={{ fontSize: 10, fontWeight: isActive ? 600 : 400 }}>{m.label}</span>
-          </button>
-        );
-      })}
+      {MODULES.map(m => (
+        <NavButton
+          key={m.key}
+          label={m.label}
+          icon={m.icon}
+          isActive={!settingsActive && active === m.key}
+          isHover={hover === m.key}
+          onClick={() => onSelect(m.key)}
+          onEnter={() => setHover(m.key)}
+          onLeave={() => setHover(null)}
+        />
+      ))}
       {/* 问题6：设置固定在导航底部——职能中心/流程中心都能进入设置 */}
       {onOpenSettings && (
-        <button
+        <NavButton
+          label="设置"
+          icon="settings"
+          isActive={!!settingsActive}
+          isHover={hover === 'settings'}
           onClick={onOpenSettings}
-          onMouseEnter={() => setHover('settings')}
-          onMouseLeave={() => setHover(null)}
-          data-tip="设置"
-          className="tip-right"
-          style={{
-            marginTop: 'auto', marginBottom: 10,
-            width: 52, height: 52, border: 'none', borderRadius: 8, cursor: 'pointer',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
-            background: settingsActive ? colors.bgSelected : hover === 'settings' ? colors.bgHover : 'transparent',
-            color: settingsActive ? colors.accentText : colors.textSecondary,
-            fontFamily: fonts.base, transition: 'background-color .15s ease',
-          }}>
-          <Icon name="settings" size={20} />
-          <span style={{ fontSize: 10, fontWeight: settingsActive ? 600 : 400 }}>设置</span>
-        </button>
+          onEnter={() => setHover('settings')}
+          onLeave={() => setHover(null)}
+          extraStyle={{ marginTop: 'auto', marginBottom: 8 }}
+        />
       )}
     </div>
   );
