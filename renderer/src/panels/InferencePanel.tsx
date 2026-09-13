@@ -150,7 +150,7 @@ export function InferencePanel() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
           <span style={{
             width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
-            background: status ? (status.online ? colors.ok : colors.danger) : '#C9C9CF',
+            background: status ? (status.online ? colors.ok : colors.danger) : colors.borderStrong,
           }} />
           <span style={{ fontSize: 14, fontWeight: 600, color: colors.textPrimary }}>
             {isOllama ? 'Ollama' : 'OpenAI 兼容后端'}
@@ -321,7 +321,7 @@ export function InferencePanel() {
         <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 12 }}>
           {models.length === 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '20px 0' }}>
-              <Icon name="cpu" size={36} style={{ color: '#C9C9CF' }} />
+              <Icon name="cpu" size={36} style={{ color: colors.borderStrong }} />
               <span style={{ fontSize: 13, color: colors.textTertiary }}>无模型或后端离线</span>
             </div>
           )}

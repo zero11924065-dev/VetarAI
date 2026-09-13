@@ -268,7 +268,7 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
           </div>
         ) : plugins.length === 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-            <Icon name="plug" size={36} style={{ color: '#C9C9CF' }} />
+            <Icon name="plug" size={36} style={{ color: colors.borderStrong }} />
             <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无插件。在上方输入 GitHub 仓库地址安装。</span>
           </div>
         ) : (
@@ -289,7 +289,7 @@ export function PluginPanel({ onClose }: { onClose?: () => void }) {
                         className="ui-btn ui-btn-ghost"
                         style={{
                           ...smallBtn(btnGhost),
-                          background: disabled ? '#ECECEE' : colors.accentBg,
+                          background: disabled ? colors.bgHover : colors.accentBg,
                           color: disabled ? colors.textSecondary : colors.accentText,
                         }}
                         onClick={() => handleToggleEnabled(p.name, !disabled)}

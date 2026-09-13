@@ -77,7 +77,7 @@ export function KnowledgePanel({ projectId }: { projectId: string | null }) {
                 flex: 1, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                 border: `1px solid ${colors.borderStrong}`,
                 borderBottom: selected ? `2px solid ${colors.accent}` : `1px solid ${colors.borderStrong}`,
-                background: selected ? colors.bgCard : '#F5F5F7',
+                background: selected ? colors.bgCard : colors.bgHover,
                 color: selected ? colors.accentText : colors.textSecondary,
                 fontSize: 13, fontWeight: selected ? 500 : 400, cursor: 'pointer', fontFamily: fonts.base,
                 borderRadius: isFirst ? `${radius.s}px 0 0 ${radius.s}px` : isLast ? `0 ${radius.s}px ${radius.s}px 0` : 0,
@@ -111,7 +111,7 @@ function capsuleBtn(on: boolean, label: string, onClick: () => void, disabled?: 
         display: 'inline-flex', alignItems: 'center', height: 22, padding: '0 8px',
         borderRadius: radius.pill, fontSize: 11, fontWeight: 500, cursor: 'pointer',
         border: 'none', fontFamily: fonts.base,
-        background: on ? colors.accentBg : '#ECECEE',
+        background: on ? colors.accentBg : colors.bgHover,
         color: on ? colors.accentText : colors.textSecondary,
       }}
     >
@@ -168,7 +168,7 @@ function KnowledgeTab({ projectId }: { projectId: string | null }) {
   if (!projectId) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-        <Icon name="book" size={36} style={{ color: '#C9C9CF' }} />
+        <Icon name="book" size={36} style={{ color: colors.borderStrong }} />
         <span style={{ fontSize: 13, color: colors.textTertiary }}>请先在主界面选择一个项目，即可管理该项目的知识库（项目文件夹/knowledge/）。</span>
       </div>
     );
@@ -249,7 +249,7 @@ function KnowledgeTab({ projectId }: { projectId: string | null }) {
       </div>
       {items.length === 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '20px 0' }}>
-          <Icon name="file-text" size={36} style={{ color: '#C9C9CF' }} />
+          <Icon name="file-text" size={36} style={{ color: colors.borderStrong }} />
           <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无知识文件</span>
         </div>
       )}
@@ -262,7 +262,7 @@ function KnowledgeTab({ projectId }: { projectId: string | null }) {
           }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-              background: it.enabled ? colors.ok : '#C9C9CF',
+              background: it.enabled ? colors.ok : colors.borderStrong,
             }} />
             <span style={{ flex: 1, fontSize: 13, color: it.enabled ? colors.textPrimary : colors.textTertiary }}>{it.name}</span>
             {capsuleBtn(it.enabled, it.enabled ? '启用' : '禁用', () => toggle(it.name))}
@@ -511,7 +511,7 @@ function SkillsTab() {
 
       {skills.length === 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '20px 0' }}>
-          <Icon name="wrench" size={36} style={{ color: '#C9C9CF' }} />
+          <Icon name="wrench" size={36} style={{ color: colors.borderStrong }} />
           <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无技能</span>
         </div>
       )}
@@ -524,7 +524,7 @@ function SkillsTab() {
           }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-              background: s.enabled ? colors.ok : '#C9C9CF',
+              background: s.enabled ? colors.ok : colors.borderStrong,
             }} />
             <span style={{ fontSize: 13, color: s.enabled ? colors.textPrimary : colors.textTertiary }}>{s.name}</span>
             <span style={{ color: colors.textTertiary, flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.description}</span>
