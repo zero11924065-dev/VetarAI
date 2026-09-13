@@ -95,21 +95,22 @@ export function TipPortal() {
   if (!tip) return null;
 
   // 0.4.6 U1：长文本自动换行限宽（短文本保持单行）
+  // A12（0.4.25）视觉：暖黑浮层 + 6px 圆角 + 浅阴影，随「纸面工具」方向
   const isLong = tip.text.length > 18;
   const style: React.CSSProperties = {
     position: 'fixed',
     zIndex: 2000,
-    padding: isLong ? '6px 10px' : '3px 8px',
-    borderRadius: 4,
-    background: 'rgba(26, 26, 30, 0.92)',
-    color: '#fff',
-    fontSize: 11,
+    padding: isLong ? '6px 10px' : '4px 9px',
+    borderRadius: 6,
+    background: 'rgba(28, 28, 26, 0.94)',
+    color: '#FAFAF8',
+    fontSize: 11.5,
     lineHeight: 1.5,
     whiteSpace: isLong ? 'normal' : 'nowrap',
-    maxWidth: isLong ? 260 : undefined,
+    maxWidth: isLong ? 280 : undefined,
     wordBreak: isLong ? 'break-word' : undefined,
     pointerEvents: 'none',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+    boxShadow: '0 2px 10px rgba(28,28,26,0.2)',
   };
   if (tip.variant === 'down') { style.left = tip.x; style.top = tip.y; style.transform = 'translateX(-50%)'; }
   else if (tip.variant === 'up') { style.left = tip.x; style.top = tip.y; style.transform = 'translate(-50%, -100%)'; }

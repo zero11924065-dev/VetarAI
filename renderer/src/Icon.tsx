@@ -32,7 +32,8 @@ export type IconName =
   | 'bot' | 'user' | 'mic' | 'clipboard' | 'download' | 'external-link'
   | 'alert-triangle' | 'alert-circle' | 'info' | 'clock' | 'shield' | 'crown'
   | 'wrench' | 'plug' | 'layers' | 'book' | 'database' | 'cpu' | 'globe'
-  | 'terminal' | 'key' | 'sparkle' | 'settings';
+  | 'terminal' | 'key' | 'sparkle' | 'settings'
+  | 'dots' | 'search' | 'archive';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   plus: <path d="M12 5v14M5 12h14" />,
@@ -83,7 +84,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
   terminal: <path d="M4 17l6-5-6-5M12 19h8" />,
   key: <><circle cx="7.5" cy="16" r="3.5" /><path d="M10.5 13.5L20 4M17 4h3v3" /></>,
   sparkle: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" />,
-  settings: <><path d="M4 7h16M4 12h16M4 17h16" /><circle cx="9" cy="7" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="7" cy="17" r="2" /></>,
+  // A12：settings 改为齿轮（原先与 sliders 同形重复），sliders 保持滑杆语义
+  settings: <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></>,
+  // A12 新增：更多操作菜单 / 搜索 / 归档
+  dots: <><circle cx="5" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.3" fill="currentColor" stroke="none" /></>,
+  search: <><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></>,
+  archive: <><rect x="3" y="3" width="18" height="5" rx="1" /><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></>,
 };
 
 export function Icon({ name, size = 16, style, className, title }: {
@@ -111,7 +117,7 @@ export function Spinner({ size = 14, style }: { size?: number; style?: React.CSS
     <span
       style={{
         width: size, height: size, display: 'inline-block', flexShrink: 0,
-        border: '2px solid #E3E3E8', borderTopColor: '#38BDF8', borderRadius: '50%',
+        border: '2px solid #E2E0DA', borderTopColor: '#3B82F6', borderRadius: '50%',
         animation: 'ui-spin .8s linear infinite',
         ...style,
       }}

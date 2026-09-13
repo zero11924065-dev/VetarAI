@@ -50,6 +50,8 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
 // 本地 ev 改用 helper 的 sseEvent 别名导入（本文件有 18 处调用，别名可让调用点零改动），
 // 消除各测试文件重复实现的 SSE 行构造逻辑。
 import { sseRes, jsonRes, sseEvent as ev } from './helpers/fetchMock';
+import { colors } from '../theme';
+import { styleColorIs } from './helpers/styleAssert';
 
 /** 构造 SSE 流：tool_call → tool_result(ok/error) → token → done。 */
 function mockStreamBody(events: string[]) {
@@ -174,13 +176,10 @@ describe('B4 工具步骤完成后折叠', () => {
     expect(bar!.textContent).toContain('1 失败');
     expect(bar!.textContent).toContain('1 成功');
     expect(bar!.textContent).not.toContain('已完成'); // 有失败时不得谎报全部完成
-    // 警示色（warnBg #FFF7EC）与警示边框，区别于正常灰底。
-    // ⛔ jsdom 会把 hex 归一化成 rgb()，故两种写法都接受——这里验的是"用了警示色"这个语义，
-    // 不是特定字符串格式。#FFF7EC = rgb(255,247,236)；#F5DFB8 = rgb(245,223,184)。
-    const bg = bar!.style.background.toLowerCase().replace(/\s+/g, '');
-    const bd = bar!.style.border.toLowerCase().replace(/\s+/g, '');
-    expect(bg === 'fff7ec' || bg.includes('rgb(255,247,236)')).toBe(true);
-    expect(bd.includes('f5dfb8') || bd.includes('rgb(245,223,184)')).toBe(true);
+    // 警示色（colors.warnBg）与警示边框（colors.warnBorder），区别于正常灰底。
+    // ⛔ A12：色值不再硬编码，与 theme 令牌联动——验的是"用了警示色"这个语义。
+    expect(styleColorIs(bar!.style.background, colors.warnBg)).toBe(true);
+    expect(styleColorIs(bar!.style.border, colors.warnBorder)).toBe(true);
   });
 
   it('④ 历史消息（DB 加载、不带 stopped）同样折叠——done 判据不得依赖 msg.stopped', async () => {

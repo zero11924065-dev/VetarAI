@@ -17,60 +17,66 @@
  * You should have received a copy of the GNU General Public License
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
-// checkpoint-051 UI 重设计：设计 Token（唯一数值源）
-// ⛔ 原依据 /交接/21-UI设计规范.md §2~§5 已于 2026-09-11 归档作废
-//   （用户认定整体风格与布局不满意，将换模型重做 UI）→ 现位于
-//   /备份/交接文档归档/21-UI设计规范.md，仅作历史参考，⛔ 不再是数值权威源。
-// ⛔ 本文件的全部数值属"上一轮设计"，深度 UI 重构批（见需求文档 A12）会整体重写。
-// 亮色主题，无深色分支（此约束仍有效：用户只要灰白亮色）。
-// 只定义"看起来是什么样"，不改交互/文案。
-
+// A12（0.4.25）UI 深度重构：设计 Token（唯一数值源）——「纸面工具」方向
+// 2026-09-13 用户拍板方向 A：
+//   · 暖白纸面底 + 白卡片，近黑正文，主按钮石墨黑；
+//   · 强调色只留一枚克制的雾蓝（选中 / 链接 / 焦点），语义色降饱和；
+//   · 大留白、8px 间距网格、极浅阴影、圆角收敛（控件 6~8，卡片 10~12）。
+// 亮色主题，无深色分支（用户只要灰白亮色）。
+// ⛔ 键名 surface 保持向后兼容（19 面板 + App + Dialog 直接 import），
+//   本批只换数值与新增键，不删键。
 import type { CSSProperties } from 'react';
 
 export const colors = {
-  // 中性背景
-  bgApp: '#F7F7F8',
-  bgSidebar: '#F1F1F3',
+  // 中性背景（暖调纸面）
+  bgApp: '#FAFAF8',
+  bgSidebar: '#F1F0EC',
   bgCard: '#FFFFFF',
-  bgHover: '#ECECEE',
-  bgActive: '#E4E4E8',
-  bgSelected: '#E3F4FE',
-  bgCode: '#F3F3F5',
-  bgInlineCode: '#EFF0F3',
-  bgToast: '#1F1F24',
+  bgHover: '#EEEDE9',
+  bgActive: '#E5E3DE',
+  bgSelected: '#E9F0FC',
+  bgCode: '#F5F4F1',
+  bgInlineCode: '#F0EFEB',
+  bgToast: '#1C1C1A',
 
-  // 边框
-  borderSubtle: '#ECECEF',
-  borderDefault: '#E3E3E8',
-  borderStrong: '#D5D5DA',
+  // 边框（暖灰，逐级加深）
+  borderSubtle: '#ECEAE5',
+  borderDefault: '#E2E0DA',
+  borderStrong: '#D1CEC6',
 
-  // 文字
-  textPrimary: '#1A1A1E',
-  textSecondary: '#5C5C66',
-  textTertiary: '#8E8E99',
-  textDisabled: '#B8B8C0',
+  // 文字（暖黑）
+  textPrimary: '#1C1C1A',
+  textSecondary: '#5C594F',
+  textTertiary: '#8E8A80',
+  textDisabled: '#BDBAB0',
 
-  // 主色（蓝）
-  accent: '#38BDF8',
-  accentHover: '#0EA5E9',
-  accentActive: '#0284C7',
-  onAccent: '#063452',
-  accentText: '#0369A1',
-  accentBg: '#E3F4FE',
-  accentBorder: '#BAE6FD',
-  accentBgSoft: '#F0F9FF',
-  accentTextDeep: '#075985',
+  // 主按钮：石墨黑（ink）
+  ink: '#1C1C1A',
+  inkHover: '#37352F',
+  inkActive: '#000000',
+  onInk: '#FAFAF8',
 
-  // 语义色（成功/警告/危险）
-  ok: '#34C759', okBg: '#EDF9F1', okBorder: '#CDEBD8', okText: '#1F6B3A',
-  warn: '#FF9500', warnBg: '#FFF7EC', warnBorder: '#F5DFB8', warnText: '#8A5A00',
-  danger: '#FF3B30', dangerBg: '#FEF0EF', dangerBorder: '#FBC6C2', dangerText: '#8A1F16',
-  dangerHover: '#E5342A', dangerActive: '#CC2E24', dangerLink: '#D70015',
+  // 强调色：雾蓝（选中 / 链接 / 焦点环 / 进行态）
+  accent: '#3B82F6',
+  accentHover: '#2563EB',
+  accentActive: '#1D4ED8',
+  onAccent: '#FFFFFF',
+  accentText: '#2563EB',
+  accentBg: '#E9F0FC',
+  accentBorder: '#C2D7F8',
+  accentBgSoft: '#F4F8FE',
+  accentTextDeep: '#1E40AF',
+
+  // 语义色（降饱和：成功 / 警告 / 危险）
+  ok: '#3D9B63', okBg: '#EBF6EF', okBorder: '#C8E6D4', okText: '#1F6B3E',
+  warn: '#C9821A', warnBg: '#FBF3E3', warnBorder: '#ECD9B0', warnText: '#7A5511',
+  danger: '#DC4C42', dangerBg: '#FBEDEC', dangerBorder: '#F2C7C2', dangerText: '#963026',
+  dangerHover: '#C93F36', dangerActive: '#B2342C', dangerLink: '#C0352C',
 
   // 禁用
-  disabledBg: '#D9D9DE',
-  disabledText: '#FAFAFB',
-  disabledFieldBg: '#F2F2F4',
+  disabledBg: '#E2E0DA',
+  disabledText: '#FAFAF8',
+  disabledFieldBg: '#F3F2EE',
 };
 
 export const fonts = {
@@ -78,12 +84,13 @@ export const fonts = {
   mono: '"SF Mono", ui-monospace, Menlo, Consolas, monospace',
 };
 
-export const radius = { s: 6, m: 10, l: 14, pill: 999 };
+export const radius = { s: 6, m: 10, l: 12, pill: 999 };
 
+// 极浅暖调阴影
 export const shadow = {
-  s: '0 1px 2px rgba(0,0,0,0.05)',
-  m: '0 4px 12px rgba(0,0,0,0.08)',
-  l: '0 12px 32px rgba(0,0,0,0.14)',
+  s: '0 1px 2px rgba(28,28,26,0.04)',
+  m: '0 2px 10px rgba(28,28,26,0.06)',
+  l: '0 10px 30px rgba(28,28,26,0.12)',
 };
 
 // 字号/字重/行高层级
@@ -92,7 +99,7 @@ export const typo = {
   sectionTitle: { fontSize: 14, fontWeight: 600, lineHeight: 1.4 },
   panelTitle: { fontSize: 12, fontWeight: 600, lineHeight: 1.4, color: colors.textTertiary },
   body: { fontSize: 13, fontWeight: 400, lineHeight: 1.6 },
-  msgBody: { fontSize: 14, fontWeight: 400, lineHeight: 1.65 },
+  msgBody: { fontSize: 14, fontWeight: 400, lineHeight: 1.7 },
   caption: { fontSize: 12, fontWeight: 400, lineHeight: 1.5 },
   micro: { fontSize: 11, fontWeight: 400, lineHeight: 1.4, color: colors.textTertiary },
 };
@@ -109,11 +116,11 @@ export const cardL = {
   borderRadius: radius.l,
 };
 
-// 按钮样式（默认态）。悬停/按下用伪类（见 global.css 的 .btn 类）或内联覆盖。
+// 按钮样式（默认态）。悬停/按下用伪类（见 global.css 的 .ui-btn 类）或内联覆盖。
 export const btnPrimary = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
   height: 28, padding: '0 14px', border: 'none', borderRadius: radius.s,
-  background: colors.accent, color: colors.onAccent,
+  background: colors.ink, color: colors.onInk,
   fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: fonts.base,
 } as const;
 
@@ -139,6 +146,22 @@ export const btnDanger = {
 export const btnDangerSoft = {
   ...btnSecondary,
   border: `1px solid ${colors.dangerBorder}`, color: colors.dangerText,
+} as const;
+
+// A12 新增：28×28 方形图标按钮（顶栏/行内操作）
+export const iconBtn = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 28, height: 28, padding: 0, border: 'none', borderRadius: radius.s,
+  background: 'transparent', color: colors.textSecondary,
+  cursor: 'pointer', fontFamily: fonts.base, flexShrink: 0,
+} as const;
+
+// A12 新增：浮层菜单/Popover 卡片
+export const menuCard = {
+  background: colors.bgCard,
+  border: `1px solid ${colors.borderDefault}`,
+  borderRadius: radius.m,
+  boxShadow: shadow.l,
 } as const;
 
 // 输入框

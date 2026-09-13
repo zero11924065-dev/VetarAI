@@ -23,6 +23,8 @@ import React from 'react';
 import { TaskPanel } from '../panels/TaskPanel';
 
 import { jsonRes, sseResControllable, sseEvent } from './helpers/fetchMock';
+import { colors } from '../theme';
+import { hexToRgb } from './helpers/styleAssert';
 
 // TS-108 M3-2：任务状态面板测试（四种状态徽标 + 失败任务重试按钮 + 重试请求）
 if (typeof (globalThis as any).localStorage === 'undefined') {
@@ -443,7 +445,8 @@ describe('TaskPanel #15 委派实时进度流', () => {
     // ⛔ 为什么单独立这条用例：`streamOn` 原本只被 set 从未被读（死状态），
     //    0.4.20 接入标题行指示器后才有了渲染职责。没有断言锁定它，
     //    将来谁把指示器删了、或把 setStreamOn 写错位置，测试都不会响。
-    //    判据用**颜色**而非文案：绿=colors.ok(#34C759) 表示实时流在连，灰=兜底手动刷新。
+    //    判据用**颜色**而非文案：绿=colors.ok 表示实时流在连，灰=兜底手动刷新。
+    //    ⛔ A12：色值不再硬编码，与 theme 令牌联动（锚定意图而非写法）。
     const ctl = sseResControllable();
     const impl: typeof fetch = async (url) => {
       const u = String(url);
@@ -459,7 +462,7 @@ describe('TaskPanel #15 委派实时进度流', () => {
     await waitFor(() => {
       const dot = screen.getByTestId('stream-indicator');
       expect(String(dot.getAttribute('title'))).toContain('已连接');
-      expect(String((dot as HTMLElement).style.background)).toContain('rgb(52, 199, 89)');
+      expect(String((dot as HTMLElement).style.background)).toContain(hexToRgb(colors.ok));
     }, { timeout: 3000 });
 
     await act(async () => { ctl.close(); });

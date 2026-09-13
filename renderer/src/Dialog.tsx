@@ -28,6 +28,29 @@ import { Icon } from './Icon';
 
 type DialogKind = 'confirm' | 'alert';
 
+// A12（0.4.25）「纸面工具」：弹窗视觉重做（行为契约零变化：
+// 点遮罩关闭 / Esc 取消 / Enter 确认 / prompt 自动聚焦 / 勾选值仅确认时回传）。
+const overlayStyle: React.CSSProperties = {
+  position: 'fixed', inset: 0, background: 'rgba(28,28,26,0.32)',
+  backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)',
+  zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  fontFamily: fonts.base,
+};
+const dialogCardStyle: React.CSSProperties = {
+  width: 400, maxWidth: '90vw', background: colors.bgCard,
+  borderRadius: radius.l, boxShadow: shadow.l, padding: '22px 24px',
+  color: colors.textPrimary, border: `1px solid ${colors.borderSubtle}`,
+  animation: 'ui-fade-in .16s ease',
+};
+const dialogTitleStyle: React.CSSProperties = { fontSize: 15, fontWeight: 600, letterSpacing: 0.1 };
+const dialogBodyStyle: React.CSSProperties = {
+  fontSize: 13, color: colors.textSecondary, lineHeight: 1.65,
+  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+};
+const dialogActionsStyle: React.CSSProperties = {
+  display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 22,
+};
+
 interface DialogOptions {
   kind: DialogKind;
   title?: string;
@@ -163,23 +186,14 @@ function PromptHost({ state }: { state: PromptState | null }) {
   return (
     <div
       onMouseDown={(e) => { if (e.target === e.currentTarget) close(null); }}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
-        zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontFamily: fonts.base,
-      }}
+      style={overlayStyle}
     >
-      <div role="dialog" aria-modal="true"
-        style={{
-          width: 400, maxWidth: '90vw', background: colors.bgCard,
-          borderRadius: radius.l, boxShadow: shadow.l, padding: '20px 24px',
-          color: colors.textPrimary,
-        }}>
+      <div role="dialog" aria-modal="true" style={dialogCardStyle}>
         {state.title && (
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>{state.title}</div>
+          <div style={{ ...dialogTitleStyle, marginBottom: 12 }}>{state.title}</div>
         )}
         {state.message && (
-          <div style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ ...dialogBodyStyle, whiteSpace: 'normal', marginBottom: 12 }}>
             {state.message}
           </div>
         )}
@@ -197,7 +211,7 @@ function PromptHost({ state }: { state: PromptState | null }) {
             borderRadius: radius.s, fontSize: 13, color: colors.textPrimary, fontFamily: fonts.base,
           }}
         />
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+        <div style={dialogActionsStyle}>
           <button className="ui-btn ui-btn-secondary" style={btnSecondary} onClick={() => close(null)}>
             {state.cancelText || '取消'}
           </button>
@@ -246,26 +260,18 @@ function DialogHost({ state }: { state: DialogState | null }) {
   return (
     <div
       onMouseDown={(e) => { if (e.target === e.currentTarget) close(false); }}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
-        zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontFamily: fonts.base,
-      }}
+      style={overlayStyle}
     >
       <div
         role="dialog" aria-modal="true"
-        style={{
-          width: 400, maxWidth: '90vw', background: colors.bgCard,
-          borderRadius: radius.l, boxShadow: shadow.l, padding: '20px 24px',
-          color: colors.textPrimary,
-        }}
+        style={dialogCardStyle}
       >
         {state.title && (
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: state.message ? 12 : 0 }}>
+          <div style={{ ...dialogTitleStyle, marginBottom: state.message ? 12 : 0 }}>
             {state.title}
           </div>
         )}
-        <div style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        <div style={dialogBodyStyle}>
           {state.message}
         </div>
         {isConfirm && state.checkboxLabel && (
@@ -282,7 +288,7 @@ function DialogHost({ state }: { state: DialogState | null }) {
             <span>{state.checkboxLabel}</span>
           </label>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+        <div style={dialogActionsStyle}>
           {isConfirm && (
             <button className="ui-btn ui-btn-secondary" style={btnSecondary} onClick={() => close(false)}>
               {state.cancelText || '取消'}
@@ -332,30 +338,21 @@ function ChoiceHost({ state }: { state: ChoiceState | null }) {
   return (
     <div
       onMouseDown={(e) => { if (e.target === e.currentTarget) close(null); }}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
-        zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontFamily: fonts.base,
-      }}
+      style={overlayStyle}
     >
       <div role="dialog" aria-modal="true"
-        style={{
-          width: 440, maxWidth: '90vw', background: colors.bgCard,
-          borderRadius: radius.l, boxShadow: shadow.l, padding: '20px 24px',
-          color: colors.textPrimary,
-        }}>
+        style={{ ...dialogCardStyle, width: 440 }}>
         {state.title && (
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: state.message ? 12 : 0 }}>
+          <div style={{ ...dialogTitleStyle, marginBottom: state.message ? 12 : 0 }}>
             {state.title}
           </div>
         )}
         {state.message && (
-          <div style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 1.6,
-                        whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          <div style={dialogBodyStyle}>
             {state.message}
           </div>
         )}
-        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+        <div style={{ ...dialogActionsStyle, flexWrap: 'wrap' }}>
           <button className="ui-btn ui-btn-secondary" style={btnSecondary} onClick={() => close(null)}>
             {state.cancelText || '取消'}
           </button>
