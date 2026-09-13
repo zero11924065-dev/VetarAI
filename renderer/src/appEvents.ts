@@ -53,7 +53,8 @@
  */
 import { getApiBase } from './apiBase';
 import { emit } from './events';
-import { SSEStreamParser } from './lib/sseParser';
+import { SSEEvent } from './lib/sseParser';
+import { startResilientStream } from './lib/sseStream';
 
 /** 广播事件名：各面板用 `on(APP_RESOURCE_CHANGED, fn)` 订阅。 */
 export const APP_RESOURCE_CHANGED = 'app:resource-changed';
@@ -90,11 +91,9 @@ export function startAppEventStream(): () => void {
   if (stopFn) return stopFn;            // 单例：已有活跃连接
 
   let cancelled = false;
-  const ctrl = new AbortController();
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let lastSeq = 0;                      // 重连时带 ?since=lastSeq 补发错过的变更
 
-  const applyEvent = (ev: { event: string; data: Record<string, any> }) => {
+  const applyEvent = (ev: SSEEvent) => {
     if (cancelled) return;              // ⛔ 卸载后不再 emit（不写任何状态）
     const d = ev.data || {};
     // 统一更新游标：connected/resource_changed/gap 的 data 都带 seq（端点已并入）
@@ -123,34 +122,17 @@ export function startAppEventStream(): () => void {
     }
   };
 
-  const run = async () => {
-    try {
-      const API = getApiBase();
-      // ⛔ 带 since：重连时补发缓冲区内错过的变更（无延时且不丢）
-      const res = await fetch(`${API}/events/stream?since=${lastSeq}`, { signal: ctrl.signal });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-      if (cancelled) return;
-      const reader = res.body.getReader();
-      const parser = new SSEStreamParser();
-      const dec = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        for (const ev of parser.push(dec.decode(value, { stream: true }))) applyEvent(ev);
-      }
-      for (const ev of parser.flush()) applyEvent(ev);
-    } catch {
-      // 静默：流失败不弹错误条（面板手动刷新仍可用），只在下方退避重连
-    }
-    if (!cancelled) retryTimer = setTimeout(run, RETRY_MS);   // ⛔ 卸载后不重连
-  };
-
-  void run();
+  // B9-2 C8：重连壳归并至 lib/sseStream（形状逐行同构，仅 URL 每次求值带游标）。
+  // ⛔ retryMs 传原值 RETRY_MS；⛔ 卸载不重连的 cancelled/abort 守卫在壳内原位保留。
+  const stopStream = startResilientStream({
+    url: () => `${getApiBase()}/events/stream?since=${lastSeq}`,   // ⛔ 带 since：重连时补发缓冲区内错过的变更（无延时且不丢）
+    onEvent: applyEvent,
+    retryMs: RETRY_MS,
+  });
 
   stopFn = () => {
     cancelled = true;
-    ctrl.abort();
-    if (retryTimer) clearTimeout(retryTimer);
+    stopStream();                       // ctrl.abort() + 清退避定时器（壳内）
     stopFn = null;                      // 允许后续重新启动（如测试 / App 重挂载）
   };
   return stopFn;

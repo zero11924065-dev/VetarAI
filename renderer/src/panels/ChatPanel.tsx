@@ -23,7 +23,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { purgeSessionLocal, syncSessionLocal, Message, ToolStep } from '../hooks/useMessages';
-import { SSEStreamParser } from '../lib/sseParser';
+import { consumeSSE } from '../lib/sseStream';
 import { colors, fonts, radius, shadow, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, select as selectStyle, calloutStyle, iconBtn, menuCard } from '../theme';
 import { Icon, Spinner, IconName } from '../Icon';
 import { confirmDialog, promptDialog } from '../Dialog';
@@ -2024,15 +2024,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             stopWaitTimer();
             throw err;
           }
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          const parser = new SSEStreamParser();
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            for (const ev of parser.push(decoder.decode(value, { stream: true }))) applyEventWrapped(ev);
-          }
-          for (const ev of parser.flush()) applyEventWrapped(ev);
+          // B9-2 C8：消费壳归并至 lib/sseStream.consumeSSE（reader/decoder/parser/push 循环/flush
+          //   逐行同构，事件同步派发时序不变）。⛔ 仅换循环壳，applyEventWrapped/F4 节流等不动。
+          await consumeSSE(res.body, applyEventWrapped);
           stopWaitTimer();
           break; // 流正常读完 → 结束
         } catch (e: any) {

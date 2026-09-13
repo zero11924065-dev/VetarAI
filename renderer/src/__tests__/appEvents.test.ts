@@ -174,11 +174,15 @@ describe('A13 appEvents 应用级资源变更流', () => {
 
   it('T9 源码断言：重连排程受 !cancelled 守卫（撤守卫即 T8 失效）', async () => {
     // ⛔ ?raw 真读源码（项目既有范式，见 checkpoint073）——防"注释里写了就算实现"的污染。
-    const code = await import('../appEvents?raw').then(m => m.default as string);
-    // ⛔ 锚定实际形态：if (!cancelled) retryTimer = setTimeout(run, RETRY_MS)
-    expect(/if\s*\(\s*!cancelled\s*\)\s*retryTimer\s*=\s*setTimeout\(\s*run/.test(code)).toBe(true);
+    // B9-2 C8：重连壳已逐行同构归并至 lib/sseStream.ts —— 锚点随壳迁移（意图不变：
+    // 守卫必须真实存在于承担重连的源码里），并补锚 appEvents 确实走该壳（防绕开守卫）。
+    const shell = await import('../lib/sseStream?raw').then(m => m.default as string);
+    // ⛔ 锚定实际形态：if (!cancelled) retryTimer = setTimeout(run, ...)
+    expect(/if\s*\(\s*!cancelled\s*\)\s*retryTimer\s*=\s*setTimeout\(\s*run/.test(shell)).toBe(true);
     // ⛔ stop 里必须 cancelled=true + abort（卸载不重连的另一半）
-    expect(code).toContain('cancelled = true');
-    expect(code).toContain('ctrl.abort()');
+    expect(shell).toContain('cancelled = true');
+    expect(shell).toContain('ctrl.abort()');
+    const code = await import('../appEvents?raw').then(m => m.default as string);
+    expect(code).toContain('startResilientStream');   // ⛔ 必须经壳重连（守卫在壳内）
   });
 });

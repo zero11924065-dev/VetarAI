@@ -22,7 +22,8 @@ import { apiJson } from '../lib/api';
 import { useEffect, useState, useCallback } from 'react';
 import { colors, fonts, radius, typo, btnSecondary, btnGhost, badge, calloutStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
-import { SSEStreamParser } from '../lib/sseParser';
+import { SSEEvent } from '../lib/sseParser';
+import { startResilientStream } from '../lib/sseStream';
 
 // TS-108 M3-2（决策 4/5）：委派任务状态面板。
 // - 状态徽标：等待中(queued) / 执行中(running) / 完成(done) / 异常(failed)
@@ -127,10 +128,8 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
   // ⛔ 断流后自动重连（3s 退避），但**卸载后绝不重连**。
   useEffect(() => {
     let cancelled = false;
-    const ctrl = new AbortController();
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const applyEvent = (ev: { event: string; data: Record<string, any> }) => {
+    const applyEvent = (ev: SSEEvent) => {
       if (cancelled) return;                       // ⛔ 卸载后不再写任何状态
       const d = ev.data || {};
       const tid = String(d.task_id || '');
@@ -204,37 +203,20 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
       }
     };
 
-    const run = async () => {
-      try {
-        const res = await fetch(`${API}/projects/${projectId}/tasks/stream`,
-                                { signal: ctrl.signal });
-        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-        if (cancelled) return;
-        setStreamOn(true);
-        const reader = res.body.getReader();
-        const parser = new SSEStreamParser();
-        const dec = new TextDecoder();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          for (const ev of parser.push(dec.decode(value, { stream: true }))) applyEvent(ev);
-        }
-        for (const ev of parser.flush()) applyEvent(ev);
-      } catch {
-        // 静默：流失败不该弹错误条（手动刷新仍可用），只标记未连接
-      } finally {
-        if (!cancelled) setStreamOn(false);
-      }
-      if (!cancelled) {
-        retryTimer = setTimeout(run, 3000);         // 断流退避重连
-      }
-    };
+    // B9-2 C8：消费壳+重连壳归并至 lib/sseStream（形状逐行同构）。
+    // ⛔ retryMs 传原值 3000；⛔ setStreamOn 时序不变：onConnect=原 setStreamOn(true) 位置，
+    //    onClose=原 finally 内 if(!cancelled) setStreamOn(false)；卸载不重连守卫在壳内。
+    const stopStream = startResilientStream({
+      url: () => `${API}/projects/${projectId}/tasks/stream`,
+      onEvent: applyEvent,
+      retryMs: 3000,                           // 断流退避重连
+      onConnect: () => setStreamOn(true),
+      onClose: () => setStreamOn(false),
+    });
 
-    void run();
     return () => {
       cancelled = true;
-      ctrl.abort();
-      if (retryTimer) clearTimeout(retryTimer);
+      stopStream();                            // ctrl.abort() + 清退避定时器（壳内）
       setStreamOn(false);
     };
   }, [projectId, loadTasks]);
