@@ -184,7 +184,7 @@ export function AgentPanel({ projectId, selectedAgentId, onSelectAgent }: {
       {/* 空态 */}
       {agents.length === 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 8 }}>
-          <Icon name="bot" size={36} style={{ color: '#C9C9CF' }} />
+          <Icon name="bot" size={36} style={{ color: colors.borderStrong }} />
           <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无 Agent，先在上方填写并点"+ 添加"创建</span>
         </div>
       )}
@@ -213,7 +213,7 @@ export function AgentPanel({ projectId, selectedAgentId, onSelectAgent }: {
                 {/* 类型徽标 */}
                 <span style={a.type_ === 'main'
                   ? { ...badge(colors.accentBg, colors.accentText), height: 18, fontSize: 11 }
-                  : { ...badge('#DFF4F6', '#0F7490'), height: 18, fontSize: 11 }
+                  : { ...badge(colors.bgHover, colors.textSecondary), height: 18, fontSize: 11 }
                 }>
                   {a.type_ === 'main' ? '主' : '子'}
                 </span>

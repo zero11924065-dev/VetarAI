@@ -154,7 +154,7 @@ export function RoundtablePanel({ projectId, selectedId, onSelect }: {
                       display: 'inline-flex', alignItems: 'center',
                       height: 22, padding: '0 10px', borderRadius: radius.pill, cursor: 'pointer',
                       fontSize: 12, userSelect: 'none',
-                      background: sel ? colors.accentBg : '#ECECEE',
+                      background: sel ? colors.accentBg : colors.bgHover,
                       color: sel ? colors.accentText : colors.textSecondary,
                       transition: 'background-color .15s ease, color .15s ease',
                     }}>
@@ -206,7 +206,7 @@ export function RoundtablePanel({ projectId, selectedId, onSelect }: {
                 <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                   {pendingFiles.map((f, i) => (
                     <span key={i} style={{
-                      background: '#F5F5F7', padding: '4px 8px', borderRadius: radius.s,
+                      background: colors.bgHover, padding: '4px 8px', borderRadius: radius.s,
                       border: `1px solid ${colors.borderSubtle}`,
                       fontSize: 12, color: colors.textPrimary, display: 'inline-flex', alignItems: 'center', gap: 4,
                     }}>
@@ -235,7 +235,7 @@ export function RoundtablePanel({ projectId, selectedId, onSelect }: {
           {/* ── 列表区（点击 → 右侧大屏详情）── */}
           {roundtables.length === 0 && !error && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 8 }}>
-              <Icon name="mic" size={36} style={{ color: '#C9C9CF' }} />
+              <Icon name="mic" size={36} style={{ color: colors.borderStrong }} />
               <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无圆桌讨论</span>
             </div>
           )}

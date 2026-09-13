@@ -61,7 +61,7 @@ const API = getApiBase();
 
 // 状态徽标配色（规范 §6.3）
 const STATUS_BADGE: Record<string, { bg: string; fg: string; dot: string; label: string }> = {
-  queued:  { bg: '#ECECEE', fg: '#5C5C66', dot: '#8E8E99', label: '等待中' },
+  queued:  { bg: colors.bgHover, fg: colors.textSecondary, dot: colors.textTertiary, label: '等待中' },
   running: { bg: colors.accentBg, fg: colors.accentTextDeep, dot: colors.accent, label: '进行中' },
   done:    { bg: colors.okBg, fg: colors.okText, dot: colors.ok, label: '完成' },
   failed:  { bg: colors.dangerBg, fg: colors.dangerText, dot: colors.danger, label: '异常' },
@@ -291,7 +291,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
                 style={{
                   display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
                   marginLeft: 6, verticalAlign: 'middle',
-                  background: streamOn ? colors.ok : '#C9C9CF',
+                  background: streamOn ? colors.ok : colors.borderStrong,
                 }} />
             </span>
             <button className="ui-btn ui-btn-ghost" onClick={fetchTasks} disabled={loading}
@@ -336,7 +336,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
           {/* 空态 */}
           {tasks.length === 0 && !loading && !error && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 8 }}>
-              <Icon name="clipboard" size={36} style={{ color: '#C9C9CF' }} />
+              <Icon name="clipboard" size={36} style={{ color: colors.borderStrong }} />
               <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无委派任务</span>
             </div>
           )}

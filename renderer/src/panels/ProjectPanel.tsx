@@ -332,7 +332,7 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
         {projects.length === 0 && !error && !loading ? (
           /* 空态 */
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 8 }}>
-            <Icon name="folder" size={36} style={{ color: '#C9C9CF' }} />
+            <Icon name="folder" size={36} style={{ color: colors.borderStrong }} />
             <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无项目，点击上方按钮创建</span>
           </div>
         ) : loading && projects.length === 0 ? (
