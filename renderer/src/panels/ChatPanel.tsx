@@ -23,7 +23,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSessionMessages, purgeSessionLocal, syncSessionLocal, Message, ToolStep } from '../hooks/useMessages';
 import { SSEStreamParser } from '../lib/sseParser';
-import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, btnGhost, btnDanger, btnDangerSoft, select as selectStyle, calloutStyle } from '../theme';
+import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, btnGhost, btnDanger, btnDangerSoft, select as selectStyle, calloutStyle, iconBtn, menuCard } from '../theme';
 import { Icon, Spinner, IconName } from '../Icon';
 import { confirmDialog, promptDialog } from '../Dialog';
 import { on } from '../events';
@@ -231,8 +231,10 @@ function ToolStepBar({ step }: { step: ToolStep }) {
     /* checkpoint-060：折叠条单行化修复重叠事故——旧实现行高固定 30px 但标签允许换行，
        长摘要（如委派交卷数百字）会在 flex 行内上下对称溢出，叠印到上下消息上。
        现标签单行省略号截断；完整摘要/错误/参数在展开区查看（信息不丢）。 */
-    <div style={{ marginBottom:8, border:`1px solid ${colors.borderSubtle}`, borderRadius:radius.s, background:'#F5F5F7', overflow:'hidden' }}>
-      <div onClick={() => setOpen(o=>!o)} style={{ display:'flex', alignItems:'center', gap:6, padding:'0 10px', height:30, cursor:'pointer', color:colors.textPrimary, fontSize:13 }}>
+    /* A12（0.4.25）：去卡片边框改时间线——左侧 2px 竖线 + 行内容排布，
+       步骤条目从"卡片堆"变为文档内的轻量过程记录。 */
+    <div style={{ marginBottom:6, borderLeft:`2px solid ${colors.borderDefault}`, overflow:'hidden' }}>
+      <div onClick={() => setOpen(o=>!o)} style={{ display:'flex', alignItems:'center', gap:7, padding:'0 10px', height:30, cursor:'pointer', color:colors.textSecondary, fontSize:12.5 }}>
         {/* C2（0.4.16）：interrupted 用中性 stop 图标，不用 ✓（谎称成功）也不用 ✗（谎报失败）*/}
         {step.status === 'running' ? <Spinner size={12} />
           : step.status === 'ok' ? <Icon name="check" size={14} style={{ color:colors.ok }} />
@@ -242,13 +244,13 @@ function ToolStepBar({ step }: { step: ToolStep }) {
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14} style={{ color:colors.textTertiary }} />
       </div>
       {open && (
-        <div style={{ padding:'8px 10px', borderTop:`1px solid ${colors.borderSubtle}`, fontSize:12, color:colors.textSecondary }}>
+        <div style={{ padding:'4px 10px 10px', fontSize:12, color:colors.textSecondary }}>
           {(step.summary || step.error) && (
             <div style={{ whiteSpace:'pre-wrap', wordBreak:'break-word', marginBottom:6, color: step.status === 'error' ? colors.dangerText : colors.textSecondary }}>
               {step.status === 'error' ? (step.error || 'unknown') : step.summary}
             </div>
           )}
-          <pre style={{ margin:0, fontSize:12, color:colors.textSecondary, whiteSpace:'pre-wrap', wordBreak:'break-word', maxHeight:160, overflowY:'auto', fontFamily:fonts.mono }}>
+          <pre style={{ margin:0, padding:'8px 10px', background:colors.bgHover, borderRadius:radius.s, fontSize:12, color:colors.textSecondary, whiteSpace:'pre-wrap', wordBreak:'break-word', maxHeight:160, overflowY:'auto', fontFamily:fonts.mono }}>
 {JSON.stringify(step.args ?? {}, null, 2)}
           </pre>
         </div>
@@ -325,9 +327,9 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
         <div
           onClick={() => { setUserToggled(true); setOpen(true); }}
           style={{ display:'flex', alignItems:'center', gap:6, padding:'0 10px', height:28,
-            cursor:'pointer', borderRadius:radius.s, fontSize:12.5,
+            cursor:'pointer', borderRadius:radius.pill, fontSize:12.5,
             border:`1px solid ${failed > 0 ? colors.warnBorder : colors.borderSubtle}`,
-            background: failed > 0 ? colors.warnBg : '#F5F5F7',
+            background: failed > 0 ? colors.warnBg : colors.bgHover,
             color: failed > 0 ? colors.warnText : colors.textSecondary }}>
           {failed > 0
             ? <Icon name="alert-triangle" size={13} style={{ color: colors.warnText, flexShrink:0 }} />
@@ -532,6 +534,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const [transferKeywords, setTransferKeywords] = useState('');
   const [transferring, setTransferring] = useState(false);
   const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
+  // A12（0.4.25）：顶栏「⋯ 更多操作」菜单（总结/导出/单元归档/重命名/删除收纳其中，治"会话窗上方拥挤"）
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   // 0.4.9（3.47.1 单元归档）：会话窗开关，默认关。仅开启时后端才暴露 archive_work_unit
   // 工具并注入归档纪律（关闭时工具不存在，零开销）；非自动——必须用户主动启用。
   const [autoArchiveUnit, setAutoArchiveUnit] = useState(false);
@@ -2152,27 +2156,54 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const tokenRatio = contextLimit > 0 ? tokenUsed / contextLimit : 0;
   const tokenBarColor = tokenRatio >= 0.99 ? colors.danger : tokenRatio >= 0.90 ? colors.warn : colors.ok;
 
+  // A12（0.4.25）：顶栏「⋯ 更多操作」菜单项（原 9 枚图标平铺太挤 → 低频动作收纳进菜单）。
+  // ⛔ data-tip 一律保留原文（提示文字是文案原文）；可见标签为同义短名。
+  const moreMenuItem = (label: string, icon: IconName, tip: string, onClick: () => void,
+    opts?: { danger?: boolean; disabled?: boolean; active?: boolean; busy?: boolean }) => (
+    <button
+      key={label}
+      className="ui-menu-item"
+      data-tip={tip}
+      disabled={opts?.disabled}
+      onClick={() => { setShowMoreMenu(false); onClick(); }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        padding: '7px 10px', border: 'none', borderRadius: 6, background: 'transparent',
+        fontSize: 12.5, fontFamily: fonts.base, textAlign: 'left', boxSizing: 'border-box',
+        color: opts?.danger ? colors.dangerText : colors.textPrimary,
+        cursor: opts?.disabled ? 'not-allowed' : 'pointer', opacity: opts?.disabled ? 0.5 : 1,
+      }}>
+      {opts?.busy
+        ? <Spinner size={13} />
+        : <Icon name={icon} size={14} style={{ color: opts?.danger ? colors.dangerText : colors.textTertiary, flexShrink: 0 }} />}
+      <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+      {opts?.active && <Icon name="check" size={13} style={{ color: colors.accent, flexShrink: 0 }} />}
+    </button>
+  );
+
   return (
     <div style={{ display:'flex', height:'100%', minWidth:0, overflow:'hidden', background:colors.bgApp }}>
     {/* 左侧：原会话面板（纵向）；右侧：知识仓库面板（可折叠）。
         0.4.4：顶部/左右加留白——顶栏此前紧贴窗口外框，视觉上"贴边"。 */}
-    <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden', padding:'10px 12px 0 12px' }}>
-      {/* Top bar (§8.6) */}
-      <div style={{ height:48, padding:'0 16px', borderBottom:`1px solid ${colors.borderSubtle}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
-        {/* TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容。
-            0.4.0 实测重叠根治：原生 select 被压缩时文字不裁剪会向左溢出覆盖相邻元素（实测盖住 Agent 名），
-            必须用"容器收缩 + overflow 裁剪"包裹；名字保留最小宽度 + 省略号。 */}
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', flex:1, minWidth:0, overflow:'hidden' }}>
+      {/* Top bar —— A12「纸面工具」：白底细线 + 低频操作收纳进 ⋯ 菜单（治"会话窗上方拥挤"）。
+          TS-121：nowrap——右侧知识仓库面板展开收窄会话区时，按钮组不得换行把顶栏撑高挤内容。
+          0.4.0 实测重叠根治：原生 select 被压缩时文字不裁剪会向左溢出覆盖相邻元素（实测盖住 Agent 名），
+          必须用"容器收缩 + overflow 裁剪"包裹；名字保留最小宽度 + 省略号。 */}
+      <div style={{ height:50, padding:'0 14px', borderBottom:`1px solid ${colors.borderDefault}`, background:colors.bgCard, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexShrink:0 }}>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'nowrap',minWidth:0}}>
-          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:1,minWidth:48}}>
-            <Icon name="bot" size={16} style={{color:colors.textPrimary,flexShrink:0}} />
+          <div style={{display:'flex',alignItems:'center',gap:7,flexShrink:1,minWidth:48}}>
+            <span style={{ width:26, height:26, borderRadius:8, flexShrink:0, display:'inline-flex', alignItems:'center', justifyContent:'center', background:colors.accentBgSoft, border:`1px solid ${colors.accentBorder}` }}>
+              <Icon name="bot" size={14} style={{color:colors.accentText}} />
+            </span>
             <span style={{fontSize:14,fontWeight:600,color:colors.textPrimary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{agentInfo?.name || agentId.slice(0,8)}...</span>
           </div>
           {/* select 收缩容器：flex 容器负责压缩，overflow:hidden 裁剪，杜绝文字溢出覆盖 */}
-          <div style={{flex:'0 1 auto',minWidth:0,maxWidth:200,overflow:'hidden'}}>
+          <div style={{flex:'0 1 auto',minWidth:0,maxWidth:180,overflow:'hidden'}}>
             <select
               value={currentSessionId || ''}
               onChange={e => handleSwitchSession(e.target.value)}
-              style={{...selectStyle, width:'100%', minWidth:80}}
+              style={{...selectStyle, width:'100%', minWidth:80, height:28, borderRadius:radius.s}}
             >
               {sessions.length === 0 && <option value="">无会话</option>}
               {sessions.map(s => (
@@ -2180,71 +2211,26 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               ))}
             </select>
           </div>
-          {/* 图标按钮组（TS-121：整体不可压缩，宽度不足时顶栏横向滚动而非换行） */}
-          <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
           {/* TS-115（3.26）：会话列表刷新按钮 */}
-          <button className="ui-btn ui-btn-ghost" onClick={handleRefreshSessions} data-tip="刷新会话列表" disabled={refreshing}
-            style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
+          <button className="ui-btn ui-btn-ghost ui-icon-btn" onClick={handleRefreshSessions} data-tip="刷新会话列表" disabled={refreshing}
+            style={{...iconBtn, cursor: refreshing ? 'default' : 'pointer'}}>
             {refreshing
               ? <Spinner size={14} />
-              : <Icon name="rotate-cw" size={15} style={{color:colors.textSecondary}} />}
+              : <Icon name="rotate-cw" size={15} />}
           </button>
-          <button className="ui-btn ui-btn-ghost" onClick={handleNewSession} data-tip="新建会话"
-            style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
-            <Icon name="plus" size={16} style={{color:colors.textSecondary}} />
+          <button className="ui-btn ui-btn-ghost ui-icon-btn" onClick={handleNewSession} data-tip="新建会话"
+            style={iconBtn}>
+            <Icon name="plus" size={16} />
           </button>
-          {currentSessionId && (
-            <>
-              <button className="ui-btn ui-btn-ghost" onClick={handleSummarizeSession} disabled={summarizing}
-                data-tip="生成会话总结并保存（Markdown + 记录）"
-                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:summarizing?'wait':'pointer'}}>
-                {summarizing ? <Spinner size={14} /> : <Icon name="file-text" size={16} style={{color:colors.textSecondary}} />}
-              </button>
-              <button className="ui-btn ui-btn-ghost" onClick={handleExportSession} data-tip="导出会话为 Markdown"
-                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
-                <Icon name="download" size={16} style={{color:colors.textSecondary}} />
-              </button>
-              {/* TS-120：勾选消息移入知识仓库 */}
-              <button className="ui-btn ui-btn-ghost"
-                onClick={() => { setSelectMode(v => !v); setSelectedMsgIds(new Set()); }}
-                data-tip="勾选消息 → 移入知识仓库"
-                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:selectMode?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
-                <Icon name="check" size={16} style={{color:selectMode?colors.accentText:colors.textSecondary}} />
-              </button>
-              {/* TS-120：知识仓库面板开关（可收起） */}
-              <button className="ui-btn ui-btn-ghost"
-                onClick={() => setShowKnowledgePanel(v => !v)}
-                data-tip="知识仓库（检索/注入）"
-                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:showKnowledgePanel?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
-                <Icon name="database" size={16} style={{color:showKnowledgePanel?colors.accentText:colors.textSecondary}} />
-              </button>
-              {/* 0.4.9（3.47.1）：单元归档开关——批量任务每完成一个单元即把该段对话移入知识仓库 */}
-              <button className="ui-btn ui-btn-ghost"
-                onClick={() => setAutoArchiveUnit(v => !v)}
-                data-tip="单元归档：开启后 Agent 每完成一个工作单元（批量任务）会把该段对话移入知识仓库，防止上下文膨胀。默认关闭，需手动开启"
-                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:autoArchiveUnit?colors.accentBg:'transparent',border:'none',cursor:'pointer'}}>
-                <Icon name="layers" size={16} style={{color:autoArchiveUnit?colors.accentText:colors.textSecondary}} />
-              </button>
-              <button className="ui-btn ui-btn-ghost" onClick={() => handleRenameSession(currentSessionId)} data-tip="重命名"
-                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
-                <Icon name="pencil" size={16} style={{color:colors.textSecondary}} />
-              </button>
-              <button className="ui-btn ui-btn-ghost ui-ico-danger" onClick={() => handleDeleteSession(currentSessionId)} data-tip="删除"
-                style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,background:'transparent',border:'none',cursor:'pointer'}}>
-                <Icon name="trash" size={16} style={{color:colors.textSecondary}} />
-              </button>
-            </>
-          )}
-          </div>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
-          <span style={{fontFamily:fonts.mono,fontSize:12,color:colors.textTertiary}}>{modelList.find(m=>m.name===modelUsed)?.name || modelUsed}</span>
+        <div style={{display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+          <span style={{fontFamily:fonts.mono,fontSize:11.5,color:colors.textTertiary}}>{modelList.find(m=>m.name===modelUsed)?.name || modelUsed}</span>
           {contextLimit > 0 && (
             <div
               title={`当前会话上下文估算：约 ${tokenUsed} / 上限 ${contextLimit}（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）`}
               style={{display:'flex',alignItems:'center',gap:6,fontSize:11, cursor:'help'}}>
-              <span style={{color:colors.textTertiary}}>上下文 ≈{tokenUsed} / {contextLimit}</span>
-              <div style={{width:80,height:6,background:colors.borderDefault,borderRadius:3,overflow:'hidden'}}>
+              <span style={{color:colors.textTertiary, whiteSpace:'nowrap'}}>上下文 ≈{tokenUsed} / {contextLimit}</span>
+              <div style={{width:64,height:4,background:colors.borderSubtle,borderRadius:2,overflow:'hidden'}}>
                 <div style={{
                   width: Math.min(100, tokenRatio * 100) + '%',
                   height: '100%',
@@ -2257,12 +2243,50 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           {contextLimit === 0 && contextSource === 'error' && (
             <span style={{color:colors.dangerText,fontSize:11}}>上下文：获取失败</span>
           )}
+          {currentSessionId && (
+            <>
+              {/* TS-120：勾选消息移入知识仓库 */}
+              <button className="ui-btn ui-btn-ghost ui-icon-btn"
+                onClick={() => { setSelectMode(v => !v); setSelectedMsgIds(new Set()); }}
+                data-tip="勾选消息 → 移入知识仓库"
+                style={{...iconBtn, background:selectMode?colors.accentBg:'transparent'}}>
+                <Icon name="check" size={16} style={{color:selectMode?colors.accentText:undefined}} />
+              </button>
+              {/* TS-120：知识仓库面板开关（可收起） */}
+              <button className="ui-btn ui-btn-ghost ui-icon-btn"
+                onClick={() => setShowKnowledgePanel(v => !v)}
+                data-tip="知识仓库（检索/注入）"
+                style={{...iconBtn, background:showKnowledgePanel?colors.accentBg:'transparent'}}>
+                <Icon name="database" size={16} style={{color:showKnowledgePanel?colors.accentText:undefined}} />
+              </button>
+              {/* A12：⋯ 更多操作（总结 / 导出 / 单元归档 / 重命名 / 删除） */}
+              <div style={{ position:'relative' }}>
+                <button className="ui-btn ui-btn-ghost ui-icon-btn" onClick={() => setShowMoreMenu(v => !v)} data-tip="更多操作"
+                  style={{...iconBtn, background:showMoreMenu?colors.bgActive:'transparent'}}>
+                  <Icon name="dots" size={16} />
+                </button>
+                {showMoreMenu && (
+                  <>
+                    <div style={{ position:'fixed', inset:0, zIndex:1200 }} onClick={() => setShowMoreMenu(false)} />
+                    <div className="ui-pop-in" style={{ ...menuCard, position:'absolute', top:34, right:0, zIndex:1201, minWidth:190, padding:4, transformOrigin:'top right' }}>
+                      {moreMenuItem('生成会话总结', 'file-text', '生成会话总结并保存（Markdown + 记录）', handleSummarizeSession, { disabled: summarizing, busy: summarizing })}
+                      {moreMenuItem('导出会话', 'download', '导出会话为 Markdown', handleExportSession)}
+                      {moreMenuItem('单元归档', 'archive', '单元归档：开启后 Agent 每完成一个工作单元（批量任务）会把该段对话移入知识仓库，防止上下文膨胀。默认关闭，需手动开启', () => setAutoArchiveUnit(v => !v), { active: autoArchiveUnit })}
+                      <div style={{ height:1, background:colors.borderSubtle, margin:'4px 6px' }} />
+                      {moreMenuItem('重命名', 'pencil', '重命名', () => handleRenameSession(currentSessionId))}
+                      {moreMenuItem('删除', 'trash', '删除', () => handleDeleteSession(currentSessionId), { danger: true })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
       {/* M2 溢出预警警告条 (§8.7) */}
       {compactWarning && (
-        <div style={{ ...calloutStyle('warn'), borderRadius:0, padding:'10px 16px', borderBottom:`1px solid ${colors.warnBorder}`, flexWrap:'wrap' }}>
+        <div style={{ ...calloutStyle('warn'), borderRadius:radius.m, padding:'10px 16px', margin:'8px 16px 0', flexWrap:'wrap' }}>
           <Icon name="alert-triangle" size={16} style={{flexShrink:0}} />
           <span>上下文已用 {compactWarning.used}/{compactWarning.limit}（{Math.round(compactWarning.used/compactWarning.limit*100)}%），预计还能约 {compactWarning.est >= 0 ? compactWarning.est : '未知'} 轮。请选择处理方式：</span>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -2325,11 +2349,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         </div>
       )}
       {/* Toast (§6.6) */}
-      {toast && <div style={{ position:'absolute', top:60, right:16, background:colors.bgToast, color:'#FFFFFF', padding:'8px 14px', borderRadius:radius.s, fontSize:13, zIndex:999, boxShadow:shadow.m }}>{toast}</div>}
+      {toast && <div style={{ position:'absolute', top:60, right:16, background:colors.bgToast, color:'#FFFFFF', padding:'8px 14px', borderRadius:radius.s, fontSize:13, zIndex:999, boxShadow:shadow.m, animation:'ui-fade-in .14s ease' }}>{toast}</div>}
 
       {/* TS-120：勾选模式浮动栏（选中 N 条 → 移入知识仓库） */}
       {selectMode && (
-        <div style={{ position:'absolute', bottom:90, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:8, background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:radius.m, padding:'8px 14px', boxShadow:shadow.m, zIndex:998 }}>
+        <div style={{ ...menuCard, position:'absolute', bottom:96, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:8, padding:'8px 14px', zIndex:998, animation:'ui-fade-in .14s ease' }}>
           <span style={{ fontSize:12, color:colors.textSecondary }}>已勾选 {selectedMsgIds.size} 条</span>
           <button className="ui-btn ui-btn-primary" disabled={selectedMsgIds.size === 0 || transferring}
             onClick={() => setShowTransferModal(true)}
@@ -2343,10 +2367,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* TS-120：转移弹窗（选作用域/标题/分类/关键词） */}
       {showTransferModal && (
-        <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.35)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}
+        <div style={{ position:'absolute', inset:0, background:'rgba(28,28,26,0.32)', backdropFilter:'blur(3px)', WebkitBackdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}
           onClick={() => setShowTransferModal(false)}>
           <div onClick={e => e.stopPropagation()}
-            style={{ width:400, background:colors.bgCard, borderRadius:radius.l, boxShadow:shadow.l, padding:20 }}>
+            style={{ width:400, background:colors.bgCard, borderRadius:radius.l, boxShadow:shadow.l, padding:22, border:`1px solid ${colors.borderSubtle}` }}>
             <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
               <Icon name="database" size={16} style={{ color:colors.accentText }} />
               <span style={{ fontSize:14, fontWeight:600, color:colors.textPrimary }}>移入知识仓库</span>
@@ -2399,17 +2423,17 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* M5（TS-111）：断线重连提示条 (§8.8) */}
       {reconnectNotice && (
-        <div style={{ ...calloutStyle('warn'), borderRadius:0, padding:'6px 16px', borderBottom:`1px solid ${colors.warnBorder}` }}>
+        <div style={{ ...calloutStyle('warn'), borderRadius:radius.m, padding:'6px 16px', margin:'8px 16px 0' }}>
           <Spinner size={14} />
           <span style={{fontSize:13}}>{reconnectNotice}</span>
         </div>
       )}
 
-      {/* Messages (§8.9) */}
-      <div ref={scrollAreaRef} onScroll={handleScroll} onWheel={handleWheel} style={{ flex:1, overflowY:'auto', padding:16, position:'relative', background:colors.bgApp }}>
+      {/* Messages (§8.9)：A12 正文居中限宽（820），纸面底 */}
+      <div ref={scrollAreaRef} onScroll={handleScroll} onWheel={handleWheel} style={{ flex:1, overflowY:'auto', padding:'16px 24px', position:'relative', background:colors.bgApp }}>
         {localMessages.length === 0 && (
           <div style={{textAlign:'center',marginTop:'30vh',display:'flex',flexDirection:'column',alignItems:'center',gap:8}}>
-            <Icon name="message-circle" size={36} style={{color:'#C9C9CF'}} />
+            <Icon name="message-circle" size={36} style={{color:colors.borderStrong}} />
             <span style={{fontSize:13,color:colors.textTertiary}}>{currentSessionId ? '新会话 — 开始对话吧' : '加载中...'}</span>
           </div>
         )}
@@ -2423,12 +2447,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           //    （#11/0.4.19 删正文折叠后，正文不再是消费方，但 B4 步骤折叠与光标仍共用此判据。）
           const isStreamingThis = sending && !msg.stopped && !msg.streamError
             && i === localMessages.length - 1;
-          const bubbleBg = isUser ? colors.accent : isSystem ? colors.okBg : colors.bgCard;
-          const bubbleBorder = isUser ? 'none' : isSystem ? `1px solid ${colors.okBorder}` : `1px solid ${colors.borderDefault}`;
-          const bubbleColor = isUser ? colors.onAccent : isSystem ? colors.okText : colors.textPrimary;
-          const bubbleRadius = isUser ? `${radius.m}px ${4}px ${radius.m}px ${radius.m}px` : radius.m;
+          const bubbleBg = isUser ? colors.bgCard : isSystem ? colors.okBg : 'transparent';
+          const bubbleBorder = isUser ? `1px solid ${colors.borderDefault}` : isSystem ? `1px solid ${colors.okBorder}` : 'none';
+          const bubbleColor = isUser ? colors.textPrimary : isSystem ? colors.okText : colors.textPrimary;
+          const bubbleRadius = isUser ? `${radius.l}px ${radius.l}px ${4}px ${radius.l}px` : radius.m;
+          /* A12：assistant 改无框文档式（透明底、无内边距卡片感），用户消息保留纸面卡片气泡 */
+          const bubblePadding = isUser || isSystem ? '10px 14px' : '2px 0';
           return (
-            <div key={msg.id || i} style={{ marginBottom:12, display:'flex', flexDirection:'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+            <div key={msg.id || i} style={{ maxWidth:820, margin:'0 auto 14px', display:'flex', flexDirection:'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
               {/* 角色标签行 */}
               <div style={{fontSize:11,color:colors.textTertiary,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
                 {/* TS-120：勾选模式下显示复选框（系统消息不可勾选）。TS-121：流结束后
@@ -2448,7 +2474,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                   长串会把气泡顶开并在消息区拉出横向滚动条；minWidth:0 解开该下限即可让
                   overflow-wrap:anywhere 生效。⛔ 这里**故意不加 overflow:hidden**——那会把仍溢出的
                   内容静默裁掉、用户永久看不到；表格与代码块各自有独立横向滚动层，不需要它兜底。 */}
-              <div style={{ maxWidth:'78%', minWidth:0, padding:'10px 14px', borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
+              <div style={{ maxWidth:'78%', minWidth:0, padding:bubblePadding, borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
                 {msg.archived ? (
                   /* TS-120：已移入知识仓库 → 占位提示（内容脱离模型上下文，文件永久保存在仓库） */
                   <div style={{ fontSize:12, color: colors.textTertiary, display:'flex', alignItems:'center', gap:6, fontStyle:'italic' }}>
@@ -2464,18 +2490,20 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                     <div style={{marginBottom:6}}>{_imgs.map((uri,j) => <img key={j} src={uri} alt="img" style={{maxWidth:150,maxHeight:150,borderRadius:radius.s,marginRight:4,verticalAlign:'top',border:`1px solid ${colors.borderDefault}`}} />)}</div>
                   ) : null;
                 })()}
-                {/* 思考中指示（阶段化：任意轮思考都显示，秒数每秒跳动，附简版预览） */}
+                {/* 思考中指示（阶段化：任意轮思考都显示，秒数每秒跳动，附简版预览）
+                    A12：去掉 callout 框，改细状态行——6px 雾蓝脉动圆点 + 文案，
+                    思考预览降为 tertiary 三行截断。文案「思考中… Ns」原样保留。 */}
                 {msg.role === 'assistant' && msg.thinking && (
-                  <div style={{ ...calloutStyle('info'), marginBottom:8, flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <Spinner size={14} />
+                  <div style={{ marginBottom:6, display:'flex', flexDirection:'column', gap:3 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize:12, color:colors.accentText }}>
+                      <span style={{ width:6, height:6, borderRadius:'50%', background:colors.accent, flexShrink:0, animation:'ui-pulse-dot 1.2s ease-in-out infinite' }} />
                       <span>思考中… {msg.thinkingElapsed != null ? `${msg.thinkingElapsed}s` : ''}</span>
                     </span>
                     {/* 简版思考预览：让你实时知道 agent 在想什么（只留末尾 120 字） */}
                     {msg.thinkingPreview && (
                       <span style={{ fontSize: 11, color: colors.textTertiary, lineHeight: 1.5,
                         display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                        wordBreak: 'break-word', width: '100%' }}>
+                        wordBreak: 'break-word', width: '100%', paddingLeft:13 }}>
                         {msg.thinkingPreview}
                       </span>
                     )}
@@ -2540,7 +2568,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               </div>
               {/* M1-4：error 事件红色块 + 已完成部分提示 + 重发按钮；M5：模型降级卡片 + 复制错误 */}
               {msg.role === 'assistant' && msg.streamError && (
-                <div style={{ ...calloutStyle('error'), marginTop:8, flexDirection:'column', maxWidth:'78%' }}>
+                <div style={{ ...calloutStyle('error'), marginTop:8, flexDirection:'column', maxWidth:'78%', borderRadius:radius.m }}>
                   <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
                     <Icon name="alert-triangle" size={16} style={{flexShrink:0,marginTop:2}} />
                     <span style={{whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{msg.streamError}</span>
@@ -2582,7 +2610,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               )}
               {/* M5：长加载提示（发送后长时间无事件） */}
               {msg.role === 'assistant' && !msg.streamError && !msg.content && (msg.waitingSeconds || 0) >= 8 && (
-                <div style={{ ...calloutStyle('info'), marginTop:8, maxWidth:'78%' }}>
+                <div style={{ ...calloutStyle('info'), marginTop:8, maxWidth:'78%', borderRadius:radius.m }}>
                   <Spinner size={14} />
                   <span style={{fontSize:12}}>模型加载/推理中，较久属正常（本地模型）…已等待 {msg.waitingSeconds}s</span>
                 </div>
@@ -2632,7 +2660,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* 暂存区 (§8.11) */}
       {pendingItems.length > 0 && (
-        <div style={{ padding:'8px 16px', borderTop:`1px solid ${colors.borderSubtle}`, background:'#F5F5F7', display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }}>
+        <div style={{ padding:'8px 16px', borderTop:`1px solid ${colors.borderSubtle}`, background:colors.bgSidebar, display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }}>
           <span style={{fontSize:11,color:colors.textTertiary,marginRight:4}}>暂存区:</span>
           {pendingItems.filter(p=>p.isImage).map((item, idx) => (
             <div key={idx} style={{ position:'relative' }}>
@@ -2657,14 +2685,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         </div>
       )}
 
-      {/* Input (§8.12) */}
-      <div style={{ padding:'12px 16px', borderTop:`1px solid ${colors.borderSubtle}`, display:'flex', gap:8, alignItems:'flex-end', flexShrink:0 }}>
+      {/* Input (§8.12)：A12 悬浮 composer 卡片——外层留白、内层 820 居中纸面卡片，
+          textarea 去边框融入卡片，底行左附件右发送/停止（30px 石墨圆钮）。
+          ⛔ 事件链/IME 守卫/preventDefault/placeholder/data-tip 全部原样保留。 */}
+      <div style={{ padding:'10px 16px 14px', flexShrink:0 }}>
         <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.doc,.docx,.xlsx,.xlsm,.pptx" />
-        {/* 验收修复：补回上传按钮（checkpoint-003 会话系统重写时丢失，handleUpload 成死代码） */}
-        <button className="ui-btn ui-btn-secondary" onClick={handleUpload} data-tip="上传图片或文本文件（发送前可在暂存区删除）"
-          style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,flexShrink:0}}>
-          <Icon name="paperclip" size={16} style={{color:colors.textSecondary}} />
-        </button>
+        <div style={{ maxWidth:820, margin:'0 auto', background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:radius.l, boxShadow:shadow.s }}>
         <textarea value={input} disabled={inputDisabled} onChange={e=>setInput(e.target.value)}
           onCompositionStart={()=>{composingRef.current=true;}}
           onCompositionEnd={()=>{composingRef.current=false; compositionEndAtRef.current=Date.now();}}
@@ -2684,27 +2710,36 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             }
           }}
           placeholder={pendingItems.length ? '输入文字描述，或直接发送...' : '输入消息（可先上传附件，再输入文字，一起发送）...'}
-          style={{padding:'8px 10px',borderRadius:radius.s,border:`1px solid ${colors.borderStrong}`,background:colors.bgCard,color:colors.textPrimary,fontSize:14,flex:1,minHeight:38,maxHeight:120,resize:'none',fontFamily:fonts.base,lineHeight:1.6,boxSizing:'border-box'}} />
+          style={{padding:'10px 14px 4px',border:'none',background:'transparent',color:colors.textPrimary,fontSize:14,width:'100%',minHeight:38,maxHeight:120,resize:'none',fontFamily:fonts.base,lineHeight:1.6,boxSizing:'border-box',outline:'none'}} />
+        <div style={{ display:'flex', alignItems:'center', padding:'4px 10px 8px' }}>
+          {/* 验收修复：补回上传按钮（checkpoint-003 会话系统重写时丢失，handleUpload 成死代码） */}
+          <button className="ui-btn ui-btn-ghost" onClick={handleUpload} data-tip="上传图片或文本文件（发送前可在暂存区删除）"
+            style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,flexShrink:0,border:'none'}}>
+            <Icon name="paperclip" size={16} style={{color:colors.textSecondary}} />
+          </button>
+          <div style={{ flex:1 }} />
         {sending ? (
           <>
             {/* A5（0.4.16）：思考中也能发送——插入新消息（不打断当前轮，下一轮被读到）。
                 无文本时禁用，与正常发送按钮同一判据。 */}
             <button className="ui-btn ui-btn-primary" onClick={() => handleSend()} data-tip="发送新消息（模型完成当前这一步后会读到）"
               disabled={!hasSendableText(input)}
-              style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:hasSendableText(input)?1:0.5}}>
-              <Icon name="send" size={16} style={{color:colors.onAccent}} />
+              style={{width:30,height:30,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:'50%',border:'none',cursor:'pointer',flexShrink:0,opacity:hasSendableText(input)?1:0.5,marginRight:6}}>
+              <Icon name="send" size={15} style={{color:colors.onInk}} />
             </button>
             <button onClick={handleStop} data-tip="停止"
-              style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',background:'#1A1A1E',cursor:'pointer',flexShrink:0}}>
-              <Icon name="stop" size={12} style={{color:'#FFFFFF'}} />
+              style={{width:30,height:30,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:'50%',border:'none',background:colors.ink,cursor:'pointer',flexShrink:0}}>
+              <Icon name="stop" size={12} style={{color:colors.onInk}} />
             </button>
           </>
         ) : (
           <button className="ui-btn ui-btn-primary" onClick={() => handleSend()} data-tip="发送" disabled={inputDisabled || (!hasSendableText(input) && pendingItems.length===0)}
-            style={{width:38,height:38,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,border:'none',cursor:'pointer',flexShrink:0,opacity:(!hasSendableText(input) && pendingItems.length===0) ? 0.5 : 1}}>
-            <Icon name="send" size={16} style={{color:colors.onAccent}} />
+            style={{width:30,height:30,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:'50%',border:'none',cursor:'pointer',flexShrink:0,opacity:(!hasSendableText(input) && pendingItems.length===0) ? 0.5 : 1}}>
+            <Icon name="send" size={15} style={{color:colors.onInk}} />
           </button>
         )}
+        </div>
+        </div>
       </div>
     </div>
     {/* TS-120：右侧知识仓库面板（可折叠，默认收起，不影响会话区布局）

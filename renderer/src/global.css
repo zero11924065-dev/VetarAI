@@ -16,6 +16,12 @@
 @keyframes ui-blink { 50% { opacity: 0; } }
 @keyframes ui-fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @keyframes ui-pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* A12 交互动效：弹出（菜单/弹窗）、右侧滑入（仓库面板）、淡入（提示条/Toast） */
+@keyframes ui-pop-in { from { opacity: 0; transform: scale(.97) translateY(-2px); } to { opacity: 1; transform: none; } }
+@keyframes ui-slide-in-right { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+.ui-fade-in { animation: ui-fade-in .14s ease; }
+.ui-pop-in { animation: ui-pop-in .15s cubic-bezier(.2,.8,.3,1); }
+.ui-slide-in-right { animation: ui-slide-in-right .18s ease; }
 
 /* 焦点环（雾蓝） */
 :focus { outline: none; }
@@ -70,6 +76,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: #3B82F6; }
 /* A12 新增：浮层菜单项 */
 .ui-menu-item { transition: background-color .12s ease; }
 .ui-menu-item:hover:not(:disabled) { background: #EEEDE9; }
+
+/* A12 新增：图标按钮（顶栏/工具行）悬停与按下 */
+.ui-icon-btn { transition: background-color .12s ease, color .12s ease, transform .1s ease; }
+.ui-icon-btn:hover:not(:disabled) { background: #EEEDE9; }
+.ui-icon-btn:active:not(:disabled) { transform: scale(.92); }
+
+/* A12 新增：条目卡片悬停（列表条目/知识卡片） */
+.ui-card-hover { transition: border-color .15s ease, box-shadow .15s ease; }
+.ui-card-hover:hover { border-color: #D1CEC6 !important; box-shadow: 0 1px 3px rgba(28,28,26,.06); }
 
 /* A12 新增：链接 */
 .ui-link { color: #2563EB; text-decoration: none; }

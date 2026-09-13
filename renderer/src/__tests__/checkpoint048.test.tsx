@@ -78,7 +78,12 @@ describe('checkpoint-048 会话总结与上传扩容', () => {
     });
 
     // 0.4.6：提示属性统一为 data-tip（即时提示），查询同步更新
+    // A12（0.4.25）：总结按钮收纳进「⋯ 更多操作」菜单——先开菜单再取菜单项。
+    // 锚定意图不变：存在该入口且点击后调 /summarize。
     let sumBtn: HTMLElement | null = null;
+    await act(async () => {
+      (document.querySelector('button[data-tip="更多操作"]') as HTMLElement).click();
+    });
     await waitFor(() => {
       sumBtn = document.querySelector('button[data-tip*="生成会话总结"]') as HTMLElement | null;
       expect(sumBtn).toBeTruthy();

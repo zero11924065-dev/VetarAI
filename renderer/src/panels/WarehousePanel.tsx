@@ -133,58 +133,69 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
   };
 
   return (
-    <div style={{ width: 300, flexShrink: 0, borderLeft: `1px solid ${colors.borderSubtle}`, background: colors.bgSidebar, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    /* A12（0.4.25）：白底面板 + 右侧滑入动效；主操作改石墨黑（方向A）。
+       ⛔ 全部文案、data-tip、title 原文保留；检索/注入逻辑零改动。 */
+    <div className="ui-slide-in-right" style={{ width: 300, flexShrink: 0, borderLeft: `1px solid ${colors.borderSubtle}`, background: colors.bgCard, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* 头部 */}
-      <div style={{ padding: '10px 12px', borderBottom: `1px solid ${colors.borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Icon name="database" size={15} style={{ color: colors.accentText }} />
+      <div style={{ padding: '12px 14px', borderBottom: `1px solid ${colors.borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ width:22, height:22, borderRadius:6, display:'inline-flex', alignItems:'center', justifyContent:'center', background:colors.accentBgSoft, border:`1px solid ${colors.accentBorder}` }}>
+            <Icon name="database" size={12} style={{ color: colors.accentText }} />
+          </span>
           <span style={{ fontSize: 13, fontWeight: 600, color: colors.textPrimary }}>知识仓库</span>
         </div>
-        <button onClick={onClose} data-tip="收起面板"
+        <button onClick={onClose} data-tip="收起面板" className="ui-icon-btn"
           style={{ width: 24, height: 24, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: radius.s }}>
           <Icon name="chevron-right" size={15} style={{ color: colors.textSecondary }} />
         </button>
       </div>
 
-      {/* 作用域切换 */}
-      <div style={{ padding: '10px 12px 4px', display: 'flex', gap: 6 }}>
+      {/* 作用域切换（分段控件） */}
+      <div style={{ padding: '10px 14px 4px', display: 'flex', gap: 4, background: 'transparent' }}>
+        <div style={{ display:'flex', flex:1, background:colors.bgHover, borderRadius:radius.m, padding:2 }}>
         {(['project', 'global'] as const).map(s => (
           <button key={s} onClick={() => setScope(s)}
             style={{
-              flex: 1, padding: '5px 0', fontSize: 12, borderRadius: radius.s, cursor: 'pointer',
-              border: scope === s ? `1px solid ${colors.accentBorder}` : `1px solid ${colors.borderStrong}`,
-              background: scope === s ? colors.accentBg : colors.bgCard,
-              color: scope === s ? colors.accentText : colors.textSecondary,
+              flex: 1, padding: '5px 0', fontSize: 12, borderRadius: 8, cursor: 'pointer',
+              border: scope === s ? `1px solid ${colors.borderDefault}` : '1px solid transparent',
+              background: scope === s ? colors.bgCard : 'transparent',
+              color: scope === s ? colors.textPrimary : colors.textSecondary,
+              fontWeight: scope === s ? 500 : 400,
+              boxShadow: scope === s ? shadow.s : 'none',
+              transition: 'background-color .15s ease, color .15s ease, box-shadow .15s ease',
             }}>
             {s === 'project' ? '本项目' : '全局'}
           </button>
         ))}
+        </div>
       </div>
 
       {/* 搜索框 */}
-      <div style={{ padding: '8px 12px 4px', display: 'flex', gap: 6 }}>
+      <div style={{ padding: '8px 14px 4px', display: 'flex', gap: 6 }}>
         <input value={query} onChange={e => setQuery(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') doSearch(); }}
           placeholder="搜索（关键词/换述，留空=列出全部）"
-          style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
-        <button onClick={doSearch} disabled={searching} data-tip="搜索"
-          style={{ width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: colors.accent, color: colors.onAccent, borderRadius: radius.s, cursor: searching ? 'wait' : 'pointer', flexShrink: 0 }}>
-          {searching ? <Spinner size={14} /> : <Icon name="sparkle" size={14} />}
+          className="ui-input"
+          style={{ ...inputStyle, flex: 1, minWidth: 0, border: `1px solid ${colors.borderDefault}`, borderRadius: radius.m, transition:'border-color .15s ease' }} />
+        <button onClick={doSearch} disabled={searching} data-tip="搜索" className="ui-btn ui-btn-primary"
+          style={{ width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', borderRadius: radius.m, cursor: searching ? 'wait' : 'pointer', flexShrink: 0 }}>
+          {searching ? <Spinner size={14} /> : <Icon name="search" size={14} style={{ color: colors.onInk }} />}
         </button>
       </div>
 
       {/* 检索模式切换（阶段二：混合/关键词/语义） */}
-      <div style={{ padding: '0 12px 6px', display: 'flex', gap: 6 }}>
+      <div style={{ padding: '6px 14px 8px', display: 'flex', gap: 6 }}>
         {([['hybrid', '混合'], ['keyword', '关键词'], ['semantic', '语义']] as const).map(([m, label]) => (
           <button key={m} onClick={() => setSearchMode(m)}
             title={m === 'hybrid' ? '关键词+语义两路融合（默认，最全）'
               : m === 'keyword' ? '精确匹配字词（FTS5 全文）'
               : '理解语义找近义内容（bge-m3 本地模型）'}
             style={{
-              flex: 1, padding: '3px 0', fontSize: 11, borderRadius: radius.s, cursor: 'pointer',
+              flex: 1, padding: '3px 0', fontSize: 11, borderRadius: radius.pill, cursor: 'pointer',
               border: searchMode === m ? `1px solid ${colors.accentBorder}` : `1px solid ${colors.borderSubtle}`,
               background: searchMode === m ? colors.accentBg : colors.bgCard,
               color: searchMode === m ? colors.accentText : colors.textTertiary,
+              transition: 'background-color .15s ease, border-color .15s ease, color .15s ease',
             }}>
             {label}
           </button>
@@ -192,15 +203,15 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
       </div>
 
       {/* 结果列表 */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 14px' }}>
         {results.length === 0 && (
           <div style={{ textAlign: 'center', color: colors.textTertiary, fontSize: 12, padding: '24px 0' }}>
             {searching ? '搜索中…' : (query.trim() ? '无匹配结果' : '暂无知识条目')}
           </div>
         )}
         {results.map(e => (
-          <div key={e.id}
-            style={{ padding: '8px 10px', marginBottom: 6, borderRadius: radius.s, background: colors.bgCard, border: `1px solid ${colors.borderSubtle}`, boxShadow: shadow.s }}>
+          <div key={e.id} className="ui-card-hover"
+            style={{ padding: '9px 10px', marginBottom: 6, borderRadius: radius.m, background: colors.bgCard, border: `1px solid ${colors.borderSubtle}` }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
               <input type="checkbox" checked={checked.has(e.id)} onChange={() => toggleCheck(e.id)}
                 style={{ accentColor: colors.accent, marginTop: 2, cursor: 'pointer' }} />
@@ -223,12 +234,11 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
       </div>
 
       {/* 底部：发送到会话 */}
-      <div style={{ padding: '10px 12px', borderTop: `1px solid ${colors.borderSubtle}` }}>
-        <button onClick={handleInject} disabled={checked.size === 0}
+      <div style={{ padding: '10px 14px', borderTop: `1px solid ${colors.borderSubtle}` }}>
+        <button onClick={handleInject} disabled={checked.size === 0} className="ui-btn ui-btn-primary"
           style={{
-            width: '100%', padding: '8px 0', fontSize: 13, borderRadius: radius.s, cursor: checked.size ? 'pointer' : 'default',
-            border: 'none', background: checked.size ? colors.accent : colors.disabledBg,
-            color: checked.size ? colors.onAccent : colors.disabledText,
+            width: '100%', padding: '8px 0', fontSize: 13, borderRadius: radius.m, cursor: checked.size ? 'pointer' : 'default',
+            border: 'none',
             opacity: checked.size ? 1 : 0.7,
           }}>
           发送 {checked.size} 条到会话
