@@ -19,9 +19,13 @@
 /* A12 交互动效：弹出（菜单/弹窗）、右侧滑入（仓库面板）、淡入（提示条/Toast） */
 @keyframes ui-pop-in { from { opacity: 0; transform: scale(.97) translateY(-2px); } to { opacity: 1; transform: none; } }
 @keyframes ui-slide-in-right { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+/* 弹窗遮罩淡入 / 消息上浮入场（灵动批） */
+@keyframes ui-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ui-rise-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 .ui-fade-in { animation: ui-fade-in .14s ease; }
 .ui-pop-in { animation: ui-pop-in .15s cubic-bezier(.2,.8,.3,1); }
 .ui-slide-in-right { animation: ui-slide-in-right .18s ease; }
+.ui-rise-in { animation: ui-rise-in .16s ease; }
 
 /* 焦点环（雾蓝） */
 :focus { outline: none; }
@@ -31,8 +35,10 @@
 input[type="checkbox"], input[type="radio"] { accent-color: #3B82F6; }
 
 /* 通用按钮悬停/按下/禁用 —— 内联样式无法写伪类，用 class 承载 */
-.ui-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.ui-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease, transform .1s ease; }
 .ui-btn:disabled { cursor: not-allowed; }
+/* 灵动批：所有按钮按下微缩反馈（ui-icon-btn 的 .92 规则靠后，覆盖此处） */
+.ui-btn:active:not(:disabled) { transform: scale(.97); }
 
 /* 主按钮（石墨黑） */
 .ui-btn-primary { background: #1C1C1A; color: #FAFAF8; }

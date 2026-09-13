@@ -69,7 +69,8 @@ export const colors = {
 
   // 语义色（降饱和：成功 / 警告 / 危险）
   ok: '#3D9B63', okBg: '#EBF6EF', okBorder: '#C8E6D4', okText: '#1F6B3E',
-  warn: '#C9821A', warnBg: '#FBF3E3', warnBorder: '#ECD9B0', warnText: '#7A5511',
+  // 灵动批：用户反馈左栏黄色太深突兀——warn 族整体再降一档（更浅的米黄底、更柔的琥珀字）
+  warn: '#C99A3F', warnBg: '#FBF6E9', warnBorder: '#EEE2BE', warnText: '#8A6D24',
   danger: '#DC4C42', dangerBg: '#FBEDEC', dangerBorder: '#F2C7C2', dangerText: '#963026',
   dangerHover: '#C93F36', dangerActive: '#B2342C', dangerLink: '#C0352C',
 

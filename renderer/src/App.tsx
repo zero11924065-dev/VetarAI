@@ -29,6 +29,7 @@ import { SettingsPage } from './panels/SettingsPage';
 import { WorkflowPanel } from './panels/WorkflowPanel';
 import { ModuleNav, ModuleKey } from './panels/ModuleNav';
 import { TipPortal } from './TipPortal';
+import { Accordion } from './Accordion';
 import { getApiBase } from './apiBase';
 import { startAppEventStream } from './appEvents';
 import { colors, fonts } from './theme';
@@ -196,7 +197,8 @@ export default function App() {
           />
         )}
 
-        {/* Task queue toggle (TS-108 M3-2 决策 4：任务队列可视化) */}
+        {/* Task queue toggle (TS-108 M3-2 决策 4：任务队列可视化)
+            A12 灵动批：展开/收起走 Accordion 高度过渡；chevron 旋转向下→上 */}
         {selectedProjectId && (
           <div>
             <button
@@ -207,13 +209,13 @@ export default function App() {
             >
               <Icon name="clipboard" size={16} />
               <span style={{ flex: 1 }}>任务队列</span>
-              <Icon name={openPanel === 'tasks' ? 'chevron-up' : 'chevron-down'} size={14} style={{ color: colors.textTertiary }} />
+              <Icon name="chevron-down" size={14} style={{ color: colors.textTertiary, transform: openPanel === 'tasks' ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' }} />
             </button>
-            {openPanel === 'tasks' && (
+            <Accordion open={openPanel === 'tasks'}>
               <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
                 <TaskPanel projectId={selectedProjectId} onJumpToAgent={jumpToAgent} />
               </div>
-            )}
+            </Accordion>
           </div>
         )}
 
@@ -228,9 +230,9 @@ export default function App() {
             >
               <Icon name="mic" size={16} />
               <span style={{ flex: 1 }}>圆桌</span>
-              <Icon name={openPanel === 'roundtable' ? 'chevron-up' : 'chevron-down'} size={14} style={{ color: colors.textTertiary }} />
+              <Icon name="chevron-down" size={14} style={{ color: colors.textTertiary, transform: openPanel === 'roundtable' ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' }} />
             </button>
-            {openPanel === 'roundtable' && (
+            <Accordion open={openPanel === 'roundtable'}>
               <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
                 <RoundtablePanel
                   projectId={selectedProjectId}
@@ -238,7 +240,7 @@ export default function App() {
                   onSelect={(rtId) => setViewingRtId(rtId)}
                 />
               </div>
-            )}
+            </Accordion>
           </div>
         )}
 
@@ -251,7 +253,7 @@ export default function App() {
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: showSettingsPage ? 'none' : 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', background: colors.bgApp }}>
         {/* TS-109 改进：圆桌详情右侧大屏（与对话视图互斥显示；对话组件保活不销毁） */}
         {selectedProjectId && viewingRtId && (
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', animation:'ui-fade-in .18s ease' }}>
             <RoundtableView
               projectId={selectedProjectId}
               roundtableId={viewingRtId}

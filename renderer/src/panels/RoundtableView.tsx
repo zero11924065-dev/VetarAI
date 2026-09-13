@@ -23,6 +23,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { colors, fonts, radius, shadow, typo, card, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, badge, calloutStyle, select as selectStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog } from '../Dialog';
+import { Accordion } from '../Accordion';
 
 // TS-109 改进（用户验收反馈）：圆桌详情右侧大屏展示（对齐普通对话的观看体验）。
 // 头部：议题 + 状态 + 轮次 + 主持人（用户/AI）+ 参与者；
@@ -307,13 +308,13 @@ export function RoundtableView({ projectId, roundtableId, onExit }: {
         <div style={{ borderBottom: `1px solid ${colors.borderSubtle}`, background: colors.bgCard }}>
           <button onClick={() => setShowMinutes(v => !v)}
             style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 500, color: colors.textPrimary, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Icon name="file-text" size={14} /> 讨论纪要 <Icon name={showMinutes ? 'chevron-up' : 'chevron-down'} size={14} style={{ color: colors.textTertiary }} />
+            <Icon name="file-text" size={14} /> 讨论纪要 <Icon name="chevron-down" size={14} style={{ color: colors.textTertiary, transform: showMinutes ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' }} />
           </button>
-          {showMinutes && (
+          <Accordion open={showMinutes}>
             <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 13, lineHeight: 1.6, color: colors.textSecondary, margin: 0, padding: '0 16px 12px', fontFamily: fonts.base }}>
               {detail.minutes}
             </pre>
-          )}
+          </Accordion>
         </div>
       )}
 

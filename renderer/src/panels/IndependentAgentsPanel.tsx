@@ -22,6 +22,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { colors, fonts, radius, shadow, typo, badge, btnPrimary, btnSecondary, btnGhost, input, textarea as textareaStyle, select as selectStyle } from '../theme';
 import { Icon, Spinner } from '../Icon';
 import { confirmDialog, alertDialog } from '../Dialog';
+import { Accordion } from '../Accordion';
 import { on } from '../events';
 import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
 
@@ -196,13 +197,14 @@ export function IndependentAgentsPanel({ selectedAgentId, onSelect, onAgentDelet
         {agents.length > 0 && (
           <span style={{ ...badge(colors.accentBg, colors.accentText), fontSize: 11 }}>{agents.length}</span>
         )}
-        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14} style={{ color: colors.textTertiary }} />
+        <Icon name="chevron-down" size={14} style={{ color: colors.textTertiary, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' }} />
       </button>
 
       {/* 展开区：创建表单 + 独立 Agent 列表
           checkpoint-061：独立 Agent 多时展开区会撑爆侧栏挤掉下方项目/设置入口——
-          限高 45vh（与左栏其他手风琴一致）+ 独立滚动。 */}
-      {open && (
+          限高 45vh（与左栏其他手风琴一致）+ 独立滚动。
+          A12 灵动批：Accordion 高度过渡（关闭延迟卸载，展开/收起双向动画）。 */}
+      <Accordion open={open}>
         <div style={{ padding: '4px 12px 10px', maxHeight: '45vh', overflowY: 'auto' }}>
           {/* 创建表单：名称 / 模型 / 角色设定 */}
           <div style={{ background: colors.bgCard, border: `1px solid ${colors.borderDefault}`, borderRadius: radius.m, padding: 10, display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
@@ -297,7 +299,7 @@ export function IndependentAgentsPanel({ selectedAgentId, onSelect, onAgentDelet
             );
           })}
         </div>
-      )}
+      </Accordion>
     </div>
   );
 }

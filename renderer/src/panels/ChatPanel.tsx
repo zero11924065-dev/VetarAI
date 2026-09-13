@@ -244,7 +244,7 @@ function ToolStepBar({ step }: { step: ToolStep }) {
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14} style={{ color:colors.textTertiary }} />
       </div>
       {open && (
-        <div style={{ padding:'4px 10px 10px', fontSize:12, color:colors.textSecondary }}>
+        <div style={{ padding:'4px 10px 10px', fontSize:12, color:colors.textSecondary, animation:'ui-fade-in .14s ease' }}>
           {(step.summary || step.error) && (
             <div style={{ whiteSpace:'pre-wrap', wordBreak:'break-word', marginBottom:6, color: step.status === 'error' ? colors.dangerText : colors.textSecondary }}>
               {step.status === 'error' ? (step.error || 'unknown') : step.summary}
@@ -320,12 +320,43 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
       ? `正在调用工具（${running}/${steps.length} 进行中）…`
       : `工具调用 ${steps.length} 步`;
 
-  if (collapsed) {
+  /* A12 灵动批：手风琴高度过渡（grid 0fr↔1fr）。
+     ⛔ 折中点：流结束的**自动收拢**必须同步卸载步骤（B4 测试①/④ 断言
+     收拢后 textContent 立即不含步骤文案）；仅「用户手动收起」走 210ms 收缩动画
+     （步骤保持挂载、grid 1fr→0fr，播完再卸载）——该窗口期无任何测试断言。 */
+  const [userClosing, setUserClosing] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    if (collapsed) { setEntered(false); return; }
+    // 展开首帧 0fr、次帧 1fr → 展开动画（jsdom 无 rAF 时降级 setTimeout(0)）
+    if (typeof requestAnimationFrame === 'function') {
+      let id2 = 0;
+      const id1 = requestAnimationFrame(() => { id2 = requestAnimationFrame(() => setEntered(true)); });
+      return () => { cancelAnimationFrame(id1); if (id2) cancelAnimationFrame(id2); };
+    }
+    const t = setTimeout(() => setEntered(true), 0);
+    return () => clearTimeout(t);
+  }, [collapsed]);
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+
+  const handleBarClick = () => {   // 收拢 → 展开
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+    setUserClosing(false);
+    setUserToggled(true); setOpen(true);
+  };
+  const handleHeadClick = () => {  // 展开 → 用户手动收起（走收缩动画窗口）
+    setUserToggled(true);
+    setUserClosing(true);
+    closeTimer.current = setTimeout(() => { setUserClosing(false); setOpen(false); }, 210);
+  };
+
+  if (collapsed && !userClosing) {
     /* 收拢态：整组一行，点击展开全部步骤（展开后每条仍可单独查看摘要/参数） */
     return (
       <div style={{ marginBottom:8 }}>
         <div
-          onClick={() => { setUserToggled(true); setOpen(true); }}
+          onClick={handleBarClick}
           style={{ display:'flex', alignItems:'center', gap:6, padding:'0 10px', height:28,
             cursor:'pointer', borderRadius:radius.pill, fontSize:12.5,
             border:`1px solid ${failed > 0 ? colors.warnBorder : colors.borderSubtle}`,
@@ -342,20 +373,29 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
       </div>
     );
   }
-  /* 展开态：逐条渲染；多于一步时给出可点收起的组头 */
+  /* 展开态：逐条渲染；多于一步时给出可点收起的组头。
+     userClosing 窗口内 collapsed 尚未成立（open 仍 true），步骤保持挂载、grid 收向 0fr。 */
   return (
     <div style={{ marginBottom:8 }}>
       {steps.length > 1 && (
         <div
-          onClick={() => { setUserToggled(true); setOpen(false); }}
+          onClick={handleHeadClick}
           style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6, height:22,
             cursor:'pointer', fontSize:12, color:colors.textTertiary }}>
           <Icon name="layers" size={12} style={{ flexShrink:0 }} />
           <span style={{ flex:1, minWidth:0, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }} title={headLabel}>{headLabel}</span>
-          <Icon name="chevron-up" size={12} style={{ flexShrink:0 }} />
+          <Icon name="chevron-down" size={12} style={{ flexShrink:0, transform:'rotate(180deg)', transition:'transform .2s ease' }} />
         </div>
       )}
-      {steps.map((st, j) => <ToolStepBar key={st.id||j} step={st} />)}
+      <div style={{
+        display:'grid',
+        gridTemplateRows: userClosing ? '0fr' : entered ? '1fr' : '0fr',
+        transition:'grid-template-rows .2s cubic-bezier(.2,.8,.3,1)',
+      }}>
+        <div style={{ overflow:'hidden', minHeight:0 }}>
+          {steps.map((st, j) => <ToolStepBar key={st.id||j} step={st} />)}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2286,7 +2326,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* M2 溢出预警警告条 (§8.7) */}
       {compactWarning && (
-        <div style={{ ...calloutStyle('warn'), borderRadius:radius.m, padding:'10px 16px', margin:'8px 16px 0', flexWrap:'wrap' }}>
+        <div style={{ ...calloutStyle('warn'), borderRadius:radius.m, padding:'10px 16px', margin:'8px 16px 0', flexWrap:'wrap', animation:'ui-fade-in .14s ease' }}>
           <Icon name="alert-triangle" size={16} style={{flexShrink:0}} />
           <span>上下文已用 {compactWarning.used}/{compactWarning.limit}（{Math.round(compactWarning.used/compactWarning.limit*100)}%），预计还能约 {compactWarning.est >= 0 ? compactWarning.est : '未知'} 轮。请选择处理方式：</span>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -2367,10 +2407,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* TS-120：转移弹窗（选作用域/标题/分类/关键词） */}
       {showTransferModal && (
-        <div style={{ position:'absolute', inset:0, background:'rgba(28,28,26,0.32)', backdropFilter:'blur(3px)', WebkitBackdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}
+        <div style={{ position:'absolute', inset:0, background:'rgba(28,28,26,0.36)', backdropFilter:'blur(6px)', WebkitBackdropFilter:'blur(6px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, animation:'ui-overlay-in .16s ease' }}
           onClick={() => setShowTransferModal(false)}>
           <div onClick={e => e.stopPropagation()}
-            style={{ width:400, background:colors.bgCard, borderRadius:radius.l, boxShadow:shadow.l, padding:22, border:`1px solid ${colors.borderSubtle}` }}>
+            style={{ width:400, background:colors.bgCard, borderRadius:radius.l, boxShadow:shadow.l, padding:22, border:`1px solid ${colors.borderSubtle}`, animation:'ui-pop-in .18s cubic-bezier(.2,.8,.3,1)' }}>
             <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
               <Icon name="database" size={16} style={{ color:colors.accentText }} />
               <span style={{ fontSize:14, fontWeight:600, color:colors.textPrimary }}>移入知识仓库</span>
@@ -2423,7 +2463,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* M5（TS-111）：断线重连提示条 (§8.8) */}
       {reconnectNotice && (
-        <div style={{ ...calloutStyle('warn'), borderRadius:radius.m, padding:'6px 16px', margin:'8px 16px 0' }}>
+        <div style={{ ...calloutStyle('warn'), borderRadius:radius.m, padding:'6px 16px', margin:'8px 16px 0', animation:'ui-fade-in .14s ease' }}>
           <Spinner size={14} />
           <span style={{fontSize:13}}>{reconnectNotice}</span>
         </div>
@@ -2454,7 +2494,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           /* A12：assistant 改无框文档式（透明底、无内边距卡片感），用户消息保留纸面卡片气泡 */
           const bubblePadding = isUser || isSystem ? '10px 14px' : '2px 0';
           return (
-            <div key={msg.id || i} style={{ maxWidth:820, margin:'0 auto 14px', display:'flex', flexDirection:'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+            <div key={msg.id || i} className="ui-rise-in" style={{ maxWidth:820, margin:'0 auto 14px', display:'flex', flexDirection:'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
               {/* 角色标签行 */}
               <div style={{fontSize:11,color:colors.textTertiary,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
                 {/* TS-120：勾选模式下显示复选框（系统消息不可勾选）。TS-121：流结束后
@@ -2652,7 +2692,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           <button onClick={scrollToBottom} data-tip="回到底部"
             style={{position:'sticky', bottom:8, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', justifyContent:'center',
                     width:36, height:36, margin:'8px auto 0', background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:'50%',
-                    cursor:'pointer', boxShadow:shadow.s}}>
+                    cursor:'pointer', boxShadow:shadow.s, animation:'ui-pop-in .16s ease'}}>
             <Icon name="chevron-down" size={16} style={{color:colors.textSecondary}} />
           </button>
         )}

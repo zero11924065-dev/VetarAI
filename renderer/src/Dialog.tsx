@@ -31,16 +31,17 @@ type DialogKind = 'confirm' | 'alert';
 // A12（0.4.25）「纸面工具」：弹窗视觉重做（行为契约零变化：
 // 点遮罩关闭 / Esc 取消 / Enter 确认 / prompt 自动聚焦 / 勾选值仅确认时回传）。
 const overlayStyle: React.CSSProperties = {
-  position: 'fixed', inset: 0, background: 'rgba(28,28,26,0.32)',
-  backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)',
+  position: 'fixed', inset: 0, background: 'rgba(28,28,26,0.36)',
+  backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
   zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
   fontFamily: fonts.base,
+  animation: 'ui-overlay-in .16s ease',
 };
 const dialogCardStyle: React.CSSProperties = {
   width: 400, maxWidth: '90vw', background: colors.bgCard,
   borderRadius: radius.l, boxShadow: shadow.l, padding: '22px 24px',
   color: colors.textPrimary, border: `1px solid ${colors.borderSubtle}`,
-  animation: 'ui-fade-in .16s ease',
+  animation: 'ui-pop-in .18s cubic-bezier(.2,.8,.3,1)',
 };
 const dialogTitleStyle: React.CSSProperties = { fontSize: 15, fontWeight: 600, letterSpacing: 0.1 };
 const dialogBodyStyle: React.CSSProperties = {
