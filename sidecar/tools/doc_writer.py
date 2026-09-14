@@ -205,7 +205,6 @@ def _add_page_number_footer(d, fmt: str = "第{p}页 共{t}页") -> None:
         footer = sec.footer
         p = footer.paragraphs[0]
         p.alignment = 1  # WD_ALIGN_PARAGRAPH.CENTER
-        # 清空已有内容
         for r in list(p.runs):
             r._element.getparent().remove(r._element)
         # 逐段构建：按 {p} / {t} 切分

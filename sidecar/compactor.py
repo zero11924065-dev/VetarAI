@@ -128,7 +128,6 @@ async def compact_session(project_id: str, session_id: str, keep_recent: int | N
 
     log_compact(project_id, session_id, before_tokens, after_tokens, str(archive_path), summary_text[:200])
     deleted = delete_messages_before(project_id, session_id, keep_recent)
-    # 取 agent_id（从保留区第一条消息）
     # 从 sessions 表取 agent_id
     # checkpoint-050 查虫修复：改用统一读上下文管理器（防连接泄漏）
     from sidecar.storage.store import _read_conn

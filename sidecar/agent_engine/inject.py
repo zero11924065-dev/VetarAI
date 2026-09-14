@@ -61,7 +61,7 @@ def begin_stream(session_id: str) -> None:
         return
     with _LOCK:
         _ACTIVE.add(sid)
-        _QUEUES.setdefault(sid, [])   # 起一个空队列
+        _QUEUES.setdefault(sid, [])
 
 
 def end_stream(session_id: str) -> None:

@@ -203,7 +203,6 @@ class PluginLoader:
                     guard_report_failure(egress_host)  # 熔断上报：连续失败后该域名秒拒
                 raise
 
-        # Read manifest
         manifest_path = plugin_dir / "manifest.json"
         if not manifest_path.exists():
             manifest = {
@@ -328,7 +327,6 @@ class PluginLoader:
 
             try:
                 result = hook_fn(agent_context)
-                # Handle async
                 if hasattr(result, '__await__'):
                     result = await result
                 return {"plugin": pname, "hook": hook_name, "result": result}

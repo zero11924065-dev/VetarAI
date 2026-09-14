@@ -201,7 +201,6 @@ def install_skill_from_repo(url_or_path: str) -> dict[str, Any]:
         if local.exists():
             skill_md = local / "SKILL.md"
             if not skill_md.is_file():
-                # 本地路径下找子目录
                 cands = list(local.rglob("SKILL.md"))
                 if not cands:
                     return {"ok": False, "error": "该目录内未找到 SKILL.md"}
@@ -215,7 +214,6 @@ def install_skill_from_repo(url_or_path: str) -> dict[str, Any]:
                 return {"ok": False, "error": f"技能已存在: {name}"}
             shutil.copytree(str(skill_md.parent), str(dest))
             return {"ok": True, "name": name}
-        # git 克隆
         tmp = tempfile.mkdtemp(prefix="skill_install_")
         env = _egress_env()
         try:

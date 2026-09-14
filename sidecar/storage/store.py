@@ -739,7 +739,6 @@ def save_message(project_id: str, session_id: str, agent_id: str, role: str, con
              json.dumps(tool_steps, ensure_ascii=False) if tool_steps else None,
              1 if truncated else 0, prompt_eval_count, 1 if stopped else 0),
         )
-        # 更新会话时间
         conn.execute("UPDATE sessions SET updated_at = datetime('now') WHERE id = ?", (session_id,))
 
 
