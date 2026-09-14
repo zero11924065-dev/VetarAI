@@ -95,32 +95,12 @@ const STORAGE_KEY = 'subagent_messages_v4';
 
 // ── F6（0.4.24，checkpoint-111）：图片 base64 移出会话缓存 ──────────────────
 /**
- * 真凶（2026-09-13 用户真机复测 + 实测坐实，详见 `39-…执行计划.md` 第一节）：
- *   会话缓存实测 **47185498 字节，其中图片 base64 44973802 = 95.3%**（124 张）。
- *   `syncSessionLocal` 每次写入都对**整个 store** 做 `JSON.parse` → 改一个字段 →
- *   `JSON.stringify` → `setItem`，**全同步阻塞主线程**，真机单次约 **400ms**
- *   （M6 切会话独立实测 406ms、探针 longTaskMaxMs 439ms 互证）
- *   → 主线程被占 803ms/秒，fps 掉到 2.7~3.8、Electron 渲染进程烧到 94~103%。
+ * 真凶（2026-09-13 实测坐实）：47MB 会话缓存中图片 base64 占 95.3%，`syncSessionLocal`
+ * 每次写入全量 parse/stringify、同步阻塞主线程约 400ms → 两个写出口须对**所有会话**剥离。
+ * 实测明细与四个安全卡点已迁出：详见 交接/03-修复与调试历史记录.md 第十六部分
  *
  * ⛔⛔ 关键约束（决定方案，不可省）：`syncSessionLocal` parse 的是**整个 store**，
- *   故只剥离"当前会话"的图片毫无意义——其他会话的 45MB 仍在，parse/stringify 照样慢。
- *   **必须整体迁移**：两个写出口都对 store 的**所有会话**剥离。
- *
- * ✅ 为什么剥离是安全的（四个卡点逐个代码核实）：
- *   · **DB 才是权威源**：`session_messages.images TEXT`（`sidecar/storage/store.py:77`），
- *     user 消息图片在 `app.py:1134` 落库，**早于** `return StreamingResponse`(:1481)
- *     → 流开始前 DB 已有图，不存在窗口期；且 `:1809` 的 images 只用于视觉识别、非落库路径，
- *     **落库唯一路径就是 `:1134`**。
- *   · **恢复有保障**：`mergeDbWithLocal` 返回 `[...dbMsgs, ...extra]`（`ChatPanel.tsx:665`），
- *     DB 消息是基底 → 缓存无图时 DB 的 images 自动补回。
- *   · **老缓存自动迁移**：`loadSessionMessages` 每次都 `syncSessionLocal(sid, merged)`（`:690`）
- *     → 切换会话即触发整 store 剥离，无需单独的迁移代码。
- *   · 内存态不受影响：渲染走 ChatPanel 的 `localMessages`，
- *     本函数只改**落盘副本**。
- *
  * ⛔ 已知代价（如实标注，不隐瞒）：「乐观追加 user 气泡 → POST 落库」这个**几十毫秒窗口**内
- *   若刷新，DB 尚无该消息 → 缓存副本恢复后气泡与正文仍在、但**该条的图片丢失**。
- *   改前此窗口刷新会得到完整气泡（含图）。窗口极小，且图片在 DB 落库后即永久安全。
  */
 const HEAVY_PREFIX = 'data:';
 const isHeavy = (s: unknown): boolean => typeof s === 'string' && s.startsWith(HEAVY_PREFIX);
