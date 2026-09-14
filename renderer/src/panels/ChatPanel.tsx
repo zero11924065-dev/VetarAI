@@ -58,20 +58,10 @@ function hasSendableText(raw: string): boolean {
 
 /**
  * A/B-2（0.4.23）：消息「移入知识仓库」后，重算顶栏上下文指示器。
+ * 实测明细与推理过程已迁出：详见 交接/03-修复与调试历史记录.md 第十四部分
  *
  * ⛔ **为什么是扣减而不是归零**：原实现在归档后把后端真实字数 `ctx_chars` 置 0，
- * 让指示器退回**纯前端启发式**（只数未归档的 user/assistant 正文 ×0.6）。而启发式
- * **不含 system prompt 与工具声明**——实测 `tools_spec` 单独就 8433 字符 ≈ **5060 token**
- * （18 个工具）。于是"移入仓库后"数字不是变小一点，而是**断崖式掉到远低于真实值**，
- * 直到下一轮 `state` 事件才跳回 → 用户看到数字忽大忽小（用户 2026-09-12 报
- * 「token 计数逻辑有误，修复多次未成功」的成因之一；历次修复都只在调估算精度，没人动过这里）。
- *
- * ✅ 正解：只从真实值里**扣掉被归档消息自身的贡献**，保住 system prompt + 工具声明基线，
- * 同时仍然满足用户明确要求的「移入仓库即下降、脱离上下文就该重新计算」。
- *
  * ⛔ 已知近似（如实标注，不假装精确）：扣的是消息 `content` 的字符数，而后端 `_ctx_chars`
- * 统计的是 msgs 全部角色与全部字段（含 role 等 JSON 结构字符），故扣减**略小于**真实减少量。
- * 这是保守方向的误差（宁可少扣也不把数字扣到偏低），且下一轮 `state` 事件会用后端真值纠正。
  *
  * @param backendCtxChars 后端最近一次回传的真实上下文字符数（0 = 尚无真值）
  * @returns nextCtxChars：新的真实字符数基准；nextTokenUsed：要显示的 token 数，
@@ -98,23 +88,11 @@ export function ctxTokensAfterArchive(
 
 /**
  * 把 running 态工具步骤收敛为 interrupted（0.4.22 重打包修复二，checkpoint-109）。
- *
- * ═══ 为什么抽成纯函数 ═══
- * 用户实测（2026-09-12 四图）：插入分裂成功后，被定格的旧气泡**仍显示**「正在调用
- * web_search…」转圈与「模型加载/推理中…已等待 26s」横幅。落库证据：该会话只有 2 条
- * assistant 落库，**分裂出的段1 从未落库**；其折叠行却显示 5 步而分裂点只经过 1~2 轮
- * → **M5 重连导致 loop 整轮重跑**，attempt1 断连时残留的 running（其 tool_result
- * 随断连丢失）再无人收敛。
- *
- * 收敛此前只存在于 3 条手动停止路径（C2，0.4.16）。本批把收敛扩到 5 个出口
- * （3 停止 + 分裂定格 + done 兜底），抽纯函数共用：
- *   · 语义统一（既非 ok 也非 error，不谎称成功/失败）；
- *   · chatPanelC2ToolSteps 的静态计数断言改为数【调用点】，任何一条路径被删都会红。
+ * 用户实测（2026-09-12 四图）落库证据与五点出口收敛的推理已迁出：
+ * 详见 交接/03-修复与调试历史记录.md 第十五部分
  *
  * ⛔ 历史注释断言「分裂点不可能有 running（tool_result 必同轮到达）」——该断言只在
  *   **单连接不重连**时成立，重连/断连即破（tool_result 丢失而 running 永留）。
- *
- * 无 running 时原样返回（引用不变，避免无谓的新数组触发重渲染）。
  */
 export function convergeRunningSteps(steps: ToolStep[] | undefined): ToolStep[] | undefined {
   if (!steps || steps.length === 0) return steps;
@@ -272,21 +250,14 @@ function ToolStepBar({ step }: { step: ToolStep }) {
 const ATTACH_MARK = '--- 附件内容 ---';
 
 /**
- * B4（0.4.12）：工具步骤「完成后折叠」。
- *
- * 问题：每条 ToolStepBar 自身虽已单行折叠，但 N 个步骤会**常驻**会话窗（每条约 38px），
- * 一轮对话调十几次工具就会把正文顶出视野——用户报告"工具调用步骤一直占着会话窗"。
- *
- * 方案：整组收拢为一行摘要；运行中自动展开，全部终结后自动收拢，点击可再展开。
+ * B4（0.4.12）：工具步骤「完成后折叠」——整组收拢为一行摘要；运行中自动展开，
+ * 全部终结后自动收拢，点击可再展开。问题背景与"已完成"判据推理已迁出：
+ * 详见 交接/03-修复与调试历史记录.md 第七部分
  * ⛔ 两个必须守住的约束（否则会引入新缺陷）：
  *   ① **失败不能被折叠藏起来**——收拢行须显眼标出失败数并用警示色，
  *      否则用户以为一切正常，排查线索被藏掉；error 步骤也不计入"成功"。
  *   ② **用户手动展开/收拢的状态不能被自动行为覆盖**——自动切换只在状态跃迁的那一次生效，
  *      用户点过之后（userToggled）组件重渲染也不得再自动改动。
- *
- * "已完成"判据不能用 msg.stopped：DB 加载的历史消息**不带** stopped（只有缓存恢复才置位），
- * 而历史消息里的工具步骤恰恰是最该折叠的。故由外层传入 done（流是否已结束），
- * 组内再确认没有 running 步骤。
  */
 function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
   const running = steps.filter(s => s.status === 'running').length;
@@ -1384,32 +1355,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.archived)
       .map(m => ({ role: m.role, content: m.content }));
 
-    // checkpoint-048：附件文本优先用后端解析结果（PDF/Word/Excel/CSV/文本族）；
-    // 解析中/失败的文件仅作文件名标注，不阻塞发送
-    // checkpoint-067 R-2（用户拍板"完整优先，宁慢勿断"）：律所分析客户材料要求内容完整，
-    // 不得截断——附件文字【全额注入】，单文件上限由后端放宽保障；
-    // 超时风险改由后端放宽流式读超时承担，前端不再牺牲完整性。
+    // checkpoint-048：附件文本优先用后端解析结果；解析失败的文件仅作文件名标注，不阻塞发送。
     // C7（0.4.18）：⛔ 旧实现 `.filter(f => f.parsedText)` 把**解析失败的文件整条丢掉**，
-    //    于是那些文件既没内容也没路径 → agent 永远无从得知它的存在，更读不到原件。
-    //    现改为：有解析文本 → 文本 + 路径；只有路径（如 .zip/扫描件等解析不出的格式）→ 仅路径，
-    //    让 agent 自行决定要不要 read_file。这才是"后续会话读得到"的治本点。
     // ⛔ 表#6（0.4.19）：附件由【推模式】改为【拉模式】——正文只写路径，agent 自己 read_file。
-    //
-    // 推模式的真实代价：解析全文（后端上限单文件 20 万字符）被拼进 user 消息正文 →
-    // 该正文**落库**，并在此后**每一轮**都随 apiMessages 发给模型。传一个 50 页 PDF，
-    // 之后每次对话都重复携带它，上下文被吃满、prefill 变慢（0.4.8「主 Agent 自读 90KB PDF
-    // 跑 20 分钟」的同类机制，只是发生在附件链路）。
-    //
     // ⛔ 为什么现在才能改：表#4（commit 8c2daaa）让 read_file 真能解析 docx/xlsx/pptx/pdf
-    // （此前只会返回二进制乱码）→ 给路径 agent 才真读得到。**在此之前给路径等于没给**。
-    // 与表#8（委派 file_paths）同一设计：传路径，把"读"的动作交给真正要用内容的那一方。
-    //
     // ⛔ 本改动**取代** checkpoint-067 R-2「完整优先，全额注入」的拍板：R-2 当时成立的前提是
-    // agent 读不了附件文件，只能靠注入；该前提已被表#4 消除。完整性不降反升——
-    // read_file 走 doc_reader，含表格与格式概要，且不受 20 万字符注入上限约束。
-    //
     // ⛔ 退化路径必须保留：拿不到 savedPath 时（会话尚未创建 / 后端落盘失败）仍全额注入，
-    // 否则用户会**彻底失去**让 agent 看到该文件的能力——那是比上下文膨胀严重得多的回归。
+    // 推模式代价、R-2 拍板原文与逐条推理已迁出：详见 交接/03-修复与调试历史记录.md 第十部分
     const textFileContents: string[] = textFileItems
       .filter(f => f.parsedText || f.savedPath)
       .map(f => {
@@ -1524,21 +1476,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     let thinkingStartedAt: number | null = null;
     // B05：工具事件也按 id 定位（防止数组变化时落到错误气泡）
     // ⛔⛔ 止血（0.4.24，checkpoint-111）：新增 `persist` 选项（**默认 true，既有调用点语义零变化**）。
-    //
-    // 真凶（2026-09-13 用户真机复测 + 实测坐实，详见 `39-…执行计划.md` 第一节）：
-    //   `syncSessionLocal`（useMessages.ts）每次调用都对 **47MB** 缓存做
-    //   `JSON.parse` → 改一个字段 → `JSON.stringify` → `localStorage.setItem`，**全同步阻塞主线程**，
-    //   真机单次约 **400ms**（M6 切会话独立实测 406ms、探针 longTaskMaxMs 439ms 互证）。
-    //   而它被 scheduleStreamCacheSync 以 500ms 节流挂在本函数上 →
-    //   **两个计时器（流级 + 等待）每秒各 patch 一次 = 每秒 2 次 47MB 全量重写 = 主线程被占 803ms/秒**。
-    //
-    // 为什么计时器不该落盘：它写的三个字段（runElapsed / thinkingElapsed / waitingSeconds）
-    //   **本就是瞬态显示值、不落库**（DB 表 session_messages 的 INSERT 列清单不含它们，
-    //   已核实 `sidecar/storage/store.py:736`）。刷新后流已结束、计时器不会复活，
-    //   这三个字段也不会被读回使用 → 缓存里存它们**毫无价值**，纯粹是每秒 2 次的 400ms 阻塞。
-    //
+    // 真凶（2026-09-13 实测）：47MB 缓存每次写入全量重写约 400ms，两个计时器每秒各 patch 一次
+    // → 主线程被占 803ms/秒；计时器三字段（runElapsed/thinkingElapsed/waitingSeconds）本瞬态不落库。
+    // 落库证据与逐条推理已迁出：详见 交接/03-修复与调试历史记录.md 第十六部分
     // ⛔ persist 默认 true：正文 token / 工具步骤 / 错误 / 分裂定格等路径**仍照常写穿**
-    //   （B07：流式写穿保证刷新/重启不丢消息）。只有计时器两处显式传 false。
     const patchStreamMsg = (patch: (m: Message) => Message, opts?: { persist?: boolean }) => {
       if (currentSessionIdRef.current !== streamSid) return;
       setLocalMessages(prev => {
@@ -1552,22 +1493,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       scheduleStreamCacheSync();
     };
     // ⛔⛔ B12（0.4.21）：**流级计时器**（取代原"思考阶段计时器"）。
-    //
-    // 原缺陷：计时器只在思考态运行，首个正文 token 到达即被 closeThinkingPhase 清除，
-    //   思考用时定格进 thinkingDuration（这是**正确的**——思考确实已结束，再跳就是谎报）；
-    //   而"等待首条正文"的 waitTimer 按 H19 设计同样在首正文即清。于是
-    //   「正文已出 + 工具执行中 + 下轮思考未开始」这一区间界面上**没有任何跳动计时**，
-    //   用户无从判断任务是否还活着（用户 2026-09-11 报告并附截图：步骤 4/200 时只剩定格的「思考 22s」）。
-    //
-    // 现设计：**一个**计时器覆盖整轮流的生命周期（流开始建、流结束清），每秒**一次** patchStreamMsg
-    //   同时写两个字段：runElapsed（整轮已耗时，全程跳）+ thinkingElapsed（仅思考态更新）。
+    // 原缺陷与现设计推理已迁出：详见 交接/03-修复与调试历史记录.md 第十二部分
     //   ⛔ **不新增第二个计时器**：否则思考态期间每秒两次 setLocalMessages → 消息列表重渲染翻倍
-    //     （ChatPanel 2400+ 行、正是 B6/B7 待治理的性能瓶颈区，不能再加压）。
     //   ⛔ runElapsed 用**被 patch 的那条气泡自己的 startedAt** 计算，故插入点分裂后自动跟随段2
-    //     （streamMsgId 已重指向段2、段2 有自己的 startedAt），无需任何特判；
-    //     段1 因定格时被置 stopped=true → isStreamingThis 为 false → 不渲染进行计时（天然正确）。
     //   ⛔ **不得**在此更新 thinkingDuration/completedDuration：前者是思考定格值（语义="思考已结束"），
-    //     后者是 C6「正常完成/手动停止/异常中断」三态判据的一半，两者都由各自路径专职写入。
     const startRunElapsedTimer = () => {
       if (runElapsedTimerRef.current) clearInterval(runElapsedTimerRef.current);
       runElapsedTimerRef.current = setInterval(() => {
