@@ -302,6 +302,19 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/chatPanelF6ImageCache.test.tsx",
         "expect_fail": ["P1"],
     },
+    # ── 0.4.27 更多菜单遮挡根治：portal + fixed 锚定 ─────────────────────
+    {
+        "id": 19,
+        "name": "0.4.27 把更多菜单从 fixed 锚定改回顶栏内 absolute（遮挡回归）",
+        "why": "顶栏 overflow:hidden（0.4.0 为治原生 select 溢出所加）会把 absolute 菜单裁成约 6px "
+               "细条——用户实测看不到也无法点击。修复 = portal 到 body + fixed 锚定按钮矩形。"
+               "本变异把 fixed 改回 absolute（原缺陷形态），M1 的 fixed 断言必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "position:'fixed', top:moreMenuPos.top, right:moreMenuPos.right, zIndex:1201",
+        "mutant": "position:'absolute', top:34, right:0, zIndex:1201 /* MUTATE-19：改回顶栏内 absolute */",
+        "test": "src/__tests__/chatMoreMenuPortal.test.tsx",
+        "expect_fail": ["M1"],
+    },
 ]
 
 

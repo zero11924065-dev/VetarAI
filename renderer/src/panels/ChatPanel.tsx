@@ -20,6 +20,7 @@
 import { getApiBase } from '../apiBase';
 import { apiJson, flash } from '../lib/api';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { purgeSessionLocal, syncSessionLocal, Message, ToolStep } from '../hooks/useMessages';
@@ -541,6 +542,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
   // A12（0.4.25）：顶栏「⋯ 更多操作」菜单（总结/导出/单元归档/重命名/删除收纳其中，治"会话窗上方拥挤"）
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  // 0.4.27 遮挡根治：菜单 portal 到 body + fixed 锚定按钮矩形（按钮 ref 与锚点坐标）
+  const moreMenuBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   // 0.4.9（3.47.1 单元归档）：会话窗开关，默认关。仅开启时后端才暴露 archive_work_unit
   // 工具并注入归档纪律（关闭时工具不存在，零开销）；非自动——必须用户主动启用。
   const [autoArchiveUnit, setAutoArchiveUnit] = useState(false);
@@ -2190,26 +2194,34 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 style={{...iconBtn, background:showKnowledgePanel?colors.accentBg:'transparent'}}>
                 <Icon name="database" size={16} style={{color:showKnowledgePanel?colors.accentText:undefined}} />
               </button>
-              {/* A12：⋯ 更多操作（总结 / 导出 / 单元归档 / 重命名 / 删除） */}
-              <div style={{ position:'relative' }}>
-                <button className="ui-btn ui-btn-ghost ui-icon-btn" onClick={() => setShowMoreMenu(v => !v)} data-tip="更多操作"
-                  style={{...iconBtn, background:showMoreMenu?colors.bgActive:'transparent'}}>
-                  <Icon name="dots" size={16} />
-                </button>
-                {showMoreMenu && (
-                  <>
-                    <div style={{ position:'fixed', inset:0, zIndex:1200 }} onClick={() => setShowMoreMenu(false)} />
-                    <div className="ui-pop-in" style={{ ...menuCard, position:'absolute', top:34, right:0, zIndex:1201, minWidth:190, padding:4, transformOrigin:'top right' }}>
-                      {moreMenuItem('生成会话总结', 'file-text', '生成会话总结并保存（Markdown + 记录）', handleSummarizeSession, { disabled: summarizing, busy: summarizing })}
-                      {moreMenuItem('导出会话', 'download', '导出会话为 Markdown', handleExportSession)}
-                      {moreMenuItem('单元归档', 'archive', '单元归档：开启后 Agent 每完成一个工作单元（批量任务）会把该段对话移入知识仓库，防止上下文膨胀。默认关闭，需手动开启', () => setAutoArchiveUnit(v => !v), { active: autoArchiveUnit })}
-                      <div style={{ height:1, background:colors.borderSubtle, margin:'4px 6px' }} />
-                      {moreMenuItem('重命名', 'pencil', '重命名', () => handleRenameSession(currentSessionId))}
-                      {moreMenuItem('删除', 'trash', '删除', () => handleDeleteSession(currentSessionId), { danger: true })}
-                    </div>
-                  </>
-                )}
-              </div>
+              {/* A12：⋯ 更多操作（总结 / 导出 / 单元归档 / 重命名 / 删除）
+                  0.4.27 遮挡根治：菜单改 createPortal 到 document.body + fixed 锚定按钮矩形。
+                  原 absolute 挂在顶栏内，被顶栏 overflow:hidden（0.4.0 为治原生 select 溢出所加）
+                  裁成约 6px 细条——看不到也无法点击（用户实测）。既有先例：TipPortal。 */}
+              <button ref={moreMenuBtnRef} className="ui-btn ui-btn-ghost ui-icon-btn"
+                onClick={() => {
+                  if (!showMoreMenu && moreMenuBtnRef.current) {
+                    const r = moreMenuBtnRef.current.getBoundingClientRect();
+                    setMoreMenuPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+                  }
+                  setShowMoreMenu(v => !v);
+                }}
+                data-tip="更多操作"
+                style={{...iconBtn, background:showMoreMenu?colors.bgActive:'transparent'}}>
+                <Icon name="dots" size={16} />
+              </button>
+              {showMoreMenu && createPortal(
+                <>
+                  <div style={{ position:'fixed', inset:0, zIndex:1200 }} onClick={() => setShowMoreMenu(false)} />
+                  <div className="ui-pop-in" style={{ ...menuCard, position:'fixed', top:moreMenuPos.top, right:moreMenuPos.right, zIndex:1201, minWidth:190, padding:4, transformOrigin:'top right' }}>
+                    {moreMenuItem('生成会话总结', 'file-text', '生成会话总结并保存（Markdown + 记录）', handleSummarizeSession, { disabled: summarizing, busy: summarizing })}
+                    {moreMenuItem('导出会话', 'download', '导出会话为 Markdown', handleExportSession)}
+                    {moreMenuItem('单元归档', 'archive', '单元归档：开启后 Agent 每完成一个工作单元（批量任务）会把该段对话移入知识仓库，防止上下文膨胀。默认关闭，需手动开启', () => setAutoArchiveUnit(v => !v), { active: autoArchiveUnit })}
+                    <div style={{ height:1, background:colors.borderSubtle, margin:'4px 6px' }} />
+                    {moreMenuItem('重命名', 'pencil', '重命名', () => handleRenameSession(currentSessionId))}
+                    {moreMenuItem('删除', 'trash', '删除', () => handleDeleteSession(currentSessionId), { danger: true })}
+                  </div>
+                </>, document.body)}
             </>
           )}
         </div>
