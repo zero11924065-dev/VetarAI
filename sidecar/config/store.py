@@ -31,7 +31,7 @@ from typing import Any
 
 # D1（0.4.18）：模块级 logger。配置读写告警此前用 print（走 stdout，被 main.js 的
 # stdio 'ignore' 全丢）→ 改走 logging 落 app.log，便于排查"配置读不出/网络切换异常"。
-# ⛔ logging.getLogger 是标准库、不导入项目模块，无循环依赖风险。
+# logging.getLogger 是标准库、不导入项目模块，无循环依赖风险。
 _log = logging.getLogger("sidecar.config")
 
 # RLock: some public helpers re-enter each other (data_root -> ...), so the
@@ -50,7 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 仍走代理放行（名单不影响全量）。
     # 来源：① 自动——标准模式下境外域名连续直连失败触发熔断时写入（见 guard.py）
     #       ② 手动——用户在设置页添加。
-    # ⛔ 取代原 egress_allowlist（白名单）：旧白名单在 auto 下已无语义（境内/本地段本就
+    # 取代原 egress_allowlist（白名单）：旧白名单在 auto 下已无语义（境内/本地段本就
     # 直连，境外未熔断也直连尝试），且"OFF 状态仅白名单可直连"的文案对应的 OFF 态早已不存在。
     "egress_proxy_required": [],
     # 本地服务（应用自身端口也可配置）
@@ -92,7 +92,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 此前超时**全硬编码**（connector.py 的 CONNECT_TIMEOUT=10 / READING_TIMEOUT=300 /
     # STREAM_READ_TIMEOUT=1800），本地 30B/35B 模型上 300s 非流式读超时偏紧，
     # 用户无法调整（config 里只有 delegation_activity_timeout / auth_confirm_timeout 两项超时）。
-    # ⛔ 0 或缺省 = 用原硬编码值（向后兼容：不设就和改造前逐字节一致）。
+    # 0 或缺省 = 用原硬编码值（向后兼容：不设就和改造前逐字节一致）。
     # ⚠️ timeout_stream_reading 被 openai_compat.py 复用，改一处两个后端都生效。
     "timeout_connect": 0,          # 连接超时（秒）；0=默认 10
     "timeout_reading": 0,          # 非流式读超时（秒）；0=默认 300
@@ -100,10 +100,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
     # ── 第 2 批（0.4.15）A2/A4：每模型推理参数 ───────────────────────────
     # 结构：{模型名: {参数名: 值}}，例如 {"qwen3.8": {"num_ctx": 8192, "temperature": 0.3}}
-    # 取值与后端映射统一走 sidecar/ollama/infer_options.py（⛔ 不要在 connector 里散着读）。
+    # 取值与后端映射统一走 sidecar/ollama/infer_options.py（不要在 connector 里散着读）。
     # 模型名支持去 tag 匹配：配 "qwen3.8" 对 "qwen3.8:latest" 同样生效
     # （否则用户配置会静默失效，这类"设了不生效"极难排查）。
-    # ⛔ 两个后端参数名不同：Ollama 用 num_ctx/repeat_penalty/num_predict；
+    # 两个后端参数名不同：Ollama 用 num_ctx/repeat_penalty/num_predict；
     #    OpenAI 兼容端用 frequency_penalty/max_tokens 且**无 num_ctx**（注入时自动丢弃）。
     # ⚠️ num_ctx 越大 prefill 越慢（B7 联动），故**不设默认值**——不传即沿用模型自身默认。
     "model_options": {},
@@ -161,7 +161,7 @@ def data_root() -> Path:
     优先级（0.4.11 修复）：**VETARAI_DATA_ROOT 环境变量 > config.json > DEFAULT_CONFIG**。
     本函数是 config.json 路径 / projects 根 / storage 层 `PROJECTS_ROOT`/`_GDB` 的唯一源头。
 
-    ⛔ 此前本函数【完全不读环境变量】，而三处测试却设置了 `VETARAI_DATA_ROOT`
+    此前本函数【完全不读环境变量】，而三处测试却设置了 `VETARAI_DATA_ROOT`
     ——该变量曾是无人消费的装饰；checkpoint-093 污染事故与 2026-09-07 实测明细
     已迁出：详见 交接/03-修复与调试历史记录.md 第五部分
 
@@ -313,7 +313,7 @@ def _validate(cur: dict[str, Any]) -> None:
     if ocs is not None and not isinstance(ocs, bool):
         raise ValueError("openai_compat_supports_tools 必须是 bool")
     # 第 2 批（0.4.15）A1/A2/A4：超时与推理参数校验。
-    # ⛔ 校验规则**只在 infer_options 里定义一份**，此处调用而非重写——
+    # 校验规则**只在 infer_options 里定义一份**，此处调用而非重写——
     # 两处各写一遍必然漂移（改了范围忘了同步），是典型的"冗余"而非"防御性编程"。
     # 延迟导入：config 是最底层模块，避免与 ollama 包形成模块级循环导入。
     from sidecar.ollama import infer_options as _io
@@ -333,7 +333,7 @@ def _validate(cur: dict[str, Any]) -> None:
     # checkpoint-068：委派健壮性与并发开关校验
     # 0.4.12（B2）：权限弹窗超时。0=无限等待，上限 24h（86400s）防误填天文数字。
     # R4-S6：两条超时校验规则同构（0-86400 的秒数，0=不限），仅字段名/文案后缀不同，归一为循环；
-    # ⛔ 规则与错误文案逐字不变，默认值/取值范围不动。
+    # 规则与错误文案逐字不变，默认值/取值范围不动。
     for key, label in (("delegation_activity_timeout", "0=关闭"),
                        ("auth_confirm_timeout", "0=无限等待")):
         v = cur.get(key)
@@ -388,7 +388,7 @@ def get_config() -> dict[str, Any]:
             missing.append("network_switch")  # 触发写盘
         # checkpoint-047 幂等迁移：全局插件/技能开关已废弃（改逐项开关），清理旧值。
         # B11（0.4.13）追加 egress_allowlist：白名单制已被「需代理」名单制取代。
-        # ⛔ **只删除，不迁移**——两者语义完全相反（白名单=允许直连放行；
+        # **只删除，不迁移**——两者语义完全相反（白名单=允许直连放行；
         # 需代理=标准模式下拒绝直连）。若把旧条目搬进 egress_proxy_required，
         # 会把"允许"反转成"拒绝"，导致原本正常的站点在标准模式下被拦。
         # 实测：删键后磁盘 config.json 里的残留**不会报错**（_validate 的未知键检查只拦
@@ -419,7 +419,7 @@ def reload_config(patch: dict[str, Any] | None = None) -> dict[str, Any]:
         _save(cur)
         _MEM = dict(cur)
         # B11（0.4.13）：切换网络模式必须重置熔断器。
-        # ⛔ 否则 B11 名单制失去意义：auto 下某站直连失败被熔断（300s 秒拒）并写入
+        # 否则 B11 名单制失去意义：auto 下某站直连失败被熔断（300s 秒拒）并写入
         # 「需代理」名单 → 用户切到 proxy 想走代理访问它 → 熔断器仍开着 → 照样被秒拒，
         # 切换白切了。熔断历史属"直连路径"的失败记录，对"走代理路径"毫无参考价值。
         # 反向同理（proxy→auto 也应重新给直连一次机会）。

@@ -57,7 +57,7 @@ export default function App() {
   // ② 窗口宽 < 860px 时侧栏整体向左滑出隐藏（宽度+位移+透明度三重过渡），放宽自动滑回；
   // ③ 隐藏后左缘留一枚「展开面板」把手（pinned），点它临时唤出，再点收起把手收回；
   //    窗口放宽后 pinned 自动复位（回到正常布局，不再视作临时唤出）。
-  // ⛔ 全程不卸载侧栏（保活哲学：面板状态/轮询/流不因布局变化重启）。
+  // 全程不卸载侧栏（保活哲学：面板状态/轮询/流不因布局变化重启）。
   const [winWidth, setWinWidth] = useState(typeof window === 'undefined' ? 1280 : window.innerWidth);
   useEffect(() => {
     const onResize = () => setWinWidth(window.innerWidth);
@@ -71,7 +71,7 @@ export default function App() {
 
   // A13（0.4.22）：App 级常驻订阅「资源变更」流。空依赖 → 整个应用生命周期只启停一次，
   // 与下方各面板的保活（display 切换、不卸载）无关。Agent 写库后经此广播 → 各面板按需重拉，
-  // 用户切回面板立即看到最新数据（无需重启）。⛔ 卸载时 stop：不重连、无幽灵请求。
+  // 用户切回面板立即看到最新数据（无需重启）。卸载时 stop：不重连、无幽灵请求。
   useEffect(() => {
     const stop = startAppEventStream();
     return stop;

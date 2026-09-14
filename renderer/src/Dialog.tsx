@@ -138,7 +138,7 @@ export function promptDialog(opts: {
 }
 
 // ── choiceDialog（A13/A11 0.4.22）：多按钮选择弹窗 ──
-// ⛔ confirmDialog 只有"确认/取消"两态，撑不起"覆盖 / 改名并存 / 跳过"这类三选一。
+// confirmDialog 只有"确认/取消"两态，撑不起"覆盖 / 改名并存 / 跳过"这类三选一。
 // 与既有弹窗共用同一套单例挂载、遮罩、Esc 语义（Esc/点遮罩 = 取消 → resolve(null)）。
 // 返回被点按钮的 value（string）；取消返回 null。调用方据 value 分派后续动作。
 export interface ChoiceOption {
@@ -311,7 +311,7 @@ function DialogHost({ state }: { state: DialogState | null }) {
 export { Icon };
 
 function ChoiceHost({ state }: { state: ChoiceState | null }) {
-  // ⛔ hooks 必须在任何条件 return 之前调用（React Hooks 规则，同 DialogHost/PromptHost）：
+  // hooks 必须在任何条件 return 之前调用（React Hooks 规则，同 DialogHost/PromptHost）：
   // 放在 `if (!state) return null` 之后会让本组件在"有弹窗/无弹窗"两种渲染间 hooks 数量不一致
   // → React 抛 "Rendered more hooks than during the previous render" 直接崩。
   useEffect(() => {

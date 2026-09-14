@@ -41,7 +41,7 @@ Handler = Callable[[dict, dict], Awaitable[dict]]
 
 
 def _exc_detail(e: BaseException) -> str:
-    """⛔ A6 局部去重（0.4.18）：把端点抛出的 HTTPException 转成可读原因。
+    """A6 局部去重（0.4.18）：把端点抛出的 HTTPException 转成可读原因。
 
     本模块的动作复用 app.py 的端点函数（保证行为与前端一致），而端点用
     `raise HTTPException(status_code=..., detail="...")` 表达业务错误。
@@ -145,7 +145,7 @@ async def _workflow_run(params: dict, ctx: dict) -> dict:
     # 现允许 Agent 显式指定最多等多少秒：
     #   - 短流程：等到终态直接返回 status/result/error，一轮拿完
     #   - 长流程：超时即返回 running + run_id，退回原有轮询模式（不阻塞工具循环）
-    # ⛔ 上限 120s：工具循环不能被单个动作长时间占住（与委派活性超时同一考量）。
+    # 上限 120s：工具循环不能被单个动作长时间占住（与委派活性超时同一考量）。
     try:
         wait_s = float(params.get("wait_s") or 0)
     except (TypeError, ValueError):
@@ -154,7 +154,7 @@ async def _workflow_run(params: dict, ctx: dict) -> dict:
 
     if wait_s > 0:
         from sidecar.storage.store import get_workflow_run
-        # ⛔ 用 get_running_loop()：get_event_loop() 在 Python 3.12+ 已弃用，
+        # 用 get_running_loop()：get_event_loop() 在 Python 3.12+ 已弃用，
         #    且本函数必在事件循环内被调用（async），running loop 一定存在。
         _loop = asyncio.get_running_loop()
         deadline = _loop.time() + wait_s
@@ -283,7 +283,7 @@ async def _roundtable_create(params: dict, ctx: dict) -> dict:
         rt = await _app.api_create_roundtable(pid, req)
     except Exception as e:
         # HTTPException 也走这里：把 detail 作为可读原因回传（任务161：报错必带原因）
-        # ⛔ A6 局部去重：原内联的 getattr(e,"detail") or str(e) 收敛到 _exc_detail()
+        # A6 局部去重：原内联的 getattr(e,"detail") or str(e) 收敛到 _exc_detail()
         return {"ok": False, "error": f"roundtable_create_failed: {_exc_detail(e)}"}
     return {"ok": True, "roundtable": rt,
             "note": "圆桌已创建并完成第一轮。后续轮次由用户在圆桌面板继续（结束权在用户）。"}
@@ -292,14 +292,14 @@ async def _roundtable_create(params: dict, ctx: dict) -> dict:
 # ── A6（0.4.18）：Agent 的工作流写能力 ──────────────────────────────────
 # 此前注册表的写类动作**只有 roundtable.create**（实测：3 模块 7 action），
 # Agent 能跑工作流却不能建/改/删 → 只能让用户去前端手工搭。
-# ⛔ 三个动作一律**复用 app.py 的端点函数**（同 _roundtable_create 模式），而非直调 store：
+# 三个动作一律**复用 app.py 的端点函数**（同 _roundtable_create 模式），而非直调 store：
 #    端点里已有 validate_definition(strict=False) 宽松校验、内置工作流保护（403）、
 #    422 错误前 5 条回传等完整业务逻辑，复用即自动继承、且与前端行为逐字一致。
 
 def _coerce_definition(raw: Any) -> tuple[dict | None, str | None]:
     """把工作流 definition 入参归一为 dict。返回 (definition, 错误原因)。
 
-    ⛔ 为什么必须容错 JSON 字符串：Agent 的工具参数经模型生成，嵌套对象常被
+    为什么必须容错 JSON 字符串：Agent 的工具参数经模型生成，嵌套对象常被
     序列化成字符串（`"definition": "{\"nodes\": ...}"`）。若直接当 dict 用会得到
     一堆字符键值、校验必然失败且错误难懂。故先尝试解析字符串。
     """
@@ -326,7 +326,7 @@ async def _workflow_create(params: dict, ctx: dict) -> dict:
 
     ⚠️ 工作流 schema 有 14 种节点类型 + 连线/连通校验，Agent 易生成非法定义 →
     端点用 strict=False 宽松校验（半成品可存），但**硬伤仍拦截**（类型无效/连线指向
-    不存在的节点）。⛔ 校验错误必须**原样回传**，让 Agent 据此自修正，不能吞掉。
+    不存在的节点）。校验错误必须**原样回传**，让 Agent 据此自修正，不能吞掉。
     """
     from sidecar import app as _app
     name = str(params.get("name") or "").strip()
@@ -345,8 +345,8 @@ async def _workflow_create(params: dict, ctx: dict) -> dict:
     try:
         out = await _app.api_create_workflow(req)
     except Exception as e:
-        # ⛔ 校验失败（422）走这里：detail 是具体的定义错误，回传给 Agent 自修正
-        # ⛔ 提示里的合法节点类型**动态取自 schema.NODE_TYPES**，不写死、也不指向
+        # 校验失败（422）走这里：detail 是具体的定义错误，回传给 Agent 自修正
+        # 提示里的合法节点类型**动态取自 schema.NODE_TYPES**，不写死、也不指向
         #    不存在的动作（曾误写 workflow.schema_hints —— 注册表里并无该动作，
         #    给 Agent 指向虚构能力比不给提示更糟）。
         try:
@@ -367,7 +367,7 @@ async def _workflow_create(params: dict, ctx: dict) -> dict:
 async def _workflow_update(params: dict, ctx: dict) -> dict:
     """更新工作流定义（部分更新；副作用类，默认需确认）。
 
-    ⛔ 内置工作流不可改（端点返回 403）——它们是应用自带的示范流程，改了会让
+    内置工作流不可改（端点返回 403）——它们是应用自带的示范流程，改了会让
     其他用户/文档失配。name/description/definition 均可单独传，只改传了的字段。
     """
     from sidecar import app as _app
@@ -400,7 +400,7 @@ async def _workflow_update(params: dict, ctx: dict) -> dict:
 async def _workflow_delete(params: dict, ctx: dict) -> dict:
     """删除工作流定义（破坏性，默认需确认）。
 
-    ⛔ 内置工作流不可删（端点返回 403）。运行记录与节点事件**保留作历史**
+    内置工作流不可删（端点返回 403）。运行记录与节点事件**保留作历史**
     （store.delete_workflow 的既有语义），故删除只影响定义本身。
     """
     from sidecar import app as _app
@@ -422,7 +422,7 @@ async def _workflow_delete(params: dict, ctx: dict) -> dict:
 # ⭐ 新模块接入方式：在此登记一条（module/action/description/params/handler/needs_confirm），
 #    Agent 立即获得调用能力，无需改 loop.py 或前端。这是 3.48.2 的前瞻性设计核心。
 
-# ⛔ A6（0.4.18）：create 动作的 description 里要告诉 Agent 合法节点类型。
+# A6（0.4.18）：create 动作的 description 里要告诉 Agent 合法节点类型。
 #    **必须动态取自 schema.NODE_TYPES**——我曾手写一份 14 种，而 schema 实为 **15 种**
 #    （漏了 file_output）；交接文档里也长期写着"14 种节点类型"，同属失真。
 #    静态清单注定与 schema 漂移（schema 加节点类型时没人会记得改这里），故在模块加载时求值。
@@ -469,7 +469,7 @@ APP_MODULE_REGISTRY: dict[str, dict[str, Any]] = {
             },
             # ── A6（0.4.18）：写能力。此前 Agent 能跑工作流却不能建/改/删 ──
             "create": {
-                # ⛔ 节点类型清单用模块级动态常量 _WF_NODE_TYPES_TEXT（取自 schema.NODE_TYPES），
+                # 节点类型清单用模块级动态常量 _WF_NODE_TYPES_TEXT（取自 schema.NODE_TYPES），
                 #    不在这里手写字面量——手写版曾漏 file_output（14 vs 真实 15 种）。
                 "description": "创建一个新的工作流定义（不运行）。definition 需含 nodes/edges；"
                              "允许保存半成品（strict=False 宽松校验：节点类型无效/连线指向不存在的节点等硬伤仍会被拒，"

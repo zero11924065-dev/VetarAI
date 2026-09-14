@@ -23,11 +23,11 @@
   1. 前端 `handleStop()` 只做 `abortRef.current?.abort()` —— **只关掉 SSE 连接，
      完全没通知后端**。
   2. 后端**没有 chat 的 stop 端点**（workflow / task / roundtable 三条链路都有，唯独聊天没有）。
-  3. ⛔ 最隐蔽：`loop.py` **早就有**完整取消机制（`cancel_check` 参数在 :906、
+  3. 最隐蔽：`loop.py` **早就有**完整取消机制（`cancel_check` 参数在 :906、
      每轮开始前的检查在 :957），但 `app.py` 调 `run_tool_loop` 时**从未传该参数**
      （grep 命中 0 次）→ 对聊天路径是**死代码**，只服务委派（TS-114）。
 
-⛔ 还有一处更深的：**光靠标志位不够**。客户端 abort 后，服务端只在尝试写下一个字节时
+还有一处更深的：**光靠标志位不够**。客户端 abort 后，服务端只在尝试写下一个字节时
 才发现断连；而本地大模型 prefill 阶段（首 token 前）**不产出任何字节** → 服务端察觉不到
 → 模型继续跑。而 `cancel_check` 只在**轮次边界**检查，prefill 期间同样够不着。
 所以必须能**硬取消在飞的请求**，这需要"立即被唤醒"的能力，而非轮询。
@@ -38,13 +38,13 @@
 把取消 Event 一起放进 wait_set → **点停止后立刻被唤醒**，随即 `next_task.cancel()`，
 可中断 prefill 期间的在飞请求。
 
-⛔ 若改用"轮询 bool 标志"，最快也要等心跳醒来才察觉——而心跳基础值 15s，
+若改用"轮询 bool 标志"，最快也要等心跳醒来才察觉——而心跳基础值 15s，
 且 `compute_heartbeat_interval` 会按事件稀疏度放大（上限 60s）。
 用户点停止后要等十几秒才生效，那不叫停止。
 
 ═══ 为什么要"流注册表"而不是只存标志 ═══
 
-⛔ 残留标志的危害远大于内存增长：**会让该会话下一次发送刚进循环就被取消**，
+残留标志的危害远大于内存增长：**会让该会话下一次发送刚进循环就被取消**，
 表现为"停止按钮永久生效"，用户再也无法正常对话。
 故用显式的 register/unregister 配对：
   - 只有**已注册（确有活流）**的会话才接受取消请求 → stop 端点能如实回答
@@ -74,7 +74,7 @@ def register_stream(session_id: str) -> asyncio.Event | None:
     """流开始时注册，返回该流的取消 Event（供 gen() 放进 asyncio.wait）。
 
     session_id 为空（如非会话式调用）→ 返回 None，调用方据此跳过取消监听。
-    ⛔ 每次注册都创建**全新未置位**的 Event，故结构上不可能继承上一次的取消状态。
+    每次注册都创建**全新未置位**的 Event，故结构上不可能继承上一次的取消状态。
     """
     sid = str(session_id or "").strip()
     if not sid:
@@ -99,7 +99,7 @@ def unregister_stream(session_id: str) -> None:
 def request_chat_cancel(session_id: str) -> bool:
     """置取消标志。返回 True=确有活流并已请求取消；False=该会话本无活流。
 
-    ⛔ 只对**已注册**的会话生效：对空闲会话置标志毫无意义，且若真置了就会变成
+    只对**已注册**的会话生效：对空闲会话置标志毫无意义，且若真置了就会变成
     残留标志（见模块文档）。返回 False 让端点能如实告知用户"无需停止"。
     """
     sid = str(session_id or "").strip()

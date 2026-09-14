@@ -25,11 +25,11 @@
  *
  * 1. `consumeSSE`：消费壳 —— getReader/TextDecoder/SSEStreamParser/push 循环/flush。
  *    事件回调【同步派发】（与三站点原内联循环一致：同一 read 批次内不引入微任务间隔，
- *    流式时序敏感，⛔ 不得改成 await 回调）。
+ *    流式时序敏感，不得改成 await 回调）。
  *
  * 2. `startResilientStream`：弹性重连壳 —— cancelled 标志/AbortController/retryTimer/
  *    静默 catch/退避 setTimeout(run, ms)/返回清理函数。
- *    ⛔ 退避毫秒数（retryMs）由调用方传入，本壳不写死任何数值。
+ *    退避毫秒数（retryMs）由调用方传入，本壳不写死任何数值。
  *    两站点差异已参数化：url（每次尝试重新求值，appEvents 靠它带 ?since= 游标）、
  *    onConnect（TaskPanel 的 setStreamOn(true)，appEvents 无）、
  *    onClose（TaskPanel 的 finally setStreamOn(false)，appEvents 无）。
@@ -61,7 +61,7 @@ export interface ResilientStreamOptions {
   url: () => string;
   /** 事件回调（同步派发；调用方自行做 cancelled/卸载守卫）。 */
   onEvent: (ev: SSEEvent) => void;
-  /** 断流退避重连间隔（ms）。⛔ 调用方原值传入，本壳不改写。 */
+  /** 断流退避重连间隔（ms）。调用方原值传入，本壳不改写。 */
   retryMs: number;
   /** 连接建立且未取消后触发（TaskPanel：setStreamOn(true)；appEvents 不传）。 */
   onConnect?: () => void;
@@ -73,8 +73,8 @@ export interface ResilientStreamOptions {
  * 启动弹性 SSE 流：失败/断流静默退避重连，stop 后绝不重连。
  * 返回 stop 函数（cancelled=true + abort + 清退避定时器）。
  *
- * ⛔ 卸载绝不重连：断流退避重连只在 !cancelled 时排程。
- * ⛔ 流失败静默：不弹错误条（各面板手动刷新仍可用），只静默退避重连。
+ * 卸载绝不重连：断流退避重连只在 !cancelled 时排程。
+ * 流失败静默：不弹错误条（各面板手动刷新仍可用），只静默退避重连。
  */
 export function startResilientStream(opts: ResilientStreamOptions): () => void {
   let cancelled = false;
@@ -93,7 +93,7 @@ export function startResilientStream(opts: ResilientStreamOptions): () => void {
     } finally {
       if (!cancelled) opts.onClose?.();
     }
-    if (!cancelled) retryTimer = setTimeout(run, opts.retryMs);   // ⛔ 卸载后不重连
+    if (!cancelled) retryTimer = setTimeout(run, opts.retryMs);   // 卸载后不重连
   };
 
   void run();

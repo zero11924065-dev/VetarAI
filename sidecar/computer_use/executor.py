@@ -34,19 +34,19 @@
   与物理鼠标键盘走同一条路径，目标应用无法区分，不存在"某些软件识别异常"的问题
   （cliclick 等工具内部也是这套 API）。
 
-  ⛔ 为什么不用 JXA（曾实现过，实测有缺陷，已弃用）：JXA 无法构造
+  为什么不用 JXA（曾实现过，实测有缺陷，已弃用）：JXA 无法构造
   `CGEventKeyboardSetUnicodeString` 需要的 `const UniChar *` 缓冲区——实测
   `$.Array` 与 `$.Ref` 均为 undefined，把 JS 字符串直接传进去会让中文输入
   静默失效或乱码。ctypes 可显式构造 UTF-16 码元数组，实测中文/英文/标点/
   制表符/换行/代理对（emoji）全部正确往返。
-  ⛔ 也不用 AppleScript System Events：它只能操作 UI 元素，`click at {x,y}`
+  也不用 AppleScript System Events：它只能操作 UI 元素，`click at {x,y}`
   报错 -25200，不支持任意坐标；且 keystroke 走的是另一条路径，兼容性差。
-  ⛔ cliclick / pyobjc(Quartz) 均未安装，故 ctypes（stdlib）是唯一零依赖路径。
+  cliclick / pyobjc(Quartz) 均未安装，故 ctypes（stdlib）是唯一零依赖路径。
 
-- ⛔ Retina 缩放：screencapture 输出【像素】（实测 3456x2234），而 CoreGraphics
+- Retina 缩放：screencapture 输出【像素】（实测 3456x2234），而 CoreGraphics
   点击用的是【逻辑点】（实测 1728x1117，比例恰好 2.000）。视觉模型看的是图片，
   给出的是像素坐标——必须乘 coord_factor 换算后再点，否则点击位置偏移一倍。
-  ⛔ coord_factor = 逻辑宽 / 发送宽（不是 降采样比 × Retina 比，那是它的倒数，
+  coord_factor = 逻辑宽 / 发送宽（不是 降采样比 × Retina 比，那是它的倒数，
   实测会让中心点偏 153 点）。本模块自动算好并在截屏结果中返回。
 - 截图 8.5MB 过大：喂视觉模型前先降采样（长边 ≤1568，兼顾识别精度与上下文开销）。
 """
@@ -96,7 +96,7 @@ _CG_ERR = ""        # 加载失败原因（供报错时给出可读指引）
 def _cg():
     """惰性加载 CoreGraphics 并声明全部用到的函数签名。
 
-    ⛔ 必须显式声明 argtypes/restype：ctypes 默认按 int 传参，CGPoint 结构与
+    必须显式声明 argtypes/restype：ctypes 默认按 int 传参，CGPoint 结构与
     UniChar* 指针会被截断或错位，导致点击落到错误位置、输入乱码。
     """
     global _CG, _CG_ERR
@@ -169,10 +169,10 @@ def _cg_error(action: str) -> dict[str, Any]:
 def _ax_denied(action: str, verb: str, detail: dict | None = None) -> dict[str, Any]:
     """防线1 拦截：辅助功能权限未授予时统一报错 + 落审计日志（0.4.11 修复）。
 
-    ⛔ 此前该拦截在三处动作函数里各自 return，且 return 早于 `_audit()` →
+    此前该拦截在三处动作函数里各自 return，且 return 早于 `_audit()` →
        失败动作**完全不落日志**，实测 actions.jsonl 里 40 条全是 screenshot、
        0 条失败记录，排障只能靠用户截图还原现场（2026-09-07 真机事故）。
-    ⛔ 此前文案让用户「勾选 VetarAI」，但 macOS 按【二进制文件】授权，
+    此前文案让用户「勾选 VetarAI」，但 macOS 按【二进制文件】授权，
        发事件的是侧车而非 Electron 主程序 → 照做无效。现改为给出确切路径。
     """
     _audit(action, {"ok": False, "blocked_by": "accessibility_denied",
@@ -198,7 +198,7 @@ def _ax_denied(action: str, verb: str, detail: dict | None = None) -> dict[str, 
 def _process_identity() -> dict[str, Any]:
     """返回本进程的可执行路径与代码签名状况。
 
-    ⛔ 关键：macOS 的辅助功能授权（TCC）是**按二进制文件**授予的，不是按 .app 名字。
+    关键：macOS 的辅助功能授权（TCC）是**按二进制文件**授予的，不是按 .app 名字。
     Computer Use 的事件由【侧车二进制】发出（Contents/Resources/sidecar/vetarai-sidecar），
     而不是 Electron 主程序（Contents/MacOS/VetarAI）。用户若只给"VetarAI"授权，
     侧车进程依然不被信任 → AXIsProcessTrusted 仍为 False → 事件被静默丢弃。
@@ -210,7 +210,7 @@ def _process_identity() -> dict[str, Any]:
       · `build/sign_app.sh`（0.4.20 新建）会把侧车 identifier 固定为 **com.vetarai.sidecar**，
         此前 PyInstaller 的 ad-hoc 签名生成的是 `vetarai-sidecar-<40位内容哈希>`，
         **每次构建都变** → 这正是"明明授权过却又没了"的根因。
-      · ⛔ 但**仅固定 identifier 还不够**：TCC 按 designated requirement（DR）匹配，
+      · 但**仅固定 identifier 还不够**：TCC 按 designated requirement（DR）匹配，
         ad-hoc 签名下 DR 只能退化为 `cdhash H"..."`（每次构建变）；
         必须用 **Developer ID Application 证书**签名，DR 才变成
         `identifier + anchor apple generic + certificate leaf` → 权限才能跨版本保留。
@@ -318,7 +318,7 @@ def check_permission_for(tool_name: str) -> dict[str, Any]:
 def _to_utf16_units(text: str) -> list[int]:
     """把 Python 字符串转成 UTF-16 码元序列（UniChar[]）。
 
-    ⛔ 必须手动拆代理对：CGEventKeyboardSetUnicodeString 收的是 UniChar（UTF-16），
+    必须手动拆代理对：CGEventKeyboardSetUnicodeString 收的是 UniChar（UTF-16），
     而 Python 的 ord() 给的是完整码点。码点 >0xFFFF（emoji、数学符号等）若不拆成
     高低代理对，目标应用会收到非法字符。
     """
@@ -457,7 +457,7 @@ def check_capabilities() -> dict[str, Any]:
         out["facts"]["screenshot_px"] = f"{shot['width_px']}x{shot['height_px']}"
         out["facts"]["retina_scale"] = shot["scale"]
     # 读取前台应用名（白名单校验需要）。
-    # ⛔ 0.4.11：此处原用 System Events 探测结果再输出一条"辅助功能未授予，勾选 VetarAI"
+    # 0.4.11：此处原用 System Events 探测结果再输出一条"辅助功能未授予，勾选 VetarAI"
     #    的 problems —— 与上方 accessibility_trusted 判据**相互矛盾**（System Events 走它
     #    自己的权限，侧车不可信时它仍可能成功），正是用户看到"✓已授予"却又"存在阻塞"的
     #    根源之一。现仅取 frontmost_app 供白名单用，**权限结论一律以 accessibility_trusted 为准**。
@@ -508,7 +508,7 @@ def _screen_geometry() -> tuple[int, int]:
 def take_screenshot(max_long_edge: int = SCREENSHOT_LONG_EDGE) -> dict[str, Any]:
     """截全屏 → 降采样 → JPEG → base64 data URI（供视觉模型看）。
 
-    ⛔ Retina 处理：screencapture 输出像素图，同时用 CoreGraphics 读逻辑点尺寸，
+    Retina 处理：screencapture 输出像素图，同时用 CoreGraphics 读逻辑点尺寸，
     返回 scale（=像素/逻辑，实测 2.0）。调用方点击时必须把视觉模型给的
     像素坐标除以 scale，否则会偏移一倍。
     """
@@ -548,7 +548,7 @@ def take_screenshot(max_long_edge: int = SCREENSHOT_LONG_EDGE) -> dict[str, Any]
         # 视觉模型看到的图是被降采样过的 → 它给的坐标是"降采样图坐标系"。
         # 点击需要"逻辑点坐标系"，换算系数 = 逻辑宽 / 发送宽（等价于 逻辑高/发送高，
         # 因为降采样是等比的）。
-        # ⛔ 不要用 scale_down × retina —— 那是它的【倒数】，会导致点击位置系统性偏移
+        # 不要用 scale_down × retina —— 那是它的【倒数】，会导致点击位置系统性偏移
         #   （实测：发送图中心 784 应映射到逻辑 864，用倒数算出 711，偏了 153 点）。
         # 例：3456px 原图 →1568px 给模型，逻辑宽 1728 → factor = 1728/1568 = 1.102
         #     未降采样的小屏（sent_w == w_px）时 factor = 1728/3456 = 0.5 = 1/retina，同样成立。
@@ -723,8 +723,8 @@ def keyboard_type(text: str) -> dict[str, Any]:
     ⭐ 实现：CGEventCreateKeyboardEvent + CGEventKeyboardSetUnicodeString，经
     CGEventPost 投递到 HID 通道——与物理键盘同一路径，目标应用按真实按键处理。
 
-    ⛔ 为什么不用 keycode 映射：那样只能敲 ASCII 键位，无法输入中文/emoji/特殊符号。
-    ⛔ 为什么不用 JXA：JXA 无法构造 CGEventKeyboardSetUnicodeString 需要的
+    为什么不用 keycode 映射：那样只能敲 ASCII 键位，无法输入中文/emoji/特殊符号。
+    为什么不用 JXA：JXA 无法构造 CGEventKeyboardSetUnicodeString 需要的
     `const UniChar *` 缓冲区（实测 $.Array / $.Ref 均为 undefined），中文会静默失效。
     ctypes 可显式构造 UTF-16 码元数组，实测中文/英文/标点/制表符/代理对全部正确。
     """
@@ -740,7 +740,7 @@ def keyboard_type(text: str) -> dict[str, Any]:
     if _ax_trusted() is False:
         return _ax_denied("type", "输入", {"chars": len(text), "preview": text[:40]})
 
-    # ⛔ 必须手动拆 UTF-16 代理对：Python ord() 给完整码点，而 UniChar 是 UTF-16。
+    # 必须手动拆 UTF-16 代理对：Python ord() 给完整码点，而 UniChar 是 UTF-16。
     # 码点 >0xFFFF（emoji、数学符号）不拆则目标应用收到非法字符。
     units = _to_utf16_units(text)
     src = _event_source()

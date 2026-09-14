@@ -67,7 +67,7 @@ export function InferencePanel() {
   useEffect(() => { refresh(); }, [refresh]);
 
   // A13（0.4.22）：Agent/用户改推理配置（后端/地址/API Key/工具开关）后实时重拉。
-  // ⛔ 也响应 gap 对账。InferencePanel 只在设置页打开时挂载，订阅随挂载/卸载，无幽灵监听。
+  // 也响应 gap 对账。InferencePanel 只在设置页打开时挂载，订阅随挂载/卸载，无幽灵监听。
   useEffect(() => {
     const off = on(APP_RESOURCE_CHANGED, (ev: AppResourceEvent) => {
       if (!ev.gap && ev.resource !== 'inference') return;

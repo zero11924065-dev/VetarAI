@@ -80,7 +80,7 @@ export function IndependentAgentsPanel({ selectedAgentId, onSelect, onAgentDelet
   useEffect(() => { fetchAgents(); fetchModels(); }, [refreshKey]);
 
   // A13（0.4.22）：Agent 增删改独立 Agent 后实时重拉列表，无需重启应用。
-  // ⛔ fetchAgents 是函数声明（每次渲染重建）→ 用 ref 持最新版，订阅只建一次。
+  // fetchAgents 是函数声明（每次渲染重建）→ 用 ref 持最新版，订阅只建一次。
   const fetchAgentsRef = useRef(fetchAgents);
   fetchAgentsRef.current = fetchAgents;
   useEffect(() => {

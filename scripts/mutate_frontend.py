@@ -83,7 +83,7 @@ MUTATIONS: list[dict] = [
         "why": "卸载后到达的 status=done / task_end 会触发 loadTasks → 一次卸载后的 fetch，"
                "并写已卸载组件的状态。⛔ 锚点含尾随注释以区分 TaskPanel 里另一处同名守卫。",
         "file": PANELS / "TaskPanel.tsx",
-        "anchor": "      if (cancelled) return;                       // ⛔ 卸载后不再写任何状态",
+        "anchor": "      if (cancelled) return;                       // 卸载后不再写任何状态",
         "mutant": "      // MUTATE-3：撤掉卸载守卫",
         "test": "src/__tests__/taskPanel.test.tsx",
         "expect_fail": ["S4"],
@@ -133,7 +133,7 @@ MUTATIONS: list[dict] = [
         "why": "⛔ 卸载 cleanup 不 abort 流 → handleSend 的 finally 不执行；若这里不清计时器，"
                "卸载后它每秒空转（幽灵计时器）。R8 同时用运行时 clearInterval 计数 + 源码契约断言守护。",
         "file": PANELS / "ChatPanel.tsx",
-        "anchor": """      // B12（0.4.21）：⛔ 卸载 cleanup **不 abort 流**，所以 handleSend 的 finally 不会执行
+        "anchor": """      // B12（0.4.21）：卸载 cleanup **不 abort 流**，所以 handleSend 的 finally 不会执行
       //   → 流级计时器必须在这里也清一次，否则卸载后它每秒空转（无害但白耗）。
       if (runElapsedTimerRef.current) { clearInterval(runElapsedTimerRef.current); runElapsedTimerRef.current = null; }""",
         "mutant": "      // MUTATE-7：撤掉卸载 cleanup 的计时器清理",
@@ -291,7 +291,7 @@ MUTATIONS: list[dict] = [
         "why": "⛔ syncSessionLocal 收的是 React state 里的消息对象；原地 `m.images=undefined` 会让"
                "**界面上正在显示的图片当场消失**（比重写慢更糟）。P1 专门守护传入数组不被改。",
         "file": RENDERER / "src" / "hooks" / "useMessages.ts",
-        "anchor": """    if (!hasHeavyImg && !hasHeavyPending) return m;      // ⛔ 原样返回引用，不造新对象
+        "anchor": """    if (!hasHeavyImg && !hasHeavyPending) return m;      // 原样返回引用，不造新对象
     changed = true;
     const next: Message = { ...m };""",
         "mutant": """    if (!hasHeavyImg && !hasHeavyPending) return m;

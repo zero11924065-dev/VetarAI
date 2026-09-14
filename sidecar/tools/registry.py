@@ -95,9 +95,9 @@ def _strip_punct(s: str) -> str:
 def punctuation_near_miss(resolved: Path, sandbox_root: str | Path) -> str | None:
     """目标路径若与沙盒根【仅差标点】，返回正确路径建议字符串，否则 None。
 
-    ⛔ 只在"那个带标点的祖先目录**不存在**"时才命中——若它真实存在，说明是用户
+    只在"那个带标点的祖先目录**不存在**"时才命中——若它真实存在，说明是用户
        自己建的同名异标点目录，绝不干预（不得把用户从真实目录上引开）。
-    ⛔ 不自动改写路径，只返回建议由调用方拒绝并告知模型——静默改写有写错位置的风险，
+    不自动改写路径，只返回建议由调用方拒绝并告知模型——静默改写有写错位置的风险，
        而拒绝+建议能让模型自行纠正（真机事故中模型第 7 步自己就改对了，
        它缺的只是"被提醒的机会"）。
     """
@@ -375,8 +375,8 @@ async def execute(tool_name: str, args: dict, sandbox_root: str | Path, authoriz
     # 0.4.11（第六十四章）：路径标点笔误硬拦——仅对【创建类】动作。
     # 真机事故：模型给沙盒根补了个句号，create_dir 忠实执行 → 桌面凭空多出空壳文件夹，
     # 后续委派识图 images_not_found、list_dir not_a_dir，一个标点引发连锁失败。
-    # ⛔ 只拦"带标点的祖先目录不存在"的情况（幽灵路径）；真实存在的同名异标点目录绝不干预。
-    # ⛔ 不静默改写路径，只拒绝 + 给出正确建议，让模型自行纠正（真机中模型第 7 步自己就改对了）。
+    # 只拦"带标点的祖先目录不存在"的情况（幽灵路径）；真实存在的同名异标点目录绝不干预。
+    # 不静默改写路径，只拒绝 + 给出正确建议，让模型自行纠正（真机中模型第 7 步自己就改对了）。
     _oob_advisory = ""
     if action in ("write", "mkdir"):
         _suggestion = punctuation_near_miss(resolved, sandbox_root)
@@ -475,7 +475,7 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | N
                 return {"ok": True, "_kind": "image", "path": str(target),
                         "image_base64": b64, "size": size,
                         "content": f"[图片文件 {target.name}，{size} 字节，已转为图像输入]"}
-            # ⛔ #4（0.4.19）：Office/PDF 文档不能按字节解码。
+            # #4（0.4.19）：Office/PDF 文档不能按字节解码。
             # .docx/.pptx/.xlsx 是 zip 压缩包、.pdf 是二进制格式、旧式 .doc 是 OLE 复合二进制，
             # 此前一律走下面的 read_bytes().decode("utf-8", errors="replace") → 模型只能看到
             # PK\x03\x04 一类的乱码（用户实测：上传的参考律师函完全读不出来）。
@@ -489,7 +489,7 @@ async def _exec_on_path(tool_name: str, args: dict, target: Path, root: Path | N
                 _head = (f"📄 已解析 {target.suffix.lower().lstrip('.')} 文档"
                          f"（{size} 字节，提取为文本+格式概要）：\n\n")
                 _parsed = _dr.extract(target, MAX_READ_BYTES - len(_head.encode("utf-8")))
-                # ⛔ ok 一律 True：解析器即便读不出内容（损坏/缺库/旧格式无法转换），
+                # ok 一律 True：解析器即便读不出内容（损坏/缺库/旧格式无法转换），
                 # 也在 content 里给了**说明性文字**（"这个格式读不了，因为 X，建议 Y"）——
                 # 对模型而言这比抛 error 更有用，且不让 read_file 整体失败。
                 return {"ok": True,

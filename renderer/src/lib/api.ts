@@ -27,7 +27,7 @@ export async function apiJson(path: string, init?: RequestInit): Promise<any> {
   return d;
 }
 
-/** 闪示通知：立即显示 msg，ms 后清除。⛔ 时长/文案一律由调用点传字面量，本 helper 不设默认值（数值冻结纪律）。 */
+/** 闪示通知：立即显示 msg，ms 后清除。时长/文案一律由调用点传字面量，本 helper 不设默认值（数值冻结纪律）。 */
 export function flash(setter: (v: string | null) => void, msg: string, ms: number): void {
   setter(msg);
   setTimeout(() => setter(null), ms);

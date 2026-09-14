@@ -40,18 +40,18 @@ Agent 改完库后用户切回面板看到的还是旧数据，**必须重启应
 
 ═══ 复用 delegation_events 验证过的架构（勿凭直觉改）═══
 
-  1. ⛔ **每订阅者独立 asyncio.Queue**（非共享 Event/Condition）：`put_nowait()` 无需持锁、
+  1. **每订阅者独立 asyncio.Queue**（非共享 Event/Condition）：`put_nowait()` 无需持锁、
      天然一对多广播、各订阅者独立游标。共享 Event 会丢唤醒、共享 Condition 要求持锁而
      notify 是同步函数不能 await（详见 delegation_events 模块文档"设计决策二"）。
-  2. ⛔ **跨事件循环安全投递**（`_deliver`）：notify 可能来自另一个 loop（TestClient 把应用
+  2. **跨事件循环安全投递**（`_deliver`）：notify 可能来自另一个 loop（TestClient 把应用
      跑在独立线程的 loop；将来任何同步上下文调用也一样）。跨 loop 直接 put_nowait 不报错
      但**订阅者不被唤醒**（静默失败：SSE 卡在心跳，前端永远收不到）→ 必须先判断是否同
      loop，否则 `call_soon_threadsafe`。此坑 delegation_events 已实测踩过，原样复用。
-  3. ⛔ **环形缓冲 + 单调 seq + gap 对账**：晚到订阅者（面板中途连上）先补发 since_seq 之后
+  3. **环形缓冲 + 单调 seq + gap 对账**：晚到订阅者（面板中途连上）先补发 since_seq 之后
      仍在缓冲的事件；若断档发 `gap`，订阅者据此重拉快照而非拿半截状态渲染。
-  4. ⛔ **总线失败绝不影响主流程**：notify 吞异常返回 False。资源变更可视化是旁路，
+  4. **总线失败绝不影响主流程**：notify 吞异常返回 False。资源变更可视化是旁路，
      不能因为前端没连上就让 Agent 的写库操作失败。
-  5. ⛔ **订阅者注销必须放 finally**：客户端断开（GeneratorExit/CancelledError）也要摘掉
+  5. **订阅者注销必须放 finally**：客户端断开（GeneratorExit/CancelledError）也要摘掉
      自己的队列，否则订阅者计数泄漏。
 
 ═══ 与 delegation_events 的差异（单通道带来的简化）═══
@@ -130,11 +130,11 @@ def notify(resource: str, action: str, project_id: str | None = None,
       * action：动作（ACTION_CREATE/UPDATE/DELETE）；
       * project_id：可选，项目级资源带上（前端可据此只刷新对应项目的面板）；
       * **extra：可选附加字段（如 workflow_id=... / plugin_name=...），并入 data 下发。
-        ⛔ 用 kwargs 而非 dict 参数：调用方写 `notify(RES, ACT, workflow_id=w)` 更自然，
+        用 kwargs 而非 dict 参数：调用方写 `notify(RES, ACT, workflow_id=w)` 更自然，
         且与 app.py 的 `_notify_change(**extra)` helper 两层 API 形态一致。
 
     返回 True=已入缓冲并投递；False=参数非法或总线异常。
-    ⛔ **绝不抛异常**：总线是变更可视化的旁路，任何失败都不得影响 Agent 的写库本身。
+    **绝不抛异常**：总线是变更可视化的旁路，任何失败都不得影响 Agent 的写库本身。
     """
     try:
         res = str(resource or "").strip()
@@ -150,7 +150,7 @@ def notify(resource: str, action: str, project_id: str | None = None,
             item = {"seq": _BUS.seq, "event": "resource_changed", "data": data}
             _BUS.buf.append(item)
             targets = list(_BUS.subs)
-        # ⛔ 投递放在锁外：call_soon_threadsafe 可能阻塞，持锁会拖慢 notify
+        # 投递放在锁外：call_soon_threadsafe 可能阻塞，持锁会拖慢 notify
         for q, loop in targets:
             _deliver(q, loop, item)
         return True
@@ -170,11 +170,11 @@ async def subscribe(since_seq: int = 0,
       5. `{"event": "_idle"}` —— 每 idle_timeout 秒无事件时一次（端点据此发心跳）
       6. `{"event": "_bus_closed"}` —— 总线被清空（仅 clear_all 时），订阅应结束
 
-    ⛔ 订阅者注销必须放 finally：客户端断开（GeneratorExit / CancelledError）时
+    订阅者注销必须放 finally：客户端断开（GeneratorExit / CancelledError）时
     也要摘掉自己的队列，否则订阅者计数泄漏。
     """
     q: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
-    # ⛔ 记录**本订阅者所在的事件循环**：notify 可能来自另一个 loop（见 _deliver 注释），
+    # 记录**本订阅者所在的事件循环**：notify 可能来自另一个 loop（见 _deliver 注释），
     # 必须据此判断是同循环直投还是 call_soon_threadsafe，否则订阅者收不到唤醒。
     _my_loop = asyncio.get_running_loop()
     with _LOCK:
@@ -204,7 +204,7 @@ async def subscribe(since_seq: int = 0,
             yield item
     finally:
         with _LOCK:
-            # ⛔ subs 是 (queue, loop) 元组列表，须按队列对象匹配移除，
+            # subs 是 (queue, loop) 元组列表，须按队列对象匹配移除，
             # 直接 remove(q) 会因类型不符抛 ValueError（delegation_events 已踩过）
             _BUS.subs[:] = [s for s in _BUS.subs if s[0] is not q]
 
@@ -234,7 +234,7 @@ def clear_all() -> None:
         _BUS.subs.clear()
         _BUS.buf.clear()
         _BUS.seq = 0
-    # ⛔ 投递放锁外，并走 _deliver（跨事件循环安全）：
+    # 投递放锁外，并走 _deliver（跨事件循环安全）：
     # clear_all 常在测试的同步上下文里调用，直接 put_nowait 不会唤醒别的 loop 上的订阅者
     for q, loop in targets:
         _deliver(q, loop, _CLOSED)

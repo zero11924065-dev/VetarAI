@@ -109,7 +109,7 @@ _AUTH_TIMEOUT_DEFAULT = 600.0  # 兜底值；实际以 config 的 auth_confirm_t
 def _auth_timeout() -> float:
     """读取权限弹窗等待超时（秒）。0.4.12（B2）。
 
-    ⛔ 此前是模块常量 `_AUTH_TIMEOUT = 120.0` 硬编码：用户离开一会儿再回来点确认，
+    此前是模块常量 `_AUTH_TIMEOUT = 120.0` 硬编码：用户离开一会儿再回来点确认，
     超过 2 分钟就被静默记为"拒绝"（真机反馈："我前面晚点了确认，agent的记录里显示我拒绝了"）。
     现改为读 config `auth_confirm_timeout`（默认 600s，**0 = 无限等待**，只能手动关闭弹窗）。
     每次调用实时读取 → 用户在设置页改完立即生效，无需重启。
@@ -150,7 +150,7 @@ async def _sse_authorizer(tool_name: str, target_path: str, action: str,
                               "extra": extra or {}, "enable_network": False}
     # 等待 gen() 主循环检测到新请求并发出 SSE 事件后，前端响应唤醒此 Event
     # 0.4.12（B2）：超时改为可配（config auth_confirm_timeout），且 0 = 无限等待。
-    # ⛔ 注意 asyncio.wait_for(timeout=0) 语义是"立即超时"而非"无限等待"，
+    # 注意 asyncio.wait_for(timeout=0) 语义是"立即超时"而非"无限等待"，
     #    故 0 时必须传 None，否则会一进来就判定超时 → 比硬编码 120s 更糟。
     _to = _auth_timeout()
     try:
@@ -476,7 +476,7 @@ async def api_context_limit(model: str = "qwen3.8"):
                     if cl:
                         return {"context_length": int(cl), "source": "ps", "model": name}
             # 第 3 级：/api/show —— 模型未加载也能拿到其自身上限
-            # ⛔ 实测（Ollama 0.33.3）字段路径是 model_info["<架构>.context_length"]，
+            # 实测（Ollama 0.33.3）字段路径是 model_info["<架构>.context_length"]，
             #    架构前缀随模型而异（qwen35./qwen2./llama. ...），**不能硬编码前缀**，
             #    故遍历 model_info 找任何以 .context_length 结尾的键。
             try:
@@ -648,7 +648,7 @@ async def api_delete_session(session_id: str, project_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
     # C7（0.4.18）：会话已删 → 连带清理其附件目录（防膨胀）。
-    # ⛔ 必须放在 delete_session 成功之后：会话不存在（404）时不得删任何文件。
+    # 必须放在 delete_session 成功之后：会话不存在（404）时不得删任何文件。
     # 清理失败不影响删除结果（附件是副本，DB 记录已删才是主语义），如实回传条数。
     try:
         removed_files = delete_session_attachments(project_id, session_id)
@@ -833,11 +833,11 @@ async def api_parse_chat_attachment(req: ChatAttachmentParseReq):
     无法解析 → text=null，前端仅作为文件名标注。
 
     C7（0.4.18）：**同时落盘**并回传绝对路径 `saved_path`。
-    ⛔ 此前本端点全程 0 处写盘 → 附件只活在当轮请求的内存里，下一轮 agent 再读
+    此前本端点全程 0 处写盘 → 附件只活在当轮请求的内存里，下一轮 agent 再读
     原文件必然 not_a_file（用户报告"上传文件只当轮可读，后续会话读不到"）。
     路径回传给前端后写进消息正文，agent 据此可 read_file 到原件（含图片/无法解析的格式）。
-    ⛔ 文件名经 `_sanitize_attachment_name` 净化（用户可控输入，防 "../../" 穿越）。
-    ⛔ 落盘失败**不得**让解析失败——text 已解析出来才是主价值，路径是增益。
+    文件名经 `_sanitize_attachment_name` 净化（用户可控输入，防 "../../" 穿越）。
+    落盘失败**不得**让解析失败——text 已解析出来才是主价值，路径是增益。
     """
     import base64 as _b64
     try:
@@ -875,12 +875,12 @@ def _notify_change(resource: str, action: str,
                    project_id: str | None = None, **extra) -> None:
     """A13（0.4.22）：资源写成功后推一条「资源变更」事件给前端（经全局 SSE）。
 
-    ⛔ **端点级单点接入**：Agent 经 app_modules/registry.py 的 handler 直接调本文件的
+    **端点级单点接入**：Agent 经 app_modules/registry.py 的 handler 直接调本文件的
     `api_*` 端点函数（如 `_workflow_create` → `api_create_workflow`），用户经前端 fetch
     也调同一批端点 → 在端点成功 return 前 notify，**一处覆盖 Agent 与用户双路径**，
     且 store.py 保持纯存储、不耦合事件总线。
-    ⛔ **绝不抛异常**：变更可视化是旁路，前端没连上也不能让用户的写操作失败。
-    ⛔ 局部 import：app_events 是轻量进程内总线，缓存后开销可忽略；自包含不依赖顶部 import。
+    **绝不抛异常**：变更可视化是旁路，前端没连上也不能让用户的写操作失败。
+    局部 import：app_events 是轻量进程内总线，缓存后开销可忽略；自包含不依赖顶部 import。
     """
     try:
         from sidecar.agent_engine import app_events as _ae
@@ -1089,12 +1089,12 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         if not (_pid and _sid) or _state["saved"]:
             return
         _state["saved"] = True
-        # C2 根因③（0.4.16）：⛔ 落库即**定稿**，定稿消息里不该存在任何"正在进行"的步骤。
+        # C2 根因③（0.4.16）：落库即**定稿**，定稿消息里不该存在任何"正在进行"的步骤。
         # 此前 _state["steps"] 里 status="running" 被原样写进 DB（实测确认），
         # 刷新后该工具**永久显示"正在调用…"**，且前端折叠判据 running===0 永不满足。
         # 在唯一落库出口统一收敛（比"只在停止路径改"更稳健：done/error 路径若有残留同样纠正）。
         #
-        # ⛔⛔ 必须收敛到**副本**而非原地改 _state["steps"]：_state 同时是 work/state.json
+        # 必须收敛到**副本**而非原地改 _state["steps"]：_state 同时是 work/state.json
         # 诊断快照的数据源（_flush_exec_state 直接引用它），而 state.json 的用途正是
         # "中断后保留最后现场（status != done 即中断态，可据此续跑）"——running 在那里是
         # **有诊断价值的真实信息**。第一版原地改，把现场抹成了 interrupted，被 test_state_file
@@ -1107,7 +1107,7 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         ]
         try:
             # C8（0.4.16）：stopped=True 标记"用户主动停止"的那条助手回复并落库。
-            # ⛔ _state["saved"] 门闩保证每条流只落库一次：C2 的 handleStop 先发 stop
+            # _state["saved"] 门闩保证每条流只落库一次：C2 的 handleStop 先发 stop
             # 请求再 abort，故取消分支(下方)与 CancelledError 分支存在竞态——但两者都传
             # stopped=True，无论哪条先落库结果一致，竞态自然消解。
             save_message(_pid, _sid, _aid, "assistant", _state["text"],
@@ -1195,7 +1195,7 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                               computer_use_ctx=({"authorizer": _sse_authorizer}
                                                 if (_tools_enabled and _computer_use_on) else None),
                               first_round_images=req.images,
-                              # ⛔ C2（0.4.16）核心接线：loop.py 的 cancel_check 参数
+                              # C2（0.4.16）核心接线：loop.py 的 cancel_check 参数
                               # 与每轮开始前的取消检查（loop.py:957）**早已存在**，
                               # 但此处从未传过 → 对聊天路径是死代码，只服务委派（TS-114）。
                               # 传入后：用户点停止 → stop 端点置标志 → 下一轮边界 yield
@@ -1215,12 +1215,12 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         # 用户点停止时 gen() **立即被唤醒**并硬取消 next_task —— 这才能中断
         # prefill 期间的在飞请求（客户端 abort 时服务端不写字节就察觉不到断连，
         # 而 cancel_check 只在轮次边界生效，prefill 期间够不着）。
-        # ⛔ 不复用心跳 timer 来轮询：心跳基础值 15s 且会动态放大到 60s，
+        # 不复用心跳 timer 来轮询：心跳基础值 15s 且会动态放大到 60s，
         # 用它做取消检查等于"点停止后最多等一分钟"，那不叫停止。
         _cancel_event = _cancel.register_stream(req.session_id)
         # A5：标记该会话有活流，允许「思考中」插入新消息（push 只对活流生效）
         _inject.begin_stream(req.session_id)
-        # ⛔ waiter task 必须在**循环外创建一次**并复用，两个原因：
+        # waiter task 必须在**循环外创建一次**并复用，两个原因：
         #   1. `asyncio.wait()` 在 Python 3.11+ **禁止传协程**（实测 3.14.7 抛
         #      TypeError: Passing coroutines is forbidden）→ 必须传 task；
         #   2. 若在 while 内每轮 `_cancel_event.wait()` 新建，未被触发的那些会被
@@ -1270,7 +1270,7 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
                             "extra": entry.get("extra") or {},
                         })
                 # C2（0.4.16）：用户点了停止 → **硬取消在飞的请求**并收尾。
-                # ⛔ 必须在 next_task 分支之前判断：wait 是被 waiter 唤醒的，
+                # 必须在 next_task 分支之前判断：wait 是被 waiter 唤醒的，
                 # 此时 next_task 尚未完成（模型可能还在 prefill，一个字节都没吐）。
                 # 只靠 loop 的 cancel_check 不够——它只在**轮次边界**检查，
                 # prefill 期间够不着；而客户端 abort 后服务端不写字节就察觉不到断连。
@@ -1392,7 +1392,7 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
             _flush_exec_state(status="error", detail=f"内部错误: {e}")
             yield _sse_format("error", {"detail": f"内部错误: {e}"})
         finally:
-            # ⛔ C2（0.4.16）：清理取消标志。**必须放 finally**——流可能从 done / error /
+            # C2（0.4.16）：清理取消标志。**必须放 finally**——流可能从 done / error /
             # cancelled / 客户端断连（CancelledError）/ 迭代器关闭（GeneratorExit）任一路径退出。
             # 不清理的后果比"内存增长"严重得多：残留标志会让该会话**下一次发送刚进循环就被取消**，
             # 表现为"停止按钮永久生效"，用户再无法正常对话。
@@ -1400,7 +1400,7 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
             # 结构上杜绝残留（残留会让该会话下次发送刚进循环就被取消 = 停止按钮永久生效）
             if req.session_id:
                 _cancel.unregister_stream(req.session_id)
-                # A5：⛔ 必须清空残留队列，否则上一轮没被读走的消息会被同会话
+                # A5：必须清空残留队列，否则上一轮没被读走的消息会被同会话
                 # 的下一轮流读到，表现为「新回复莫名混进旧消息」
                 _inject.end_stream(req.session_id)
             # waiter task 同样要回收（与 timer / auth_watchers 的每轮 cancel 纪律一致）
@@ -1436,8 +1436,8 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
 async def api_chat_stop(session_id: str):
     """C2（0.4.16）：停止聊天流式生成。
 
-    ⛔ 此前聊天是**唯一没有 stop 端点**的链路（workflow / task / roundtable 三条都有），
-    工作方式（⛔ 0.4.17 更正：以下描述曾停留在"轮次边界才生效"的旧实现，与实际不符）：
+    此前聊天是**唯一没有 stop 端点**的链路（workflow / task / roundtable 三条都有），
+    工作方式（0.4.17 更正：以下描述曾停留在"轮次边界才生效"的旧实现，与实际不符）：
     置取消 Event → waiter 入 `asyncio.wait` → 点停止立即唤醒（不等心跳）→
     `next_task.cancel()` 硬取消在飞请求 → yield cancelled 退出；
     `cancel_check`（轮次边界轮询）是第二道兜底，非唯一路径。
@@ -1469,9 +1469,9 @@ async def api_chat_inject(session_id: str, req: ChatInjectReq):
     （助手方向错了）还是补充（用户只是加了内容）。类比"助手如何处理用户在
     其工作时发来的新消息"。
 
-    ⛔ 不丢消息：先 save_message 落库（刷新后仍可见），再 push 进内存队列
+    不丢消息：先 save_message 落库（刷新后仍可见），再 push 进内存队列
     交给正在跑的 loop drain。即使流随后意外结束，消息也已在 DB。
-    ⛔ 仅活流接受：无活流（当前没在生成）→ 返回 ok=False，前端应走正常发送。
+    仅活流接受：无活流（当前没在生成）→ 返回 ok=False，前端应走正常发送。
     """
     sid = str(session_id or "").strip()
     if not sid:
@@ -1524,7 +1524,7 @@ async def api_list_agent_tasks(project_id: str, limit: int = 50):
 async def api_stream_agent_tasks(project_id: str, since: int = 0):
     """0.4.20（#15）：委派任务**实时进度** SSE 端点。
 
-    ⛔ **修的用户可见缺陷**：此前委派任务跑起来后，任务面板要等任务整个结束才看得到结果
+    **修的用户可见缺陷**：此前委派任务跑起来后，任务面板要等任务整个结束才看得到结果
     （`TaskPanel.tsx` 只做 `fetch` 轮询，且现有 SSE 端点只有 chat/stream 与 workflows/run，
     **没有委派的**）。本端点让面板实时看到子 Agent 正在调哪个工具、跑到第几轮、已生成多少字。
 
@@ -1538,7 +1538,7 @@ async def api_stream_agent_tasks(project_id: str, since: int = 0):
 
     `since` = 客户端已收到的最后 seq（断线重连时带上，可补发缓冲区内错过的事件）。
 
-    ⛔ **客户端断开必须干净退出**：`GeneratorExit` / `CancelledError` 时订阅生成器的
+    **客户端断开必须干净退出**：`GeneratorExit` / `CancelledError` 时订阅生成器的
     finally 会归还订阅者计数，否则通道永远"有订阅者"无法回收 → 内存泄漏。
     """
     import asyncio
@@ -1587,7 +1587,7 @@ async def api_stream_agent_tasks(project_id: str, since: int = 0):
 async def api_stream_app_events(since: int = 0):
     """A13（0.4.22）：应用级「资源变更」实时 SSE 端点（单一全局通道）。
 
-    ⛔ **修的用户可见缺陷**：Agent 在工作时直接写库（创建/修改工作流等），但前端 6 个面板
+    **修的用户可见缺陷**：Agent 在工作时直接写库（创建/修改工作流等），但前端 6 个面板
     （Workflow / Project / IndependentAgents / Knowledge / Plugin / Inference）没有刷新机制——
     App.tsx 用 `display` 切换做保活（不卸载组件），各面板 `useEffect` 只在首次挂载拉一次，
     Agent 改完库后用户切回面板看到的还是旧数据，**必须重启应用**才更新。
@@ -1602,8 +1602,8 @@ async def api_stream_app_events(since: int = 0):
 
     `since` = 客户端已收到的最后 seq（断线重连时带上，可补发缓冲区内错过的变更）。
 
-    ⛔ **客户端断开必须干净退出**：订阅生成器的 finally 会摘掉自己的队列，
-    否则订阅者计数泄漏。⛔ 前端 App 级常驻订阅，卸载时必须关连接（不重连）。
+    **客户端断开必须干净退出**：订阅生成器的 finally 会摘掉自己的队列，
+    否则订阅者计数泄漏。前端 App 级常驻订阅，卸载时必须关连接（不重连）。
     """
     import asyncio
     from sidecar.agent_engine import app_events as _ae
@@ -2366,9 +2366,9 @@ async def api_knowledge_inject(req: KnowledgeInjectReq):
 async def api_knowledge_rebuild():
     """重建索引（扫描知识目录内全部**可索引文档**重建，容灾）。
 
-    ⛔ A10（0.4.18）：不再只扫 .md —— 用户丢进知识目录的 docx/pdf/xlsx/pptx/.doc 等
-    也会被解析并索引（供 search_knowledge 检索；⛔ 拉模式铁律不变，不自动注入上下文）。
-    ⛔ rebuild_index 解析多个文档是 **CPU 密集 sync** 调用，而本端点是 async →
+    A10（0.4.18）：不再只扫 .md —— 用户丢进知识目录的 docx/pdf/xlsx/pptx/.doc 等
+    也会被解析并索引（供 search_knowledge 检索；拉模式铁律不变，不自动注入上下文）。
+    rebuild_index 解析多个文档是 **CPU 密集 sync** 调用，而本端点是 async →
     必须 run_in_executor，否则阻塞事件循环（心跳/SSE/取消全卡住，与 C4 工作流节点同一个坑）。
     """
     loop = asyncio.get_running_loop()
@@ -2427,9 +2427,9 @@ class ImportFilesReq(BaseModel):
     """A11（0.4.22）：导入文件到知识仓库的请求体。"""
     scope: str = "global"
     project_id: str | None = None
-    # ⛔ 文件路径列表（来自 chooseInputFile 文件对话框，用户主动选）——非递归，不接目录路径
+    # 文件路径列表（来自 chooseInputFile 文件对话框，用户主动选）——非递归，不接目录路径
     paths: list[str] = []
-    # ⛔ A11 同名冲突策略（用户 2026-09-12 拍板"弹窗问我"）：
+    # A11 同名冲突策略（用户 2026-09-12 拍板"弹窗问我"）：
     #   ask=默认，不碰已存在文件，把它们列入 conflicts 返回，前端弹窗问完再带策略重调；
     #   overwrite/rename/skip=用户已明确选定的处置方式。
     on_conflict: str = "ask"
@@ -2439,10 +2439,10 @@ class ImportFilesReq(BaseModel):
 async def api_knowledge_import_files(req: ImportFilesReq):
     """A11（0.4.22）：导入用户选中的文件到知识仓库（复制+解析+索引）。
 
-    ⛔ 拉模式铁律：只导入并索引供检索，不自动注入上下文（用户须在对话中 @ 引用）。
-    ⛔ 路径由用户通过 chooseInputFile 文件对话框主动选择——非递归、不遍历目录。
-    ⛔ 同名冲突不擅自处置：默认 `ask` 只报告冲突，由前端弹窗问用户后带策略重调。
-    ⛔ 走 run_in_executor（同 A10 重建端点）：import_files 含文件 IO+解析+embedding，
+    拉模式铁律：只导入并索引供检索，不自动注入上下文（用户须在对话中 @ 引用）。
+    路径由用户通过 chooseInputFile 文件对话框主动选择——非递归、不遍历目录。
+    同名冲突不擅自处置：默认 `ask` 只报告冲突，由前端弹窗问用户后带策略重调。
+    走 run_in_executor（同 A10 重建端点）：import_files 含文件 IO+解析+embedding，
        CPU/IO 密集，async 端点直接 await 会阻塞事件循环。
     """
     if req.on_conflict not in ("ask", "overwrite", "rename", "skip"):

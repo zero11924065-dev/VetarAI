@@ -40,7 +40,7 @@ interface PendingItem { name: string; dataUri: string; isImage: boolean; size: n
 const API = getApiBase();
 
 // B1（0.4.12）：输入的「判空」与「内容保真」必须共用同一套规则。
-// ⛔ 此前的两个缺陷（同一段代码的两面）：
+// 此前的两个缺陷（同一段代码的两面）：
 //   ① 内容用了判空值——`replace(/[\s...]/,'')` 里的 `\s` 同时匹配**换行与普通空格**，
 //      该值本只用于"是否为空白"判定，却被 push 进气泡 content；而 apiMessages 派生自 content，
 //      于是发给模型的载荷也被剥掉全部空白（"please fix this bug" → "pleasefixthisbug"），
@@ -60,8 +60,8 @@ function hasSendableText(raw: string): boolean {
  * A/B-2（0.4.23）：消息「移入知识仓库」后，重算顶栏上下文指示器。
  * 实测明细与推理过程已迁出：详见 交接/03-修复与调试历史记录.md 第十四部分
  *
- * ⛔ **为什么是扣减而不是归零**：原实现在归档后把后端真实字数 `ctx_chars` 置 0，
- * ⛔ 已知近似（如实标注，不假装精确）：扣的是消息 `content` 的字符数，而后端 `_ctx_chars`
+ * **为什么是扣减而不是归零**：原实现在归档后把后端真实字数 `ctx_chars` 置 0，
+ * 已知近似（如实标注，不假装精确）：扣的是消息 `content` 的字符数，而后端 `_ctx_chars`
  *
  * @param backendCtxChars 后端最近一次回传的真实上下文字符数（0 = 尚无真值）
  * @returns nextCtxChars：新的真实字符数基准；nextTokenUsed：要显示的 token 数，
@@ -72,7 +72,7 @@ export function ctxTokensAfterArchive(
   msgs: Array<{ id?: number | string; content?: string }>,
   archivedIds: Set<number>,
 ): { nextCtxChars: number; nextTokenUsed: number | null } {
-  // ⛔ 边界守卫：无后端真值时（会话刚加载、还没跑过任何一轮、从未收到 state 事件）
+  // 边界守卫：无后端真值时（会话刚加载、还没跑过任何一轮、从未收到 state 事件）
   //   不得做扣减——扣减会得出 0，把原本启发式还能算出的值也清成 0（比原行为更糟）。
   //   此时保持"归零 + 交回估算 effect 按未归档消息重算"的原语义。
   if (!(backendCtxChars > 0)) {
@@ -82,7 +82,7 @@ export function ctxTokensAfterArchive(
     .filter(m => typeof m.id === 'number' && archivedIds.has(m.id))
     .reduce((sum, m) => sum + ((m.content || '').length), 0);
   const nextCtxChars = Math.max(0, backendCtxChars - archivedChars);
-  // ⛔ 扣到 0（极端：归档了几乎全部内容）→ 返回 null，不硬显示 0，交回启发式兜底
+  // 扣到 0（极端：归档了几乎全部内容）→ 返回 null，不硬显示 0，交回启发式兜底
   return { nextCtxChars, nextTokenUsed: nextCtxChars > 0 ? Math.round(nextCtxChars * 0.6) : null };
 }
 
@@ -91,7 +91,7 @@ export function ctxTokensAfterArchive(
  * 用户实测（2026-09-12 四图）落库证据与五点出口收敛的推理已迁出：
  * 详见 交接/03-修复与调试历史记录.md 第十五部分
  *
- * ⛔ 历史注释断言「分裂点不可能有 running（tool_result 必同轮到达）」——该断言只在
+ * 历史注释断言「分裂点不可能有 running（tool_result 必同轮到达）」——该断言只在
  *   **单连接不重连**时成立，重连/断连即破（tool_result 丢失而 running 永留）。
  */
 export function convergeRunningSteps(steps: ToolStep[] | undefined): ToolStep[] | undefined {
@@ -118,12 +118,12 @@ function formatTime(isoString: string): string {
          date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 // checkpoint-048：聊天上传支持办公文档（走后端附件解析端点）
-// ⛔ C3 局部去重（0.4.18）：此处原有 `PARSEABLE_EXTS` 白名单，是后端
+// C3 局部去重（0.4.18）：此处原有 `PARSEABLE_EXTS` 白名单，是后端
 //    `attachments/parser.py: SUPPORTED_EXTS` 的**第二份真相源**，且已**漂移**：
 //    缺 `.pptx`（0.4.6 后端已加解析、前端漏改 → 用户能选 pptx 却从不解析，
 //    且因 parseable=false 直接 continue，界面连「（仅文件名）」都不显示），
 //    也缺后端 TEXT_EXTS 里的 .js/.ts/.py/.html/.css/.xml/.toml/.cfg/.conf/.sh/.markdown。
-//    ⛔ 修法不是"把清单补全"（后端下次加格式仍会漂），而是**删掉白名单、交后端唯一裁决**：
+//    修法不是"把清单补全"（后端下次加格式仍会漂），而是**删掉白名单、交后端唯一裁决**：
 //    非图片一律调解析端点，后端对不支持的格式返回 text=null → 前端显示「（仅文件名）」。
 //    与既有渲染三态（解析中… / 已提取 /（仅文件名））天然契合。
 //    代价：传 .zip/.exe 等会多一次往返，但后端有 10MB 上限保护（_CHAT_ATT_MAX_BYTES）。
@@ -134,19 +134,19 @@ let localMsgSeq = 0;
 function newLocalMsgId(): string { return `local_${Date.now()}_${++localMsgSeq}`; }
 
 // ── M1-4：Markdown 流式渲染（未闭合 ``` 先当纯文本，闭合后转代码块）──
-// ⛔⛔ F2（0.4.23 安全区）：包 `React.memo`。
+// F2（0.4.23 安全区）：包 `React.memo`。
 // 主因（`36-…测量操作卡.md` 5.7 真机数据坐实）：流式/思考期每个 SSE 事件都 setLocalMessages
 //   → 重渲染整个消息列表（实测 93~95 条），**每条 assistant 都重新走 ReactMarkdown 完整解析**，
 //   而其中 94 条的 text 一个字没变 → 重解析纯属浪费，是 Electron 渲染进程烧满一核（~103%）的主成本。
 // memo 后 text 不变即跳过重渲染与重解析。
-// ⛔ 默认浅比较即可、**不需要自定义比较函数**：本组件是叶子组件，只接收 `text` 一个 prop，
+// 默认浅比较即可、**不需要自定义比较函数**：本组件是叶子组件，只接收 `text` 一个 prop，
 //   其余（colors/fonts/radius）全部读模块级 theme 常量，不随渲染变化。
-// ⛔ 属"安全区"：memo 不改输出 DOM/样式，也不动消息列表 `.map()` 结构 → 与 A12 UI 重构零冲突。
+// 属"安全区"：memo 不改输出 DOM/样式，也不动消息列表 `.map()` 结构 → 与 A12 UI 重构零冲突。
 export const StreamingMarkdown = React.memo(function StreamingMarkdown({ text }: { text: string }) {
   const openFences = (text.match(/```/g) || []).length;
   const balanced = openFences % 2 === 0;
   if (!text) return null;
-  // B3（0.4.12）：长文本溢出聊天框。⛔ 三个真实成因，缺一都会漏：
+  // B3（0.4.12）：长文本溢出聊天框。三个真实成因，缺一都会漏：
   //   ① `wordBreak:'break-word'` 是**已废弃的别名**（word-break 规范值只有 normal|break-all|keep-all），
   //      标准写法是 `overflowWrap:'anywhere'`——它才会把「无空格长串」（长 URL、base64、
   //      超长英文标识符）也纳入断行计算，而 `break-word` 只在"软换行机会"处生效，长 URL 仍会撑破容器。
@@ -238,14 +238,14 @@ function ToolStepBar({ step }: { step: ToolStep }) {
 }
 
 // ── 附件正文注入标记 ──
-// ⛔ ATTACH_MARK 是附件正文注入的**唯一标记**（handleSend 注入处使用），
+// ATTACH_MARK 是附件正文注入的**唯一标记**（handleSend 注入处使用），
 //    不可在别处写字面量副本，否则改一处漏一处（C3/A10 刚清理过双源漂移）。
-// ⛔ #11（0.4.19）：此前 B10 + C8 遗留（0.4.18，提交 7f577fc）按此标记把附件段
+// #11（0.4.19）：此前 B10 + C8 遗留（0.4.18，提交 7f577fc）按此标记把附件段
 //    与超长 assistant 正文折叠显示（折叠外壳组件 + 字数/行数阈值常量，阈值约 600 字 / 20 行）。
 //    用户拍板**全部删除**——该折叠从未被要求过（用户原话「我虚构的需求」「没有意义」），
 //    把内容藏起来只会让用户以为信息丢了。现正文一律原样铺开。
-//    ⛔ 标记本身保留：它早在 B10 之前就存在（附件注入的分隔符），与折叠无关。
-//    ⛔ B4 工具步骤折叠（ToolStepsGroup）**保留**：它折叠的是过程条目而非内容，
+//    标记本身保留：它早在 B10 之前就存在（附件注入的分隔符），与折叠无关。
+//    B4 工具步骤折叠（ToolStepsGroup）**保留**：它折叠的是过程条目而非内容，
 //    且解决的正是用户报过的「工具调用步骤一直占着会话窗」痛点（用户 2026-09-10 拍板）。
 const ATTACH_MARK = '--- 附件内容 ---';
 
@@ -253,7 +253,7 @@ const ATTACH_MARK = '--- 附件内容 ---';
  * B4（0.4.12）：工具步骤「完成后折叠」——整组收拢为一行摘要；运行中自动展开，
  * 全部终结后自动收拢，点击可再展开。问题背景与"已完成"判据推理已迁出：
  * 详见 交接/03-修复与调试历史记录.md 第七部分
- * ⛔ 两个必须守住的约束（否则会引入新缺陷）：
+ * 两个必须守住的约束（否则会引入新缺陷）：
  *   ① **失败不能被折叠藏起来**——收拢行须显眼标出失败数并用警示色，
  *      否则用户以为一切正常，排查线索被藏掉；error 步骤也不计入"成功"。
  *   ② **用户手动展开/收拢的状态不能被自动行为覆盖**——自动切换只在状态跃迁的那一次生效，
@@ -263,7 +263,7 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
   const running = steps.filter(s => s.status === 'running').length;
   const failed = steps.filter(s => s.status === 'error').length;
   const okCount = steps.filter(s => s.status === 'ok').length;
-  // C8（0.4.16）：中断步骤数。⛔ 它既不算 running（否则 running===0 永不满足、步骤组永远展开
+  // C8（0.4.16）：中断步骤数。它既不算 running（否则 running===0 永不满足、步骤组永远展开
   // = C8"不可折叠"症状），也不算 failed（否则 B4 约束①的警示色会谎报"失败"，
   // 而用户主动停止并不是工具出错）。
   const interrupted = steps.filter(s => s.status === 'interrupted').length;
@@ -291,7 +291,7 @@ function ToolStepsGroup({ steps, done }: { steps: ToolStep[]; done: boolean }) {
       : `工具调用 ${steps.length} 步`;
 
   /* A12 灵动批：手风琴高度过渡（grid 0fr↔1fr）。
-     ⛔ 折中点：流结束的**自动收拢**必须同步卸载步骤（B4 测试①/④ 断言
+     折中点：流结束的**自动收拢**必须同步卸载步骤（B4 测试①/④ 断言
      收拢后 textContent 立即不含步骤文案）；仅「用户手动收起」走 210ms 收缩动画
      （步骤保持挂载、grid 1fr→0fr，播完再卸载）——该窗口期无任何测试断言。 */
   const [userClosing, setUserClosing] = useState(false);
@@ -556,16 +556,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   // 0.4.12 附带修复：节流计时器提升为组件级 ref，卸载时 clearTimeout（无害卫生）。
   // 原实现是 handleSend 的闭包局部变量，卸载后外部无从清理。
   const cacheSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // B12（0.4.21）：流级计时器同样提升为组件级 ref —— ⛔ **卸载 cleanup 不 abort 流**（实测：
+  // B12（0.4.21）：流级计时器同样提升为组件级 ref —— **卸载 cleanup 不 abort 流**（实测：
   // `:659` 那处 cleanup 只置 mountedRef=false 并清 cacheSyncTimer，不调 abort），
   // 因此组件卸载时 handleSend 的 `finally` **根本不会执行**。若只在 finally 清理，
   // 卸载后这个每秒计时器会继续空转。故必须在 finally 与卸载 cleanup **两处**都 clearInterval。
-  // 📌 注：它不会造成"幽灵写入"——patchStreamMsg 走 setLocalMessages(prev=>...) 的 updater，
+  // 注：它不会造成"幽灵写入"——patchStreamMsg 走 setLocalMessages(prev=>...) 的 updater，
   //   React 18 卸载后 updater 不被调用（同上方 cacheSyncTimer 的变异测试结论）；
   //   清理它属"无害卫生"（停掉空转 timer），但仍必须做。
   const runElapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // 0.4.12 附带修复（**真实根因**）：卸载守卫。
-  // ⛔ 定位纠错——最初以为泄漏来自上面的节流 timer，但**变异测试证伪**：把卸载清理删掉，
+  // 定位纠错——最初以为泄漏来自上面的节流 timer，但**变异测试证伪**：把卸载清理删掉，
   // 回归测试照样全绿。原因是节流 timer 的写缓存动作在
   //   `setLocalMessages(prev => { syncSessionLocal(...); return prev; })` 的 updater 里，
   // 而 React 18 卸载后 updater **根本不会被调用** → 那条路径本就不会幽灵写入。
@@ -613,7 +613,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     const dbIds = new Set(dbMsgs.map(m => String(m.id ?? '')));
     const dbByContent = new Set(dbMsgs.filter(m => m.content).map(m => `${m.role}::${m.content}`));
     // C8（0.4.16）：DB 同 role 定稿 content 列表，用于**前缀匹配**。
-    // ⛔ 精确匹配不够：前端 abort 时可能比后端少收几个 token，缓存 content 是 DB 定稿的
+    // 精确匹配不够：前端 abort 时可能比后端少收几个 token，缓存 content 是 DB 定稿的
     // **前缀**而非全等 → 精确匹配失配 → 副本被当新消息追加到末尾且重复（C8 根因①）。
     // 配合"停止态已落库 + 不再拼（已停止）"，前缀匹配即可让停止气泡与 DB 定稿正确去重。
     const dbContentsByRole: Record<string, string[]> = {};
@@ -625,7 +625,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       return list.some(db => db.length > content.length && db.startsWith(content));  // 前缀
     };
     // C8 补漏（0.4.17）：**正文为空**的定稿按「工具步骤签名」去重。
-    // ⛔ 上面 matchesDb 与下面的判据都以 content 为前提（`if (!content) return false` /
+    // 上面 matchesDb 与下面的判据都以 content 为前提（`if (!content) return false` /
     //    `if (m.content && ...)`），于是"模型只调了工具、还没吐任何正文"时用户点停止
     //    → 缓存副本 content 为空串 → **整个去重被短路跳过** → 副本追加到末尾且重复，
     //    C8 的"挪末尾+重复"症状原样复发（探针实测：assistant 由 1 条变 2 条）。
@@ -659,7 +659,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 否则界面永远停在"思考中…已等待 Ns"卡死态）。
         const hasSubstance = (m.content || '').trim().length > 0 || ((m.toolSteps || []).length > 0);
         if (!hasSubstance) continue;
-        // ⛔ #13（0.4.19）：与瞬显路径同一判据补中断标记（见上方缓存瞬显注释）：
+        // #13（0.4.19）：与瞬显路径同一判据补中断标记（见上方缓存瞬显注释）：
         // 无 manualStopped 且无 completedDuration → 异常中断的半成品，标"已中断执行"。
         // 不置 manualStopped（不能谎称用户手动停止）；不用 stopped 判（done 也置，会误标正常完成）。
         extra.push({
@@ -690,7 +690,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // C8（0.4.16）：后端 stopped 列 = 用户主动停止（只在 C2取消/CancelledError 路径落 True，
         // done 路径为 False）→ 语义等价前端 manualStopped。DB 来源的消息据此映射出 manualStopped，
         // 使刷新/切回会话后仍显示"已手动停止"标签（此前停止态不落库，刷新即丢，是 C8 根因③）。
-        // ⛔ 只映射 DB 来源：前端内存的 stopped 语义更宽（done/error 也置，见 useMessages.ts），
+        // 只映射 DB 来源：前端内存的 stopped 语义更宽（done/error 也置，见 useMessages.ts），
         // 不能全局把 stopped 当 manualStopped，否则正常完成也会显示"已手动停止"（C6 修过的缺陷）。
         const dbMsgs = (msgs as Message[]).map(m =>
           (m.stopped && !m.manualStopped) ? { ...m, manualStopped: true } : m);
@@ -741,7 +741,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   // 0.4.12 附带修复：卸载收尾。
   // mountedRef 置 false 是**主修复**——两处直接写缓存的异步回调据此短路（见其声明处注释）；
   // clearTimeout 是附带的无害卫生（其写操作本就在 updater 内，卸载后不会执行）。
-  // ⛔ 此处**故意不 abort 流**：中断语义由 handleStop / 会话切换各自负责，
+  // 此处**故意不 abort 流**：中断语义由 handleStop / 会话切换各自负责，
   // 卸载时擅自 abort 会撞上 C6 刚分离出的 manualStopped（"用户手动停止"）语义。
   useEffect(() => {
     // 挂载即置 true：当前未启用 StrictMode，但若将来启用，React 会 mount→unmount→remount，
@@ -750,7 +750,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     return () => {
       mountedRef.current = false;
       if (cacheSyncTimerRef.current) { clearTimeout(cacheSyncTimerRef.current); cacheSyncTimerRef.current = null; }
-      // B12（0.4.21）：⛔ 卸载 cleanup **不 abort 流**，所以 handleSend 的 finally 不会执行
+      // B12（0.4.21）：卸载 cleanup **不 abort 流**，所以 handleSend 的 finally 不会执行
       //   → 流级计时器必须在这里也清一次，否则卸载后它每秒空转（无害但白耗）。
       if (runElapsedTimerRef.current) { clearInterval(runElapsedTimerRef.current); runElapsedTimerRef.current = null; }
     };
@@ -811,15 +811,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             .filter(m => !(String(m.id ?? '').startsWith('local_') && !(m.content || '').trim() && !((m.toolSteps || []).length)))
             // 0.4.12（C6）：原写 `stopped: m.stopped || true` —— 恒真表达式（无论 m.stopped 为何
             // 都得到 true），是逻辑错误写法。本意确为强制置位（缓存恢复的流永不再推进，须清活态），
-            // 故直接写 true 并把意图写进注释。⛔ 不置 manualStopped：恢复的缓存流无法判断
+            // 故直接写 true 并把意图写进注释。不置 manualStopped：恢复的缓存流无法判断
             // 究竟是用户手动停止还是崩溃/关闭窗口导致中断，不能谎称"已手动停止"。
-            // ⛔ #13（0.4.19）：但"无法区分"不等于"不标记"——此前恢复出的半成品气泡
+            // #13（0.4.19）：但"无法区分"不等于"不标记"——此前恢复出的半成品气泡
             // 没有任何可见标记，用户看不出这条没写完（真机事故：关应用打断后回看，
             // 半截回复与正常回复长得一样）。用两个实时路径可验证的签名区分：
             //   · manualStopped=true → 用户自己点的停止 → 走既有"已手动停止"渲染，不重复标；
             //   · 无 completedDuration → 没走 done 路径（done 必置该字段）→ 异常中断
             //     （崩溃/关应用/断连）→ 标"已中断执行"。
-            // ⛔ 不能用 stopped 判：done 路径同样置 stopped，会把正常完成误标成中断。
+            // 不能用 stopped 判：done 路径同样置 stopped，会把正常完成误标成中断。
             .map(m => {
               if (!String(m.id ?? '').startsWith('local_')) return m;
               const base = { ...m, thinking: false, waitingSeconds: 0, stopped: true };
@@ -1131,11 +1131,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         typeof m.id === 'number' && selectedMsgIds.has(m.id) ? { ...m, archived: true } : m);
       setLocalMessages(nextArchived);
       if (currentSessionId) syncSessionLocal(currentSessionId, nextArchived);
-      // ⛔ A/B-2（0.4.23）：归档后**不要**把后端真实值归零（否则指示器退回纯前端启发式，
+      // A/B-2（0.4.23）：归档后**不要**把后端真实值归零（否则指示器退回纯前端启发式，
       //   漏掉 system prompt 与工具声明 ≈5060 token → 数字断崖式掉到远低于真实值，
       //   下一轮 state 事件才跳回 = 用户报的"数字忽大忽小"）。
       //   改为只扣掉被归档消息自身的贡献，保住基线，同时仍满足"移入仓库即下降"。
-      //   ⛔ 计算与边界守卫全部收在纯函数 `ctxTokensAfterArchive` 里（模块顶部，有单测覆盖）——
+      //   计算与边界守卫全部收在纯函数 `ctxTokensAfterArchive` 里（模块顶部，有单测覆盖）——
       //   此处**不要**再内联一份实现，否则两处漂移。nextTokenUsed 为 null 表示不硬写显示值
       //   （无后端真值 / 扣到 0 两种情形），交由估算 effect 用启发式兜底，避免显示 0。
       const _arch = ctxTokensAfterArchive(backendCtxCharsRef.current,
@@ -1268,7 +1268,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     e.target.value = '';
 
     // checkpoint-048：可解析的文档调后端解析端点提取文本
-    // C3 局部去重（0.4.18）：⛔ 不再用前端格式白名单预判（见文件顶部注释——那份清单
+    // C3 局部去重（0.4.18）：不再用前端格式白名单预判（见文件顶部注释——那份清单
     //    已与后端 SUPPORTED_EXTS 漂移，导致 .pptx 等永远不被解析且界面无任何状态）。
     //    改为「非图片一律交后端裁决」：后端对不支持的格式返回 text=null，
     //    前端按既有三态显示「（仅文件名）」。图片仍单独走 dataUri 视觉链路，不调解析端点。
@@ -1278,7 +1278,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       setPendingItems(prev => prev.map(p => p.name === item.name && p.dataUri === item.dataUri ? { ...p, parsing: true } : p));
       try {
         // C7（0.4.18）：带 project/session 归属 → 后端据此落盘并回传绝对路径。
-        // ⛔ 会话未创建时（currentSessionIdRef 为 null）后端只解析不落盘、不报错，
+        // 会话未创建时（currentSessionIdRef 为 null）后端只解析不落盘、不报错，
         //    不能因此让用户传不了文件（savedPath 缺省 → 正文不写路径，退回旧行为）。
         const res = await fetch(`${API}/attachments/parse`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1313,9 +1313,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // 纠偏或补充——正如助手处理用户在其工作时发来的消息的方式。
     if (sending) { handleInject(explicitText); return; }
     // B13（0.4.22）：explicitText 用于"压缩后自动续发"等程序化重发——
-    // ⛔ 不能依赖 input state：setTimeout/异步回调里的 handleSend 闭包捕获的是调度时刻的旧 input
+    // 不能依赖 input state：setTimeout/异步回调里的 handleSend 闭包捕获的是调度时刻的旧 input
     // （点击压缩瞬间 input 为空），导致 hasSendableText('') 为 false、重发静默无效（原意图从未生效）。
-    // ⛔⛔ **必须 typeof==='string' 判断**：发送按钮 `onClick={handleSend}` 会把 **click 事件对象**
+    // **必须 typeof==='string' 判断**：发送按钮 `onClick={handleSend}` 会把 **click 事件对象**
     // 作为首参传入（React 惯例），若用 `!= null` 判断会把 MouseEvent 当文本 → String(e)='[object Object]'
     // 污染正文（2026-09-11 回归实测：8 用例红、气泡首行 '[object Object]'）。
     const src = typeof explicitText === 'string' ? explicitText : input;
@@ -1356,11 +1356,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       .map(m => ({ role: m.role, content: m.content }));
 
     // checkpoint-048：附件文本优先用后端解析结果；解析失败的文件仅作文件名标注，不阻塞发送。
-    // C7（0.4.18）：⛔ 旧实现 `.filter(f => f.parsedText)` 把**解析失败的文件整条丢掉**，
-    // ⛔ 表#6（0.4.19）：附件由【推模式】改为【拉模式】——正文只写路径，agent 自己 read_file。
-    // ⛔ 为什么现在才能改：表#4（commit 8c2daaa）让 read_file 真能解析 docx/xlsx/pptx/pdf
-    // ⛔ 本改动**取代** checkpoint-067 R-2「完整优先，全额注入」的拍板：R-2 当时成立的前提是
-    // ⛔ 退化路径必须保留：拿不到 savedPath 时（会话尚未创建 / 后端落盘失败）仍全额注入，
+    // C7（0.4.18）：旧实现 `.filter(f => f.parsedText)` 把**解析失败的文件整条丢掉**，
+    // 表#6（0.4.19）：附件由【推模式】改为【拉模式】——正文只写路径，agent 自己 read_file。
+    // 为什么现在才能改：表#4（commit 8c2daaa）让 read_file 真能解析 docx/xlsx/pptx/pdf
+    // 本改动**取代** checkpoint-067 R-2「完整优先，全额注入」的拍板：R-2 当时成立的前提是
+    // 退化路径必须保留：拿不到 savedPath 时（会话尚未创建 / 后端落盘失败）仍全额注入，
     // 推模式代价、R-2 拍板原文与逐条推理已迁出：详见 交接/03-修复与调试历史记录.md 第十部分
     const textFileContents: string[] = textFileItems
       .filter(f => f.parsedText || f.savedPath)
@@ -1380,10 +1380,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     if (textFileContents.length && finalMessages.length > 0) {
       const lastIdx = finalMessages.length - 1;
       // 附件正文注入：用模块常量 ATTACH_MARK 作分隔标记，把用户原话与附件全文分开。
-      // ⛔ #11（0.4.19）更正过时注释：此处原写「UserBody 折叠时按同一标记切分」，
+      // #11（0.4.19）更正过时注释：此处原写「UserBody 折叠时按同一标记切分」，
       //    但 UserBody/FoldSection 已随正文折叠一并删除（用户拍板全删），**折叠消费方已不存在**。
       //    标记本身保留——它早于折叠功能存在，作用是让落库正文里"哪段是附件"可读可辨，
-      //    且 agent 仍从落库正文读全文。⛔ 表#6（附件改走路径）落地后本段注入逻辑会被重做。
+      //    且 agent 仍从落库正文读全文。表#6（附件改走路径）落地后本段注入逻辑会被重做。
       finalMessages[lastIdx] = { ...finalMessages[lastIdx], content: finalMessages[lastIdx].content + `\n\n${ATTACH_MARK}\n` + textFileContents.join('\n\n') };
     }
 
@@ -1435,14 +1435,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     }
     // 节流：token 高频时 rAF 合并一次 setState（避免每 token 重渲染卡 UI）
     // B05（TS-101）：按 streamMsgId 定位目标气泡，不再盲写"最后一条"
-    // ⛔⛔ F4（0.4.23 安全区）：**思考增量也并入这同一个按帧 flush**。
+    // F4（0.4.23 安全区）：**思考增量也并入这同一个按帧 flush**。
     // 真机数据（`36-…测量操作卡.md` 5.7）：模型运行时 Electron 渲染进程 ~103%（烧满一核），
     //   而 ollama 仅 ~22%、codex 跑同样模型前端 0% → 前端在自我空转。D 场景（思考圆圈，
     //   fps 3.7 / longtask 78%）的元凶就是 thinking 分支：qwen3.8 是思考模型、思考增量高频到达，
     //   而此前**每个 delta 都单独 patchStreamMsg** → 每次都重渲染整个消息列表（93~95 条）。
     // 现在：thinkingPreview 增量累积进 accThinking，与正文**共用同一次 rAF 提交**
     //   （一帧内无论到了多少个 delta，最多提交一次）→ 思考期提交数从"每 delta 一次"降到"每帧一次"。
-    // ⛔ 语义不变项（都有测试守护，chatPanelF4ThinkingThrottle）：
+    // 语义不变项（都有测试守护，chatPanelF4ThinkingThrottle）：
     //   预览仍是末 120 字（slice(-120) 保留）、思考态开/关与计时走 startThinkingPhase/closeThinkingPhase
     //   （**不参与节流**，故阶段语义与 B12 计时完全不受影响）、每条终结路径都清 accThinking。
     let rafId = 0;
@@ -1458,7 +1458,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         const next = [...prev];
         next[idx] = {
           ...next[idx],
-          // ⛔ 两个字段都可能为空（只来了 thinking、或只来了 token）→ 条件展开，
+          // 两个字段都可能为空（只来了 thinking、或只来了 token）→ 条件展开，
           //   避免把 content 写成 `undefined + c` 或无谓地重置 thinkingPreview。
           ...(c ? { content: (next[idx].content || '') + c } : {}),
           ...(t ? { thinkingPreview: ((next[idx].thinkingPreview || '') + t).slice(-120) } : {}),
@@ -1475,11 +1475,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     // 计时持续跳动，并附简版思考预览（让你实时知道 agent 在想什么、不是空转）。
     let thinkingStartedAt: number | null = null;
     // B05：工具事件也按 id 定位（防止数组变化时落到错误气泡）
-    // ⛔⛔ 止血（0.4.24，checkpoint-111）：新增 `persist` 选项（**默认 true，既有调用点语义零变化**）。
+    // 止血（0.4.24，checkpoint-111）：新增 `persist` 选项（**默认 true，既有调用点语义零变化**）。
     // 真凶（2026-09-13 实测）：47MB 缓存每次写入全量重写约 400ms，两个计时器每秒各 patch 一次
     // → 主线程被占 803ms/秒；计时器三字段（runElapsed/thinkingElapsed/waitingSeconds）本瞬态不落库。
     // 落库证据与逐条推理已迁出：详见 交接/03-修复与调试历史记录.md 第十六部分
-    // ⛔ persist 默认 true：正文 token / 工具步骤 / 错误 / 分裂定格等路径**仍照常写穿**
+    // persist 默认 true：正文 token / 工具步骤 / 错误 / 分裂定格等路径**仍照常写穿**
     const patchStreamMsg = (patch: (m: Message) => Message, opts?: { persist?: boolean }) => {
       if (currentSessionIdRef.current !== streamSid) return;
       setLocalMessages(prev => {
@@ -1492,16 +1492,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (opts?.persist === false) return;   // 瞬态字段：只更新内存态，不写缓存
       scheduleStreamCacheSync();
     };
-    // ⛔⛔ B12（0.4.21）：**流级计时器**（取代原"思考阶段计时器"）。
+    // B12（0.4.21）：**流级计时器**（取代原"思考阶段计时器"）。
     // 原缺陷与现设计推理已迁出：详见 交接/03-修复与调试历史记录.md 第十二部分
-    //   ⛔ **不新增第二个计时器**：否则思考态期间每秒两次 setLocalMessages → 消息列表重渲染翻倍
-    //   ⛔ runElapsed 用**被 patch 的那条气泡自己的 startedAt** 计算，故插入点分裂后自动跟随段2
-    //   ⛔ **不得**在此更新 thinkingDuration/completedDuration：前者是思考定格值（语义="思考已结束"），
+    //   **不新增第二个计时器**：否则思考态期间每秒两次 setLocalMessages → 消息列表重渲染翻倍
+    //   runElapsed 用**被 patch 的那条气泡自己的 startedAt** 计算，故插入点分裂后自动跟随段2
+    //   **不得**在此更新 thinkingDuration/completedDuration：前者是思考定格值（语义="思考已结束"），
     const startRunElapsedTimer = () => {
       if (runElapsedTimerRef.current) clearInterval(runElapsedTimerRef.current);
       runElapsedTimerRef.current = setInterval(() => {
         const now = Date.now();
-        // ⛔ 止血（0.4.24）：persist:false —— 计时 tick 只改瞬态显示值，不得引发 47MB 缓存全量重写
+        // 止血（0.4.24）：persist:false —— 计时 tick 只改瞬态显示值，不得引发 47MB 缓存全量重写
         //   （每秒 1 次 × 约 400ms 阻塞主线程，是真机 longtask 803ms/秒的主因之一）。
         patchStreamMsg(mm => ({
           ...mm,
@@ -1511,12 +1511,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         }), { persist: false });
       }, 1000);
     };
-    startRunElapsedTimer();   // ⛔ 流一开始就跑，不等到思考阶段（工具先跑/直接出正文的场景也要有计时）
+    startRunElapsedTimer();   // 流一开始就跑，不等到思考阶段（工具先跑/直接出正文的场景也要有计时）
     // 阶段化思考：开/关当前思考阶段（可多次开闭）
     // B1（0.4.8）修复：thinking 增量连续到达（间隔常<1s），此前每次都无条件重置
     // thinkingStartedAt 并重建计时器 → 计时器"创建即清除"永不触发，界面恒显 0s。
     // 改为"阶段开一次"语义：仅当不在思考态时才记录开始时间；已在思考态则直接返回。
-    // ⛔ B12：计时器已上移为流级，本函数**不再创建/清除计时器**，只负责置思考态与记录起点。
+    // B12：计时器已上移为流级，本函数**不再创建/清除计时器**，只负责置思考态与记录起点。
     let thinkingPhaseOpen = false;
     const startThinkingPhase = () => {
       if (thinkingPhaseOpen) return;
@@ -1526,7 +1526,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     };
     const closeThinkingPhase = () => {
       thinkingPhaseOpen = false; // B1：复位，下一个思考阶段重新计时
-      // ⛔ B12：**此处不再 clearInterval** —— 流级计时器要跑完整轮（它还在驱动 runElapsed）。
+      // B12：**此处不再 clearInterval** —— 流级计时器要跑完整轮（它还在驱动 runElapsed）。
       patchStreamMsg(m => {
         if (!m.thinking) return m;
         const duration = thinkingStartedAt ? Math.round((Date.now() - thinkingStartedAt) / 1000) : undefined;
@@ -1535,7 +1535,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       });
     };
 
-    // ⛔ C2 根因③/C6/B07/F4：「用户手动停止」收敛逻辑集中于此，三处调用点共享，勿在调用点复制改写
+    // C2 根因③/C6/B07/F4：「用户手动停止」收敛逻辑集中于此，三处调用点共享，勿在调用点复制改写
     const applyUserStopped = (afterCancelRaf?: () => void) => {
       if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       afterCancelRaf?.();
@@ -1544,7 +1544,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       // 0.4.12（C6）：只有 AbortError 才是**用户手动停止**，故额外置 manualStopped；
       // done/error 路径只置 stopped（"流已终止"），不再被渲染成"已手动停止"。
       patchStreamMsg(m => ({ ...m, content: (m.content || '') + c, stopped: true, manualStopped: true, thinking: false,
-        // C2 根因③（0.4.16）：⛔ 此前遗漏——工具步骤以 status:'running' 加入，
+        // C2 根因③（0.4.16）：此前遗漏——工具步骤以 status:'running' 加入，
         // 停止时只 patch 了 content/stopped/thinking，**没碰 toolSteps**，于是
         // 界面上最后一个工具永久显示"正在调用 …"（正是 C2 需求标题的症状），
         // 且 B4 折叠判据 `done && running===0` 永不满足 → 步骤组永远展开（C8"不可折叠"）。
@@ -1565,7 +1565,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 思考增量（任意轮）→ 阶段化显示：思考中 + 每秒跳动 + 简版预览
         startThinkingPhase();
         const delta = typeof d.delta === 'string' ? d.delta : '';
-        // ⛔⛔ F4（0.4.23 安全区）：**不再每 delta 一次 patchStreamMsg**（那是 D 场景烧满核的元凶），
+        // F4（0.4.23 安全区）：**不再每 delta 一次 patchStreamMsg**（那是 D 场景烧满核的元凶），
         //   改为累积进 accThinking、调度按帧 flush，与正文 token 共用同一次提交。
         //   startThinkingPhase 仍每 delta 调用（它内部有 thinkingPhaseOpen 守卫，重复调用是 no-op，
         //   且思考态开启必须即时、不能被节流拖延）。
@@ -1585,7 +1585,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // B3（0.4.8）：改用后端回传的真实上下文字数 ctx_chars 驱动指示器（含工具结果
         // 与 system prompt），根治"≈17"严重低估；无该字段时保持原估算驱动。
         if (typeof d.ctx_chars === 'number' && d.ctx_chars > 0) {
-          // ⛔ 0.4.22 重打包修复二（checkpoint-109）：**单调守门**。
+          // 0.4.22 重打包修复二（checkpoint-109）：**单调守门**。
           //   ctx_chars 是"该轮开头"的上下文快照，随**轮末** state 回传。M5 重连会让
           //   loop 整轮重跑：attempt2 第 1 轮末的 state（小值，如 6057 token）会**晚于**
           //   attempt1 末轮的 state（大值，如 7617）到达 → 直接覆盖 = 用户看到数字
@@ -1593,7 +1593,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           //   守门：取大者。上下文的真实减少只允许走**显式路径**（归档扣减
           //   ctxTokensAfterArchive / 压缩 / 切会话复位），它们直接写 ref 与显示值，
           //   不经此守门 → 单调性不会妨碍"移入仓库即下降"。
-          //   ⛔ 已知代价（如实标注）：归档后下一轮的 state 真值若**小于**扣减后的 ref，
+          //   已知代价（如实标注）：归档后下一轮的 state 真值若**小于**扣减后的 ref，
           //     会被守门夹住 → 真值纠正延迟到上下文重新增长超过它为止。换来的是
           //     重连旧值永不覆盖、数字不再忽大忽小（用户首要诉求是单调平滑）。
           const nextChars = Math.max(backendCtxCharsRef.current, d.ctx_chars);
@@ -1613,7 +1613,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         closeThinkingPhase();               // 停掉当前段的思考计时器
         const pending = accContent; accContent = '';
-        // ⛔ F4：思考缓冲必须在此丢弃（不是"留到下一帧"）。
+        // F4：思考缓冲必须在此丢弃（不是"留到下一帧"）。
         //   段1 定格时显式置 thinkingPreview: undefined；而 streamMsgId 下面会重指向段2 →
         //   若不清空，挂起的帧 flush 会把**段1 的思考预览写进段2 气泡**（跨段串味）。
         accThinking = '';
@@ -1625,29 +1625,29 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         setLocalMessages(prev => {
           const idx = prev.findIndex(m => m.id === frozenId);
           if (idx < 0) {
-            // ⛔ A-3（0.4.23）：这条路径此前**完全静默**——不分裂、不报错，且紧接着
+            // A-3（0.4.23）：这条路径此前**完全静默**——不分裂、不报错，且紧接着
             //   `streamMsgId = newId` 仍会执行 → 后续 token 写向一个不存在的气泡 → 正文也丢。
             //   本次排查（用户实测"插入后不分裂"）最费劲的地方正是它无声无息，只能靠读代码猜。
-            //   ⛔ 只加诊断，不改行为：真机复现时控制台能直接给出 frozenId 与现存 id 列表，
+            //   只加诊断，不改行为：真机复现时控制台能直接给出 frozenId 与现存 id 列表，
             //   一眼看出是 id 漂移（alignLocalIdsWithDb 换了 id）还是气泡已被移除。
             console.warn('[segment_break] 找不到要定格的气泡，分裂已跳过（后续正文可能丢失）',
                          { frozenId, existingIds: prev.map(m => m.id).slice(-8) });
             return prev;
           }
           const next = [...prev];
-          // 定格段1：⛔ 必须给 completedDuration —— 否则刷新恢复时会被
+          // 定格段1：必须给 completedDuration —— 否则刷新恢复时会被
           //   `!manualStopped && completedDuration==null` 判据误标成"已中断执行（半成品）"，
           //   但段1 是【正常完成】的段，不是异常中断。stopped 停掉打字机光标。
           const frozenDur = next[idx].startedAt
             ? Math.round((Date.now() - next[idx].startedAt) / 1000) : undefined;
-          // ⛔⛔ 0.4.22 重打包修复二（checkpoint-109）：定格时**必须收敛运行态**，两处：
+          // 0.4.22 重打包修复二（checkpoint-109）：定格时**必须收敛运行态**，两处：
           //   ① toolSteps 的 running → interrupted（convergeRunningSteps）；
           //   ② waitingSeconds 清 0（横幅判据 `!content && waitingSeconds>=8` 即不成立）。
-          //   ⛔ 推翻本处历史注释的旧断言（"分裂点不可能有 running"）：该断言只在
+          //   推翻本处历史注释的旧断言（"分裂点不可能有 running"）：该断言只在
           //     **单连接不重连**时成立。用户 2026-09-12 实测 + 落库证据（分裂气泡从未落库、
           //     折叠行却显示 5 步而分裂点只经 1~2 轮）证明 **M5 重连会让 loop 整轮重跑**，
           //     attempt1 断连时残留的 running（其 tool_result 随断连丢失）走到分裂点仍在。
-          //   ⛔ 分裂后 streamMsgId 重指向新气泡 → 本流的 +1 计时 / 首 token 清零 / done
+          //   分裂后 streamMsgId 重指向新气泡 → 本流的 +1 计时 / 首 token 清零 / done
           //     收尾**全部写新气泡**，旧气泡再无事件到达 → 不在此处清，横幅与转圈**永久残留**
           //     （截图两帧同为「已等待 26s」不再跳，正是"再无事件到达"的指纹）。
           //   语义说明：interrupted 与 completedDuration 并存**不矛盾**——前者说的是
@@ -1661,13 +1661,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             ...(frozenDur !== undefined ? { completedDuration: frozenDur } : {}),
           };
           // ② 插入注入的用户气泡 + ③ 新开 assistant 气泡（承接后续 token）
-          // ⛔⛔ **必须复用 handleInject 已乐观追加的气泡**（0.4.23 修复，I1 测试复现）：
+          // **必须复用 handleInject 已乐观追加的气泡**（0.4.23 修复，I1 测试复现）：
           //   handleInject（:1918-1919）在 POST /inject **之前**就把用户气泡追加到了数组末尾，
           //   本分支若再无条件新建 `local_inject_*` 气泡 → 同一条消息**显示两次**
           //   （实测 `expected 2 to be 1`；刷新后才被 mergeDbWithLocal 的 content 去重掩盖，
           //    故这是**实时视图**缺陷）。修法：按 content 匹配已存在的乐观气泡 → 摘出、
           //   重插到段1 之后并**复用其 id**（该 id 已随乐观气泡写进本地缓存，复用才不错位）。
-          // ⛔ **必须从尾部倒着找**：链式插入（用户连插两条同文本）时，上一次分裂已插入的
+          // **必须从尾部倒着找**：链式插入（用户连插两条同文本）时，上一次分裂已插入的
           //   气泡也在数组里且位置更靠前；正序会误吃掉它，倒序才能命中最新追加的乐观气泡。
           const injectedBubbles: Message[] = injected
             .filter((im: any) => String(im?.content || '').trim())
@@ -1682,7 +1682,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               }
               if (dupIdx >= 0) {
                 const [existing] = next.splice(dupIdx, 1);   // 摘出乐观气泡，稍后重插到正确位置
-                return existing;                             // ⛔ 复用其 id 与对象
+                return existing;                             // 复用其 id 与对象
               }
               // 未命中（注入来自其他来源，或乐观气泡未及落地）→ 才新建
               return { id: `local_inject_${Date.now()}_${j}`, role: 'user', content };
@@ -1800,12 +1800,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         setSending(false);
       } else if (ev.event === 'cancelled') {
         // C2（0.4.16）：后端确认已停止（stop 端点置位 → gen() 硬取消在飞请求后发此事件）。
-        // ⛔ 语义与前端 AbortError 路径**完全一致**（都是用户主动停止），故复用同一处理：
+        // 语义与前端 AbortError 路径**完全一致**（都是用户主动停止），故复用同一处理：
         // 保留已生成内容 + stopped + manualStopped（C6：只有手动停止才显示"已手动停止"文案）。
         // 为什么必须显式处理：前端事件白名单原本**没有 cancelled**，后端发了会被静默忽略 →
         // 若竞态下 cancelled 先于 AbortError 到达（或后端因其他路径取消），消息会既无"已手动停止"
         // 标签也无光标，看起来像"卡住"。不依赖"abort 一定先到"这种脆弱时序。
-        // ⛔ C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
+        // C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
         applyUserStopped(closeThinkingPhase);
         setSending(false);
       }
@@ -1830,7 +1830,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           return {
             ...m, content, thinking: false, thinkingElapsed: undefined, thinkingPreview: undefined,
             stopped: true,
-            // ⛔ 0.4.22 重打包修复二（checkpoint-109）：done 兜底收敛 running 步骤。
+            // 0.4.22 重打包修复二（checkpoint-109）：done 兜底收敛 running 步骤。
             //   正常流下 tool_result 必先于 done 到达，此处收敛是 no-op；
             //   但 **M5 重连/断连会丢 tool_result**（attempt1 的工具结果随连接丢失），
             //   此后 done 到达而 running 永留 → 「正在调用 …」转圈永久残留（F3 测试复现）。
@@ -1846,7 +1846,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         setSessions(prev => prev.map(s => s.id === streamSid ? { ...s, message_count: s.message_count + 2 } : s));
         // B07（TS-101）：流式完成 → 本地缓存同步（刷新/重启后可恢复）。
         // 按 streamMsgId 精确定位本流消息（不依赖数组顺序/身份），直接写缓存。
-        // ⛔ 显式标注 Message：不标则类型是 `Message | {id,role,content}` 联合，
+        // 显式标注 Message：不标则类型是 `Message | {id,role,content}` 联合，
         //   fallback 分支缺 toolSteps/completedDuration → 下方 #1 缓存折叠访问这两个
         //   可选字段时 tsc 报 TS2339（实测踩到）。fallback 已满足 Message 必需字段。
         const finalMsg: Message = localMessagesRef.current.find(m => m.id === streamMsgId)
@@ -1855,7 +1855,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 本分支由 reader.read() 循环驱动，组件卸载后循环仍会继续推进并执行到这里，
         // 直接 syncSessionLocal 写缓存 → "幽灵写入"（插桩 localStorage.setItem 抓到的调用栈
         // 正是 applyEvent ← applyEventWrapped ← handleSend）。
-        // ⛔ 只守卫这一行写缓存，不要扩大到整块：下方的 setLocalMessages 走 updater，
+        // 只守卫这一行写缓存，不要扩大到整块：下方的 setLocalMessages 走 updater，
         // React 18 卸载后 updater 本就不会被调用，无需也不应改变其行为。
         if (mountedRef.current) {
           // checkpoint-061：缓存读取加保护——缓存损坏时 JSON.parse 抛错会被外层误判为
@@ -1869,7 +1869,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             //   刷新 mergeDbWithLocal 时段2（= DB 全文的【后缀】）匹配不上 matchesDb（前缀
             //   匹配）→ 被当多余气泡重复追加。故移除全部分裂气泡，只写一条合并全文 assistant，
             //   使缓存 ≡ DB 的 assistant 部分（M1 刷新时从 DB 加载，注入气泡由 matchesDb 去重）。
-            //   ⛔ toolSteps 取段2 的（finalMsg）：刷新后以 DB 为准（DB 存全部步骤），缓存仅过渡显示。
+            //   toolSteps 取段2 的（finalMsg）：刷新后以 DB 为准（DB 存全部步骤），缓存仅过渡显示。
             const dropIds = new Set<string>([...frozenSegIds, streamMsgId]);
             const others = existing.filter((m: any) =>
               !dropIds.has(String(m.id)) && !String(m.id || '').startsWith('local_inject_'));
@@ -1912,7 +1912,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // H19 修复：清除条件必须是"首个正文 token"——thinking/tool_call 等事件几秒内就会到达，
         // 若任何事件都清除计时器，指示器永远到不了 8s 阈值；用户真正等待的是正文输出。
         const waitTimer = setInterval(() => {
-          // ⛔ 止血（0.4.24）：persist:false —— 同流级计时器，waitingSeconds 是瞬态显示值，
+          // 止血（0.4.24）：persist:false —— 同流级计时器，waitingSeconds 是瞬态显示值，
           //   每秒 tick 不得引发 47MB 缓存全量重写。
           patchStreamMsg(m => ({ ...m, waitingSeconds: (m.waitingSeconds || 0) + 1 }), { persist: false });
         }, 1000);
@@ -1948,7 +1948,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             throw err;
           }
           // B9-2 C8：消费壳归并至 lib/sseStream.consumeSSE（reader/decoder/parser/push 循环/flush
-          //   逐行同构，事件同步派发时序不变）。⛔ 仅换循环壳，applyEventWrapped/F4 节流等不动。
+          //   逐行同构，事件同步派发时序不变）。仅换循环壳，applyEventWrapped/F4 节流等不动。
           await consumeSSE(res.body, applyEventWrapped);
           stopWaitTimer();
           break;
@@ -1956,7 +1956,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           stopWaitTimer();
           if (e?.name === 'AbortError') {
             // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
-            // ⛔ C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
+            // C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
             applyUserStopped();
             break;
           }
@@ -1985,7 +1985,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     } catch (e: any) {
       if (e?.name === 'AbortError') {
         // 用户主动停止 → 真断流（后端 CancelledError 静默结束，B06 已截断落盘 DB），保留已渲染内容 + 标记
-        // ⛔ C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
+        // C2 根因③/C6/B07：停止收敛见上文共享闭包（用户手动停止三路径共用，勿在此复制改写）
         applyUserStopped();
       } else {
         const errMsg: Message = { id: newLocalMsgId(), role: 'assistant', content: `❌ ${e.message || '请求失败'}`, model_used: getEffectiveModel() };
@@ -2006,7 +2006,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
   // 停止生成（C2 / 0.4.16：前端 abort + **通知后端真停**）
   //
-  // ⛔ 此前只有 `abortRef.current?.abort()` —— 它仅关掉 SSE 连接，**后端毫不知情**，
+  // 此前只有 `abortRef.current?.abort()` —— 它仅关掉 SSE 连接，**后端毫不知情**，
   // 会把剩余轮次与 token 全部跑完（本地大模型上可达数分钟）。用户看到的"停止"
   // 只是前端不再显示而已，机器还在烧算力。这是 C2 的第一处断裂。
   //
@@ -2030,9 +2030,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   async function handleInject(explicitText?: string) {
     const sid = activeStreamSidRef.current || currentSessionIdRef.current;
     if (!sid) return;
-    // B13（0.4.22）：explicitText 供程序化重发（压缩续发等）使用。⛔ 不能依赖闭包 input：
+    // B13（0.4.22）：explicitText 供程序化重发（压缩续发等）使用。不能依赖闭包 input：
     // 异步回调（setTimeout）里的 handleInject 捕获的是调度时刻的旧 input（常为空），会静默无效。
-    // ⛔ typeof==='string' 防护：防止误绑 onClick 时把事件对象当文本（'[object Object]' 污染）。
+    // typeof==='string' 防护：防止误绑 onClick 时把事件对象当文本（'[object Object]' 污染）。
     const src = typeof explicitText === 'string' ? explicitText : input;
     if (!hasSendableText(src)) return;
     const text = normalizeInputText(src).trim();
@@ -2047,7 +2047,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       });
       const d = await r.json().catch(() => ({}));
       // 无活流（可能当前轮刚好结束）→ 如实告知，让用户直接发送。
-      // ⛔ A-3（0.4.23）：改用 toast，不用 reconnectNotice —— 后者在流的 finally 里被
+      // A-3（0.4.23）：改用 toast，不用 reconnectNotice —— 后者在流的 finally 里被
       //   `setReconnectNotice(null)` 清除（:1909）。注入失败恰恰最常发生在**流即将结束**时
       //   （用户在最后一轮插入 → 后端无下一轮可 drain，见 loop.py 最后一轮补救），
       //   于是提示一闪而过、用户什么也看不到 = **完全感知不到失败**。
@@ -2064,7 +2064,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     if (lastUser) { setInput(lastUser.content); }
   }
 
-  // B13（0.4.22）：显式 content 的重发入口。⛔ 与 resendLast/handleSend 不同，它不依赖
+  // B13（0.4.22）：显式 content 的重发入口。与 resendLast/handleSend 不同，它不依赖
   // 闭包里的 input state —— 压缩回调在 setTimeout 里调用时 input 已变（或本就是空），
   // 用参数传 content 才能保证"压缩后让模型继续任务"的原意图真的生效。
   async function resendWithContent(content: string) {
@@ -2077,7 +2077,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       await handleInject(text);
       return;
     }
-    // ⛔ 直接传参给 handleSend（显式文本通道），⛔ 不走 setInput+setTimeout 旧路（闭包空 input 静默无效）
+    // 直接传参给 handleSend（显式文本通道），不走 setInput+setTimeout 旧路（闭包空 input 静默无效）
     await handleSend(text);
   }
 
@@ -2088,7 +2088,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const tokenBarColor = tokenRatio >= 0.99 ? colors.danger : tokenRatio >= 0.90 ? colors.warn : colors.ok;
 
   // A12（0.4.25）：顶栏「⋯ 更多操作」菜单项（原 9 枚图标平铺太挤 → 低频动作收纳进菜单）。
-  // ⛔ data-tip 一律保留原文（提示文字是文案原文）；可见标签为同义短名。
+  // data-tip 一律保留原文（提示文字是文案原文）；可见标签为同义短名。
   const moreMenuItem = (label: string, icon: IconName, tip: string, onClick: () => void,
     opts?: { danger?: boolean; disabled?: boolean; active?: boolean; busy?: boolean }) => (
     <button
@@ -2226,7 +2226,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 await fetch(`${API}/sessions/${currentSessionId}/compact`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({}) });
                 setCompactWarning(null);
                 flash(setToast, '已压缩，继续任务中...', 3000);
-                // ⛔⛔ B13 修复（2026-09-11，两条真实 bug）：
+                // B13 修复（2026-09-11，两条真实 bug）：
                 //   旧实现 `setInput(lastUser.content); setTimeout(()=>handleSend(),500)` 有两个缺陷：
                 //   ① **回填输入框**＝播下重复种子：用户看到输入框里出现刚发过的消息，任何后续回车
                 //      （含 B14 场景里"想清掉残留换行"的回车）都会把它**再发一遍**（走 A5 inject →
@@ -2241,7 +2241,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                   const after = await fetch(`${API}/sessions/${currentSessionId}/messages?project_id=${encodeURIComponent(projectId)}`).then((r: any) => r.ok ? r.json() : []);
                   const afterList = Array.isArray(after) ? after : [];
                   const lastUser = [...(localMessagesRef.current || [])].reverse().find((m: any) => m.role === 'user');
-                  // ⛔⛔ 不能用 id 比较：localMessages 里的 id 是 **local_ 临时 id**（流未结束时
+                  // 不能用 id 比较：localMessages 里的 id 是 **local_ 临时 id**（流未结束时
                   //   alignLocalIdsWithDb 还没把它换成 DB 数字 id），与 messages 接口返回的 DB id
                   //   **永不相等** → has() 恒 false → 永远误判"已被压缩掉" → 永远重发（=bug 复现）。
                   //   ✅ 改用 **content+role 比较**：只要保留区里还有"同内容的 user 消息"，
@@ -2365,7 +2365,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         {localMessages.map((msg, i) => {
           const isUser = msg.role === 'user';
           const isSystem = msg.role === 'system';
-          // ⛔ B10/C8 局部去重（0.4.18）：这个"当前正在流式生成的就是本条"判据，
+          // B10/C8 局部去重（0.4.18）：这个"当前正在流式生成的就是本条"判据，
           //    原本在渲染循环里**字面量重复多次**（工具步骤折叠 done / 打字机光标 等），
           //    注释还写着"复用同一判据"却是各写各的 → 改一处漏一处的漂移隐患。
           //    提取为单一常量共用：工具步骤折叠用 !isStreamingThis、打字机光标用 isStreamingThis。
@@ -2395,7 +2395,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               </div>
               {/* B3：maxWidth 已封顶，但 flex 子项默认 min-width:auto（不得小于内容宽度），
                   长串会把气泡顶开并在消息区拉出横向滚动条；minWidth:0 解开该下限即可让
-                  overflow-wrap:anywhere 生效。⛔ 这里**故意不加 overflow:hidden**——那会把仍溢出的
+                  overflow-wrap:anywhere 生效。这里**故意不加 overflow:hidden**——那会把仍溢出的
                   内容静默裁掉、用户永久看不到；表格与代码块各自有独立横向滚动层，不需要它兜底。 */}
               <div style={{ maxWidth:'78%', minWidth:0, padding:bubblePadding, borderRadius:bubbleRadius, background:bubbleBg, border:bubbleBorder, color:bubbleColor }}>
                 {msg.archived ? (
@@ -2441,10 +2441,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                       </span>
                     )}
                     {/* B12（0.4.21）：整轮进行计时 —— 补上「思考已结束但任务仍在进行」的空白区间。
-                        ⛔ 判据用 isStreamingThis（= sending && !stopped && !streamError）：
+                        判据用 isStreamingThis（= sending && !stopped && !streamError）：
                           · 思考态不显示（此时上方「思考中… Ns」在跳，避免两个数字同时跳成噪音）
                           · 段1（分裂定格，stopped=true）不显示 · 手动停止/出错/历史消息（无活流）不显示
-                        ⛔ 流一结束（finally 置 sending=false）自动消失，由右侧「完成 Ns」接管。 */}
+                        流一结束（finally 置 sending=false）自动消失，由右侧「完成 Ns」接管。 */}
                     {isStreamingThis && msg.runElapsed != null && msg.runElapsed > 0 && (
                       <span style={{display:'inline-flex',alignItems:'center',gap:4}}>
                         <Icon name="clock" size={12} /> 进行中 {msg.runElapsed}s
@@ -2460,7 +2460,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 {/* M1-4 + B4（0.4.12）：工具步骤整组折叠（在 content 上方，顺序堆叠）。
                     done = 该消息不是"正在流式的那条"——复用下方光标的同一判据，
                     保证流进行中的步骤始终可见，流一结束即自动收拢成一行。
-                    ⛔ 不用 msg.stopped 判 done：DB 加载的历史消息不带 stopped，
+                    不用 msg.stopped 判 done：DB 加载的历史消息不带 stopped，
                     而历史消息的工具步骤恰恰最该折叠。 */}
                 {msg.toolSteps && msg.toolSteps.length > 0 && (
                   <ToolStepsGroup
@@ -2469,9 +2469,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                   />
                 )}
                 {/* 内容：用户消息纯文本原样显示；assistant 用 Markdown 流式渲染。
-                    ⛔ #11（0.4.19）：正文折叠已按用户拍板删除（原 B10 附件段折叠 /
+                    #11（0.4.19）：正文折叠已按用户拍板删除（原 B10 附件段折叠 /
                     C8 超长正文折叠），内容与附件一律铺开，不再藏进「展开全文」。
-                    ⛔ isStreamingThis 仍被两处消费：上方 B4 工具步骤折叠 done 判据、
+                    isStreamingThis 仍被两处消费：上方 B4 工具步骤折叠 done 判据、
                     下方打字机光标 —— 它不是折叠遗留物，不可随正文折叠一并删掉。 */}
                 {msg.role === 'user'
                   ? <div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word',fontSize:14,lineHeight:1.65,minWidth:0,maxWidth:'100%'}}>{msg.content}</div>
@@ -2552,7 +2552,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               {/* #13（0.4.19）：缓存恢复的异常中断气泡的可见标记。
                   此前这类气泡（崩溃/关应用打断）恢复后与正常回复长得一样，
                   用户看不出这条没写完。判据与置位逻辑见 loadSessionMessages/瞬显注释。
-                  ⛔ 与"已手动停止"互斥渲染：manualStopped 的气泡走上面那条，不重复标。 */}
+                  与"已手动停止"互斥渲染：manualStopped 的气泡走上面那条，不重复标。 */}
               {msg.role === 'assistant' && !msg.manualStopped && msg.interruptedNote && (
                 <div style={{ marginTop:8, display:'flex', alignItems:'center', gap:6 }}>
                   <Icon name="alert-triangle" size={14} style={{color:colors.textTertiary}} />
@@ -2609,7 +2609,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
       {/* Input (§8.12)：A12 悬浮 composer 卡片——外层留白、内层 820 居中纸面卡片，
           textarea 去边框融入卡片，底行左附件右发送/停止（30px 石墨圆钮）。
-          ⛔ 事件链/IME 守卫/preventDefault/placeholder/data-tip 全部原样保留。 */}
+          事件链/IME 守卫/preventDefault/placeholder/data-tip 全部原样保留。 */}
       <div style={{ padding:'10px 16px 14px', flexShrink:0 }}>
         <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.doc,.docx,.xlsx,.xlsm,.pptx" />
         <div style={{ maxWidth:820, margin:'0 auto', background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:radius.l, boxShadow:shadow.s }}>
@@ -2622,11 +2622,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             // 去掉原 80ms 时间窗的粗暴拦截（它会把用户"想发送的回车"吞掉变成换行）。
             if (composingRef.current || e.nativeEvent.isComposing || e.keyCode===229) return;
             if (e.key==='Enter' && !e.shiftKey) {
-              // B14（0.4.22）：⛔ 必须 preventDefault。handleSend 会 setInput('') 清空输入框，
+              // B14（0.4.22）：必须 preventDefault。handleSend 会 setInput('') 清空输入框，
               // 但浏览器对回车键的**默认行为**是往 textarea 插入一个换行——不阻止的话，
               // 清空后又被插入 '\n' → 值非空 → placeholder 中文提示消失、看似"残留一个换行"，
               // 用户需再按一次回车才恢复空白（用户 2026-09-11 报告）。
-              // ⛔ 不影响 Shift+Enter（换行，走浏览器默认）与输入法选词（上面已 return）。
+              // 不影响 Shift+Enter（换行，走浏览器默认）与输入法选词（上面已 return）。
               e.preventDefault();
               handleSend();
             }

@@ -31,7 +31,7 @@ def _deliver(q: asyncio.Queue, loop: asyncio.AbstractEventLoop | None,
              item: Any) -> None:
     """把一条事件投进某个订阅者的队列。
 
-    ⛔ **必须跨事件循环安全**（2026-09-11 实测踩坑）：`asyncio.Queue` 绑定创建它的
+    **必须跨事件循环安全**（2026-09-11 实测踩坑）：`asyncio.Queue` 绑定创建它的
     loop，而 `push()` 可能来自**另一个** loop（TestClient.stream 把应用跑在独立线程的
     loop 里；将来若有任何同步上下文调用也一样）。跨 loop 直接 `put_nowait()` 不会报错，
     但**订阅者不会被唤醒** → SSE 端点静默卡在心跳上，前端永远收不到事件。

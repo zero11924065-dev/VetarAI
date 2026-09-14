@@ -114,10 +114,10 @@ export function WarehouseManager() {
   };
 
   // A11（0.4.22）：导入用户选中的文件到本知识组（复制+解析+索引）。
-  // ⛔ 拉模式铁律：只导入索引供检索，不自动注入上下文。
-  // ⛔ 非递归：chooseInputFile({multiple}) 返回文件路径数组（用户主动选），不遍历目录。
-  // ⛔ bridge 不存在（浏览器调试态）时静默返回，不报错。
-  // ⛔ 同名冲突**弹窗问用户**（用户 2026-09-12 拍板，不自动改名也不静默覆盖）：
+  // 拉模式铁律：只导入索引供检索，不自动注入上下文。
+  // 非递归：chooseInputFile({multiple}) 返回文件路径数组（用户主动选），不遍历目录。
+  // bridge 不存在（浏览器调试态）时静默返回，不报错。
+  // 同名冲突**弹窗问用户**（用户 2026-09-12 拍板，不自动改名也不静默覆盖）：
   //    第一趟用 on_conflict='ask' —— 不冲突的正常导入，冲突的原样留着并列在 conflicts 里；
   //    有冲突才弹窗，用户选完**只重传冲突的那几个文件**（不重复导入已成功的）。
   const importFiles = async (g: KnowledgeGroup) => {
@@ -160,11 +160,11 @@ export function WarehouseManager() {
           cancelText: '不处理（保留原文件）',
         });
         if (choice) {
-          // ⛔ 只重传冲突的那几个（第一趟已把不冲突的成功导入，不能重复）
+          // 只重传冲突的那几个（第一趟已把不冲突的成功导入，不能重复）
           const conflictSet = new Set(conflicts);
           const retryPaths = list.filter(p => conflictSet.has(baseName(p)));
           const d2 = await post(retryPaths, choice);
-          // ⛔ 两趟结果直接相加即可，无需特判 choice：
+          // 两趟结果直接相加即可，无需特判 choice：
           //   第一趟（ask）的 skipped 只含"不支持/解析失败"的文件，**不含**冲突项；
           //   第二趟的 skipped 只在选"跳过"时才含冲突项 → 二者天然不重叠，相加不重复计数。
           d = {

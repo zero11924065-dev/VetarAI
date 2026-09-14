@@ -68,7 +68,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 # D1（0.4.18）：模块级 logger。名单写入告警此前用 print（走 stdout 被丢弃）→ 改走 logging。
-# ⛔ logging.getLogger 是标准库、不导入项目模块；本模块对 config 的依赖仍是函数内延迟导入，
+# logging.getLogger 是标准库、不导入项目模块；本模块对 config 的依赖仍是函数内延迟导入，
 #    故加 logger 不引入循环依赖。
 _log = logging.getLogger("sidecar.guard")
 
@@ -146,7 +146,7 @@ def guard_report_failure(host: str) -> None:
     （egress_proxy_required），此后标准（auto）模式直接拒绝直连并提示切全量，
     不必每次都等熔断窗口。
 
-    ⛔ 三条硬性约束（每条都对应一个真实陷阱）：
+    三条硬性约束（每条都对应一个真实陷阱）：
       ① **不得在持有 _circuit_lock 时写 config**——guard_request 的锁顺序是
          _LOCK(config) → _circuit_lock，若此处反向 _circuit_lock → _LOCK 会造成
          锁顺序反转死锁。故先在锁内算出结果、**释放锁后**再写。
@@ -295,9 +295,9 @@ def guard_request(host: str) -> tuple[dict[str, str] | None, str | None]:
         auto（标准）+ 已熔断              -> (None, "<refusal>") # 秒拒，防无代理空转
         auto（标准）+ 其余境外            -> (None, None)        # 直连尝试（由调用方实测）
 
-    ⛔ 名单**只在 auto 分支检查**：全量模式下命中名单仍走代理放行（用户拍板），
+    名单**只在 auto 分支检查**：全量模式下命中名单仍走代理放行（用户拍板），
       否则名单会反过来破坏全量模式；但全量模式仍受熔断保护——某些站点是真无法访问。
-    ⛔ auto 分支顺序为「名单 → 熔断」：名单是跨重启的持久记忆（熔断窗口只有 300s，
+    auto 分支顺序为「名单 → 熔断」：名单是跨重启的持久记忆（熔断窗口只有 300s，
       过期后名单仍拦住），且能给出"该切全量"的明确指引；熔断兜住尚未入名单的新站点。
     """
     cfg = _cfg()

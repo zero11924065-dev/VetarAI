@@ -46,7 +46,7 @@ PROJECT_SCOPE = "project"
 PROJECT_DIR_NAME = "知识库"  # 用户拍板：明目录，不隐藏，方便直接找文件
 
 # ---------- A10（0.4.18）：知识目录可索引的文档格式 ----------
-# ⛔ **从 parser 推导，不另写一份清单**：C3 刚清理过"前端 PARSEABLE_EXTS 与后端
+# **从 parser 推导，不另写一份清单**：C3 刚清理过"前端 PARSEABLE_EXTS 与后端
 #    SUPPORTED_EXTS 双源漂移"（前端缺 .pptx 致其永不解析），此处不能重犯。
 #    可索引 = 解析器支持的全部 − 图片（无语义文本可索引，走视觉链路）− .md
 #    （.md 是本模块自己的条目格式，走 frontmatter 路径而非解析器）。
@@ -59,16 +59,16 @@ except Exception:                                # pragma: no cover - 导入失�
     INDEXABLE_DOC_EXTS = frozenset({".pdf", ".docx", ".doc", ".xlsx", ".xlsm",
                                     ".pptx", ".txt", ".csv", ".json"})
 
-# ⛔ 源文件字节上限：解析必须**整读**（二进制容器截断即坏），需内存保护阈值。
+# 源文件字节上限：解析必须**整读**（二进制容器截断即坏），需内存保护阈值。
 #    与工作流 file_read 节点的 _FILE_READ_MAX_SOURCE_BYTES 同量级（同一理由）。
 _KNOWLEDGE_MAX_SOURCE_BYTES = 20 * 1024 * 1024
-# ⛔ 索引正文字符上限：超长正文进 FTS/向量既无检索收益（分词后噪声压过信号），
+# 索引正文字符上限：超长正文进 FTS/向量既无检索收益（分词后噪声压过信号），
 #    又拖慢重建与编码。与聊天附件 _CHAT_ATT_MAX_CHARS_EACH 同量级。
 _KNOWLEDGE_MAX_INDEX_CHARS = 200_000
 
-# ⛔ A10 新增 source 取值：**用户自己丢进知识目录的外部文件**。
+# A10 新增 source 取值：**用户自己丢进知识目录的外部文件**。
 #    与 'chat'（会话转移生成）/'manual'（面板手动创建）的关键区别 ——
-#    文件本体属用户，⛔ **删条目时绝不能 unlink 它**（见 delete_entry 的守卫）。
+#    文件本体属用户，**删条目时绝不能 unlink 它**（见 delete_entry 的守卫）。
 SOURCE_IMPORTED_FILE = "file"
 
 # 测试钩子：覆盖数据根（生产环境为 None，走 data_root()）
@@ -120,7 +120,7 @@ def _index_db_path() -> Path:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    # ⛔ A10（0.4.18）：source 的 CHECK 原为 IN ('chat','manual')，导入的外部文件需
+    # A10（0.4.18）：source 的 CHECK 原为 IN ('chat','manual')，导入的外部文件需
     #    写入 'file'（语义不同：文件本体属用户，删条目时不得 unlink）。
     #    SQLite 的 CHECK 约束**不能 ALTER**，而真实用户库里已存在旧约束的表 →
     #    必须检测并重建表迁移（索引可从文件重建，但迁移时**保留现有行**更安全，
@@ -330,7 +330,7 @@ def get_entry(entry_id: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         entry["keywords"] = []
     # 读正文
-    # ⛔ A10（0.4.18）：source='file' 是用户导入的二进制文档（docx/pdf/xlsx…），
+    # A10（0.4.18）：source='file' 是用户导入的二进制文档（docx/pdf/xlsx…），
     #    不能走 read_text+_parse_md —— 对二进制会抛 UnicodeDecodeError（不是 OSError，
     #    原 except 捕不到 → get_entry 崩溃，用户点开导入条目详情即报错）。
     #    改按 source 分流：file 条目用 parse_attachment（与 _reindex_doc 索引时同源），
@@ -387,10 +387,10 @@ def list_entries(scope: str | None = None, project_id: str | None = None) -> lis
 def delete_entry(entry_id: str) -> bool:
     """删除条目：删**本模块生成的** .md 文件 + 索引 + FTS + 向量（阶段二）。
 
-    ⛔ A10（0.4.18）数据安全守卫：source='file' 的条目是**用户自己丢进知识目录的
+    A10（0.4.18）数据安全守卫：source='file' 的条目是**用户自己丢进知识目录的
     外部文件**（.docx/.pdf/.xlsx…），文件本体属用户、不是本模块的产物。
     若照旧 unlink，用户在面板删一条索引就会**永久删掉自己的原始文档**（不可恢复）。
-    故这类条目只删索引记录，⛔ 绝不动磁盘文件 —— 用户想删文件请自己在 Finder 删
+    故这类条目只删索引记录，绝不动磁盘文件 —— 用户想删文件请自己在 Finder 删
     （删后 prune_missing 会自动清掉失效索引，语义一致）。
     'chat'/'manual' 条目仍删文件（那是本模块生成的 .md，删条目=删本体，语义正确）。
     """
@@ -644,7 +644,7 @@ def _embed_entry(entry_id: str, title: str, body: str, keywords: list[str]) -> b
 
 
 def _iter_indexable(kdir: Path):
-    """⛔ A10 局部去重：rebuild_index 原本对全局/项目两处各写一遍 `.glob("*.md")` 循环，
+    """A10 局部去重：rebuild_index 原本对全局/项目两处各写一遍 `.glob("*.md")` 循环，
     且现在要从"只 md"扩到"全部可索引文档"——两处必须同步改，否则漏一处。
     收敛为单一迭代器：列出目录内**顶层**可索引文件（.md + INDEXABLE_DOC_EXTS）。
     ⚠️ 保持非递归（与改造前 glob("*.md") 一致）：知识目录是用户明目录，约定平铺放置；
@@ -662,12 +662,12 @@ def rebuild_index() -> int:
     清空索引后重新写入。返回条目数。
     阶段二：同时清空并重建向量表（模型不可用时向量留空，检索降级）。
 
-    ⛔ A10（0.4.18）：原本只 glob("*.md")，用户把 docx/pdf 丢进知识目录索引不到。
+    A10（0.4.18）：原本只 glob("*.md")，用户把 docx/pdf 丢进知识目录索引不到。
     现按扩展名分发：.md 走 frontmatter 路径（行为不变），其余走 attachments/parser.py
     解析（与聊天附件、工作流 file_read 同一解析链）。
-    ⛔ **拉模式铁律**：本函数只是把文本索引进 FTS/向量供 search_knowledge **检索**，
-    ⛔ 绝不自动注入任何上下文（防重蹈 0.4.8"主 Agent 自读 90KB PDF 跑 20 分钟"覆辙）。
-    ⛔ 本函数现为 CPU 密集（解析多个文档）→ 调用方（app.py 端点）必须 run_in_executor，
+    **拉模式铁律**：本函数只是把文本索引进 FTS/向量供 search_knowledge **检索**，
+    绝不自动注入任何上下文（防重蹈 0.4.8"主 Agent 自读 90KB PDF 跑 20 分钟"覆辙）。
+    本函数现为 CPU 密集（解析多个文档）→ 调用方（app.py 端点）必须 run_in_executor，
     否则阻塞事件循环（与 C4 工作流节点同一个坑）。"""
     from sidecar.storage.store import list_projects
     conn = _iconn()
@@ -741,14 +741,14 @@ def _reindex_md(fpath: Path, scope: str, project_id: str) -> bool:
 def _reindex_doc(fpath: Path, scope: str, project_id: str) -> bool:
     """A10（0.4.18）：索引用户丢进知识目录的**外部文档**（非 .md）。
 
-    ⛔ 与 .md 的三个关键区别（无 frontmatter 可依赖）：
+    与 .md 的三个关键区别（无 frontmatter 可依赖）：
       * 标题 = 文件名 stem；关键词 = 空（无 frontmatter）。
       * id 用**路径派生的稳定值**（uuid5），重建多次不漂移——.md 用 frontmatter id 或
         uuid4，而外部文件没有 id 字段，用 uuid4 会让每次重建都生成新 id（虽 rebuild 先
         清表不致堆积，但稳定 id 让增量/对账更可预期）。
-      * source='file' —— ⛔ 删条目时 delete_entry 据此**不 unlink**（文件属用户，见守卫）。
-    ⛔ 解析不出文本（损坏/加密/扫描件）→ 返回 False 不索引垃圾；超大文件跳过不阻塞整次重建。
-    ⛔ 拉模式铁律同 rebuild_index：只索引供检索，不自动注入上下文。
+      * source='file' —— 删条目时 delete_entry 据此**不 unlink**（文件属用户，见守卫）。
+    解析不出文本（损坏/加密/扫描件）→ 返回 False 不索引垃圾；超大文件跳过不阻塞整次重建。
+    拉模式铁律同 rebuild_index：只索引供检索，不自动注入上下文。
     """
     try:
         size = fpath.stat().st_size
@@ -793,7 +793,7 @@ def _reindex_doc(fpath: Path, scope: str, project_id: str) -> bool:
 def _purge_file_index(fpath: Path) -> None:
     """覆盖导入前清掉该路径的旧索引行（FTS + 向量）。
 
-    ⛔ **为什么必须清 FTS**：`_reindex_doc` 对 `knowledge_entries` 用 `INSERT OR REPLACE`
+    **为什么必须清 FTS**：`_reindex_doc` 对 `knowledge_entries` 用 `INSERT OR REPLACE`
     （同路径派生的 uuid5 相同 → 天然覆盖），但 `knowledge_fts` 是**普通 INSERT**——
     FTS5 虚表不支持 OR REPLACE。不清就会多留一行旧正文的分词，表现为：同一个文件
     检索时命中两份、且其中一份还是**覆盖前的旧内容**。向量表同理（会留旧向量）。
@@ -812,18 +812,18 @@ def import_files(scope: str, project_id: str | None, sources: list[str],
                  on_conflict: str = "ask") -> dict:
     """A11（0.4.22）：把用户选中的外部文件复制进知识目录并索引。
 
-    ⛔ 拉模式铁律同 rebuild_index/_reindex_doc：只复制+索引供检索，不自动注入上下文。
-    ⛔ 非递归：sources 是文件路径列表（来自 chooseInputFile 文件对话框，用户主动选），
+    拉模式铁律同 rebuild_index/_reindex_doc：只复制+索引供检索，不自动注入上下文。
+    非递归：sources 是文件路径列表（来自 chooseInputFile 文件对话框，用户主动选），
       不遍历目录。某 source 是目录/不存在 → 计入 failed。
-    ⛔ 复制用 copy2 保留 mtime（_reindex_doc 用 mtime 做 created_at，"新→旧"排序有意义）。
-    ⛔ **同名冲突由用户决定，后端不擅自处置**（用户 2026-09-12 拍板"改成弹窗问我"）：
+    复制用 copy2 保留 mtime（_reindex_doc 用 mtime 做 created_at，"新→旧"排序有意义）。
+    **同名冲突由用户决定，后端不擅自处置**（用户 2026-09-12 拍板"改成弹窗问我"）：
       * `on_conflict="ask"`（默认）：**不碰**已存在的文件，把它列入 `conflicts` 返回，
         前端弹窗问用户 → 用户选完再用下面三种策略之一重新调用；
       * `"overwrite"`：覆盖知识目录里的旧副本（先清旧 FTS/向量行，见 _purge_file_index）；
       * `"rename"`：存成 `名_1.扩展名`（旧文件原样保留）；
       * `"skip"`：跳过该文件（旧文件原样保留）。
-      ⛔ 三种策略都**绝不动用户原始文件**（sources 指向的本机文件只读不写）。
-    ⛔ 大文件/不支持类型/解析失败：_reindex_doc 返回 False → 计入 skipped 并删除已复制的
+      三种策略都**绝不动用户原始文件**（sources 指向的本机文件只读不写）。
+    大文件/不支持类型/解析失败：_reindex_doc 返回 False → 计入 skipped 并删除已复制的
       文件（不留垃圾），不报错中断整批（用户选一堆文件，个别不支持不应中断）。
 
     返回 {imported, failed, skipped, conflicts: [name…], details: [{name, status, reason?}]}。
@@ -850,7 +850,7 @@ def import_files(scope: str, project_id: str | None, sources: list[str],
         existed = dest.exists()          # 本次是否真的撞上了同名文件（决定 details 里的处置记录）
         if existed:
             if on_conflict == "ask":
-                # ⛔ 默认策略：不碰旧文件、不复制、不索引，交回前端弹窗问用户
+                # 默认策略：不碰旧文件、不复制、不索引，交回前端弹窗问用户
                 conflicts.append(name)
                 details.append({"name": name, "status": "conflict",
                                 "reason": "知识目录已有同名文件（等你决定怎么处理）"})
@@ -866,7 +866,7 @@ def import_files(scope: str, project_id: str | None, sources: list[str],
                     dest = kdir / f"{sp.stem}_{seq}{sp.suffix}"
                     seq += 1
             elif on_conflict == "overwrite":
-                _purge_file_index(dest)      # ⛔ 先清旧 FTS/向量，否则残留旧正文
+                _purge_file_index(dest)      # 先清旧 FTS/向量，否则残留旧正文
             else:
                 failed += 1
                 details.append({"name": name, "status": "failed",
@@ -891,7 +891,7 @@ def import_files(scope: str, project_id: str | None, sources: list[str],
             details.append({"name": dest.name, "status": "skipped",
                             "reason": "不支持的类型/解析失败/超大文件"})
             # 复制了但索引失败 → 删除复制的文件（知识目录不留没索引的垃圾）
-            # ⛔ 仅删本次新复制的副本；overwrite 情况下旧副本已被覆盖，无从恢复，
+            # 仅删本次新复制的副本；overwrite 情况下旧副本已被覆盖，无从恢复，
             #    故 overwrite + 索引失败要如实告知用户（不能假装成功）。
             try:
                 dest.unlink()

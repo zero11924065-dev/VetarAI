@@ -24,7 +24,7 @@
   （`openai_compat.py:39` 直接 import connector 的 CONNECT_TIMEOUT / STREAM_READ_TIMEOUT）。
   散着写必然出现"改了一处漏了三处"，故收敛到本模块作为唯一取值口径。
 
-⛔ 两条硬性约束（违反任一条都会引入静默回归）：
+两条硬性约束（违反任一条都会引入静默回归）：
   1. **未配置时必须完全不注入**。用户没设任何 model_options / 超时保持默认时，
      payload 里不得出现 `options` 键、超时必须等于原常量值 → 行为与改造前**逐字节一致**。
      否则现有全部测试与真机行为都会漂移，且难以定位。
@@ -43,7 +43,7 @@ from __future__ import annotations
 from typing import Any
 
 # ── A1：超时的原硬编码值（作为 config 未配置时的兜底，保证向后兼容）──
-# ⛔ 这些常量**保留不删**：connector 的 `_client(reading=..., connect=...)` 默认参数
+# 这些常量**保留不删**：connector 的 `_client(reading=..., connect=...)` 默认参数
 # 与多处测试仍引用它们；本模块只负责"config 有值则覆盖，无值则回落常量"。
 DEFAULT_CONNECT_TIMEOUT = 10.0
 DEFAULT_READING_TIMEOUT = 300.0
@@ -71,7 +71,7 @@ _PARAM_MAP: dict[str, dict[str, str | None]] = {
         "stop": "stop",
     },
     "openai_compatible": {
-        "num_ctx": None,                      # ⛔ OpenAI 兼容端无此参数
+        "num_ctx": None,                      # OpenAI 兼容端无此参数
         "temperature": "temperature",
         "top_p": "top_p",
         "top_k": None,                        # 非 OpenAI 标准参数
@@ -144,7 +144,7 @@ def model_options(model: str, backend: str | None = None) -> dict[str, Any]:
       Ollama          → {"options": {...}}     （空则返回 {}，即完全不注入）
       OpenAI 兼容     → {...}                   （参数是顶层字段，非嵌套 options）
 
-    ⛔ 未配置时返回空 dict —— 调用方据此决定"要不要加这个键"，
+    未配置时返回空 dict —— 调用方据此决定"要不要加这个键"，
       绝不能加一个空 `options: {}`，那会改变请求体（部分服务端会报 400）。
     """
     raw = _raw_model_options(model)
@@ -172,7 +172,7 @@ def model_options(model: str, backend: str | None = None) -> dict[str, Any]:
 def configured_num_ctx(model: str) -> int | None:
     """A3：取用户为该模型显式配置的 num_ctx（未配置/非法 → None）。
 
-    ⛔ 公开访问器，供 `/api/context/limit` 判断"指示器该按哪个上限算占比"。
+    公开访问器，供 `/api/context/limit` 判断"指示器该按哪个上限算占比"。
     不让外部直接调私有的 `_raw_model_options`——那是实现细节，
     跨模块用私有函数会在重构时静默断裂。
     """
@@ -244,7 +244,7 @@ def _coerce(canon: str, val: Any) -> Any:
 def validate_model_options(mo: Any) -> str | None:
     """配置校验（供 store._validate 调用）。返回错误信息，合法则 None。
 
-    ⛔ 只校验**结构与类型**，不因"某后端不支持某参数"而报错——
+    只校验**结构与类型**，不因"某后端不支持某参数"而报错——
       用户可能先配好参数再切后端，报错会让他无法保存；不支持的参数在注入时静默丢弃即可。
     """
     if mo is None:

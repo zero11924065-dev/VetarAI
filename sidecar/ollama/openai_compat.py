@@ -82,7 +82,7 @@ class OpenAICompatConnector:
         """共享复用 client（调用方不得关闭）；配置指纹变化 → 关闭旧连接重建。
 
         A1（0.4.15）：超时改为每次调用**动态读 config**。
-        ⛔ 原写法 `reading: float = 300.0` / `connect: float = CONNECT_TIMEOUT` 有陷阱：
+        原写法 `reading: float = 300.0` / `connect: float = CONNECT_TIMEOUT` 有陷阱：
         Python 默认参数在**模块加载时求值一次**，用户在设置页改了超时永远拿不到新值。
         """
         if reading is None:

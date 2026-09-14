@@ -151,9 +151,9 @@ function KnowledgeTab({ projectId }: { projectId: string | null }) {
   useEffect(() => { refresh(); }, [refresh]);
 
   // A13（0.4.22）：Agent 改项目知识库（.md 增删改）后实时重拉，无需重启。
-  // ⛔ editing 守卫：正在编辑某条时跳过重拉，避免列表跳动干扰编辑（重拉只更新 items，
+  // editing 守卫：正在编辑某条时跳过重拉，避免列表跳动干扰编辑（重拉只更新 items，
   //    本就不碰 editContent 草稿，守卫纯为体验）。
-  // ⛔ MemoryTab/SkillsTab 不订阅：记忆草稿直接绑 state（重拉会冲掉未保存编辑），
+  // MemoryTab/SkillsTab 不订阅：记忆草稿直接绑 state（重拉会冲掉未保存编辑），
   //    且技能/记忆的后端写操作 Agent 不触及（registry 的 knowledge 动作只读）。
   const editingRef = useRef(editing);
   useEffect(() => { editingRef.current = editing; }, [editing]);

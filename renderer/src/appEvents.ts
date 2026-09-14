@@ -21,12 +21,12 @@
  * A13（0.4.22）：应用级「资源变更」实时流 —— App 级常驻订阅 + 跨面板广播。
  * 背景与逐条推理已迁出：详见 交接/03-修复与调试历史记录.md 第十三部分
  *
- * 1. ⛔ **模块级单例，不是 hook**：整应用只需一条连接。`startAppEventStream()` 幂等——
- * 2. ⛔ **卸载绝不重连**：`stop()` 置 `cancelled=true` + `ctrl.abort()`。断流退避重连只在
- * 3. ⛔ **seq 游标 + 断线补发 + gap 对账**：记住最后收到的 seq，重连时 `?since=<seq>`，
- *    的关键，⛔ 不得退化成轮询糊弄（计划明令禁止）。
- * 4. ⛔ **不破坏 App 保活**：本模块只 emit 事件，不碰任何面板的挂载。面板自己决定收到
- * 5. ⛔ **流失败静默**：连不上侧车不弹错误条（各面板的手动刷新仍可用），只静默退避重连。
+ * 1. **模块级单例，不是 hook**：整应用只需一条连接。`startAppEventStream()` 幂等——
+ * 2. **卸载绝不重连**：`stop()` 置 `cancelled=true` + `ctrl.abort()`。断流退避重连只在
+ * 3. **seq 游标 + 断线补发 + gap 对账**：记住最后收到的 seq，重连时 `?since=<seq>`，
+ *    的关键，不得退化成轮询糊弄（计划明令禁止）。
+ * 4. **不破坏 App 保活**：本模块只 emit 事件，不碰任何面板的挂载。面板自己决定收到
+ * 5. **流失败静默**：连不上侧车不弹错误条（各面板的手动刷新仍可用），只静默退避重连。
  */
 import { getApiBase } from './apiBase';
 import { emit } from './events';
@@ -60,8 +60,8 @@ let stopFn: (() => void) | null = null;
 /**
  * 启动 App 级资源变更流（幂等单例）。返回 stop 函数（App 卸载时调用）。
  *
- * ⛔ 幂等：已启动则直接返回同一个 stop，不重复开连接（防 StrictMode 双调用 / 多处启动）。
- * ⛔ 必须在 App 顶层 `useEffect(() => startAppEventStream(), [])` 调用——空依赖，
+ * 幂等：已启动则直接返回同一个 stop，不重复开连接（防 StrictMode 双调用 / 多处启动）。
+ * 必须在 App 顶层 `useEffect(() => startAppEventStream(), [])` 调用——空依赖，
  *    整个应用生命周期只启停一次，与保活的子面板挂载/卸载无关。
  */
 export function startAppEventStream(): () => void {
@@ -71,7 +71,7 @@ export function startAppEventStream(): () => void {
   let lastSeq = 0;                      // 重连时带 ?since=lastSeq 补发错过的变更
 
   const applyEvent = (ev: SSEEvent) => {
-    if (cancelled) return;              // ⛔ 卸载后不再 emit（不写任何状态）
+    if (cancelled) return;              // 卸载后不再 emit（不写任何状态）
     const d = ev.data || {};
     // 统一更新游标：connected/resource_changed/gap 的 data 都带 seq（端点已并入）
     if (typeof d.seq === 'number' && d.seq > lastSeq) lastSeq = d.seq;
@@ -85,7 +85,7 @@ export function startAppEventStream(): () => void {
         } as AppResourceEvent);
         break;
       case 'gap':
-        // ⛔ 断档对账：错过的变更无从补发 → 广播 '*'，所有面板无条件重拉，
+        // 断档对账：错过的变更无从补发 → 广播 '*'，所有面板无条件重拉，
         //    而不是拿着半截状态继续渲染（与后端 gap 语义对齐）。
         emit(APP_RESOURCE_CHANGED, {
           resource: '*', gap: true, seq: d.seq,
@@ -100,9 +100,9 @@ export function startAppEventStream(): () => void {
   };
 
   // B9-2 C8：重连壳归并至 lib/sseStream（形状逐行同构，仅 URL 每次求值带游标）。
-  // ⛔ retryMs 传原值 RETRY_MS；⛔ 卸载不重连的 cancelled/abort 守卫在壳内原位保留。
+  // retryMs 传原值 RETRY_MS；卸载不重连的 cancelled/abort 守卫在壳内原位保留。
   const stopStream = startResilientStream({
-    url: () => `${getApiBase()}/events/stream?since=${lastSeq}`,   // ⛔ 带 since：重连时补发缓冲区内错过的变更（无延时且不丢）
+    url: () => `${getApiBase()}/events/stream?since=${lastSeq}`,   // 带 since：重连时补发缓冲区内错过的变更（无延时且不丢）
     onEvent: applyEvent,
     retryMs: RETRY_MS,
   });

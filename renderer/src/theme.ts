@@ -23,7 +23,7 @@
 //   · 强调色只留一枚克制的雾蓝（选中 / 链接 / 焦点），语义色降饱和；
 //   · 大留白、8px 间距网格、极浅阴影、圆角收敛（控件 6~8，卡片 10~12）。
 // 亮色主题，无深色分支（用户只要灰白亮色）。
-// ⛔ 键名 surface 保持向后兼容（19 面板 + App + Dialog 直接 import），
+// 键名 surface 保持向后兼容（19 面板 + App + Dialog 直接 import），
 //   本批只换数值与新增键，不删键。
 import type { CSSProperties } from 'react';
 

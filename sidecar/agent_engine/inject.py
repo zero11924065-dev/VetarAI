@@ -33,12 +33,12 @@ loop 的 `msgs` 是单次请求内的局部状态，外部 HTTP 端点无法直�
 
 ═══ 设计约束 ═══
 
-* ⛔ **不丢消息**：push 由 app 端点在 save_message 落库**之后**才调用（本模块只管
+* **不丢消息**：push 由 app 端点在 save_message 落库**之后**才调用（本模块只管
   内存交接），故即使流意外结束，消息仍在 DB，刷新可见。
-* ⛔ **只在有活流时接受 push**：无活流说明当前没在生成，这条消息应当走正常发送
+* **只在有活流时接受 push**：无活流说明当前没在生成，这条消息应当走正常发送
   （前端据 sending 判断）；push 返回 False 让端点如实告知，而不是塞进一个没人
   drain 的队列里烂掉。
-* ⛔ **end_stream 清理残留**：流结束时清空该会话队列，杜绝"上一轮的残留消息被
+* **end_stream 清理残留**：流结束时清空该会话队列，杜绝"上一轮的残留消息被
   下一轮流 drain 到"——那会让新会话莫名其妙多出旧消息（与 C2/C5 的"残留标志"同类缺陷）。
 * 进程级内存即可（与 cancel.py 一致）：侧车重启后没有活流，队列自然无意义。
 """
@@ -67,7 +67,7 @@ def begin_stream(session_id: str) -> None:
 def end_stream(session_id: str) -> None:
     """流结束时调用（放 finally，与 cancel.unregister_stream 同一处）。
 
-    ⛔ 必须清空残留队列：否则上一轮没被 drain 的消息会被同会话的下一轮流读到，
+    必须清空残留队列：否则上一轮没被 drain 的消息会被同会话的下一轮流读到，
     表现为"新回复莫名其妙混进了旧消息"。
     """
     sid = str(session_id or "").strip()
@@ -81,7 +81,7 @@ def end_stream(session_id: str) -> None:
 def push(session_id: str, content: str) -> bool:
     """用户插入一条新消息。返回 True=已入队（有活流）；False=当前无活流，应走正常发送。
 
-    ⛔ 调用方（app 端点）须**先 save_message 落库再 push**，保证不丢。
+    调用方（app 端点）须**先 save_message 落库再 push**，保证不丢。
     """
     sid = str(session_id or "").strip()
     text = str(content or "")

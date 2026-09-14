@@ -632,11 +632,11 @@ def rename_session(project_id: str, session_id: str, title: str) -> bool:
 # 而"去根目录读取"是 resolve_sandboxed_path 对**裸文件名**解析到沙盒根的预期行为
 # （registry.py），不是 bug——真因是前端从没把"文件在哪"告诉过 agent。
 #
-# ⛔ 落盘位置选 data_root 下的项目附件目录，**不选用户工作目录**：
+# 落盘位置选 data_root 下的项目附件目录，**不选用户工作目录**：
 #   工作目录是用户在 Finder 里看得见、自己管的地方，往里写系统副本属污染；
 #   而 registry.py:392 明确"读取任何位置都不拦截"，故 data_root 下的绝对路径
 #   agent 照样能 read_file。
-# ⛔ 文件名必须净化：req.name 是**用户可控输入**，本项目此前没有任何文件名净化
+# 文件名必须净化：req.name 是**用户可控输入**，本项目此前没有任何文件名净化
 #   helper（现有落盘处只 .strip()），直接拼路径会被 "../../" 穿越出附件目录。
 
 _ATTACH_MAX_NAME_LEN = 120
@@ -652,7 +652,7 @@ def attachments_dir(project_id: str, session_id: str) -> Path:
 def _sanitize_attachment_name(name: str) -> str:
     """把用户可控文件名净化为**单层安全文件名**（保留扩展名，供解析器按扩展名分发）。
 
-    ⛔ 必须挡的三类：① 路径分隔符（/ 与 \\）→ 穿越；② 控制字符 → 终端/日志注入；
+    必须挡的三类：① 路径分隔符（/ 与 \\）→ 穿越；② 控制字符 → 终端/日志注入；
     ③ "." 与 ".." → 指向父目录。净化后为空 → 回落 "attachment"（保留扩展名则拼回）。
     """
     raw = str(name or "")
@@ -674,7 +674,7 @@ def _sanitize_attachment_name(name: str) -> str:
 def save_attachment(project_id: str, session_id: str, name: str, raw: bytes) -> Path:
     """把上传附件落盘到会话附件目录，返回绝对路径（供回传给前端 → 写进消息正文）。
 
-    ⛔ 同名不覆盖：与浏览器一致，第二次上传同名文件追加 "-<8位uuid>" 后缀，
+    同名不覆盖：与浏览器一致，第二次上传同名文件追加 "-<8位uuid>" 后缀，
     **两份都保留**（用户铁律：遇同名项先保留两边）。
     """
     d = attachments_dir(project_id, session_id)
@@ -692,7 +692,7 @@ def save_attachment(project_id: str, session_id: str, name: str, raw: bytes) -> 
 def delete_session_attachments(project_id: str, session_id: str) -> int:
     """清理某会话的附件目录（删除会话时连带清理，防无限膨胀）。返回删掉的文件数。
 
-    ⛔ 只做"删会话连带清理"，**不做定期清理**——定期清理无法判断文件是否仍被
+    只做"删会话连带清理"，**不做定期清理**——定期清理无法判断文件是否仍被
     历史消息引用（消息正文里存着绝对路径），会误删仍在用的副本。
     """
     d = attachments_dir(project_id, session_id)

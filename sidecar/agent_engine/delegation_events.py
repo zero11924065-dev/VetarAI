@@ -46,9 +46,9 @@
 ═══ 关键设计决策二：用「每订阅者一个 asyncio.Queue」而不是共享 Event/Condition ═══
 
 广播给 N 个订阅者，两种错误做法都踩过或差点踩：
-  * ⛔ **共享 `asyncio.Event`**：第一个醒来的订阅者 `clear()` 之后，其余订阅者
+  * **共享 `asyncio.Event`**：第一个醒来的订阅者 `clear()` 之后，其余订阅者
     要等下一次 `set()` 或超时才醒 → 多面板同开时延迟可达一个心跳周期（丢唤醒）。
-  * ⛔ **共享 `asyncio.Condition`**：`notify_all()` 语义正确，但**要求调用方持有其内部
+  * **共享 `asyncio.Condition`**：`notify_all()` 语义正确，但**要求调用方持有其内部
     asyncio 锁**，而 `push()` 是同步函数、不能 `await`。试图 `lock.acquire()` 同步取锁
     是错的——`asyncio.Lock.acquire()` 是协程函数，同步调用只返回一个永不 await 的协程，
     锁并未取得，紧接着 `notify_all()` 会抛 `RuntimeError: cannot notify on un-acquired lock`。
@@ -58,7 +58,7 @@
 ✅ **跨事件循环安全**（2026-09-11 实测修正）：`push()` 现在可从**任意** loop 或同步上下文调用。
 `_deliver()` 会判断当前是否就在订阅者所在的 loop 上——是则直接 `put_nowait()`（生产路径：
 委派协程与 SSE 端点同 loop，零开销）；否则用 `loop.call_soon_threadsafe()` 排进目标 loop。
-⛔ 早先版本假设"push 必须与订阅者同 loop"，实测该假设不成立且失败方式是**静默的**：
+早先版本假设"push 必须与订阅者同 loop"，实测该假设不成立且失败方式是**静默的**：
 跨 loop `put_nowait()` 不报错但订阅者不被唤醒，SSE 端点卡在心跳上，前端永远收不到事件
 （表现为测试里 push 后 `iter_lines()` 死循环超时）。故改为显式判定 + 跨线程投递。
 
@@ -74,13 +74,13 @@
 
 ═══ 设计约束 ═══
 
-* ⛔ **总线失败绝不能影响委派本身**：所有 push 都吞异常并返回 False。
+* **总线失败绝不能影响委派本身**：所有 push 都吞异常并返回 False。
   进度可视化是旁路，不能因为一个面板没连上就让用户的委派任务失败。
-* ⛔ **通道必须回收**：`end_task` 在委派 `finally` 里调用；
-  ⛔ 不放 finally 的后果：异常路径下订阅者永远等不到结束 → 前端转圈不停
+* **通道必须回收**：`end_task` 在委派 `finally` 里调用；
+  不放 finally 的后果：异常路径下订阅者永远等不到结束 → 前端转圈不停
   （与 0.4.16 C2 根因③「running 状态未收敛」同源缺陷）。
   回收条件：无活跃任务 **且** 无订阅者；另设通道数上限淘汰最旧空闲通道，防长期泄漏。
-* ⛔ **绝不淘汰有订阅者或有活跃任务的通道**：淘汰活跃通道会让正在跑的委派推进
+* **绝不淘汰有订阅者或有活跃任务的通道**：淘汰活跃通道会让正在跑的委派推进
   一个已删除的通道（事件静默丢失），淘汰有订阅者的通道会让面板永久收不到更新。
   宁可暂时超出上限，也不牺牲正确性。
 * 进程级内存即可（与 inject/cancel 一致）：侧车重启后没有活任务，总线自然无意义。
@@ -143,7 +143,7 @@ def _get_channel(project_id: str, create: bool) -> _Channel | None:
         if ch is None and create:
             ch = _Channel()
             _CHANNELS[pid] = ch
-            # ⛔ 必须把刚建的通道排除在淘汰之外：调用方（begin_task / subscribe）
+            # 必须把刚建的通道排除在淘汰之外：调用方（begin_task / subscribe）
             # 还没给它打活跃标记或注册订阅者，此刻它看起来是"空闲"的 →
             # 会被淘汰掉自己（实测：64 个忙通道 + 1 个新通道 → 新通道被自己挤掉，
             # begin_task 拿到的是一个已不在注册表里的孤儿对象，事件全部静默丢失）。
@@ -156,7 +156,7 @@ def _get_channel(project_id: str, create: bool) -> _Channel | None:
 def _evict_locked(protect: str = "") -> None:
     """通道数超上限时淘汰最旧的**空闲**通道。调用方须持 `_LOCK`。
 
-    ⛔ 只淘汰「无活跃任务且无订阅者」的通道（理由见模块文档"设计约束"）。
+    只淘汰「无活跃任务且无订阅者」的通道（理由见模块文档"设计约束"）。
     `protect`：本次刚创建的通道 pid，必须跳过（其活跃标记尚未打上，见 _get_channel）。
     """
     over = len(_CHANNELS) - _MAX_CHANNELS
@@ -187,7 +187,7 @@ def begin_task(project_id: str, task_id: str) -> None:
 
 
 def end_task(project_id: str, task_id: str) -> None:
-    """委派任务结束时调用（⛔ **必须放 finally**）。
+    """委派任务结束时调用（**必须放 finally**）。
 
     推一条 `task_end` 让订阅者知道该任务不会再有更新，再移除活跃标记并尝试回收通道。
     """
@@ -211,7 +211,7 @@ def push(project_id: str, task_id: str, event: str,
     """推一条事件给该 project 的全部订阅者。
 
     返回 True=已入缓冲并投递；False=通道不存在或参数非法。
-    ⛔ **绝不抛异常**：总线是进度可视化的旁路，任何失败都不得影响委派本身。
+    **绝不抛异常**：总线是进度可视化的旁路，任何失败都不得影响委派本身。
     """
     try:
         pid = str(project_id or "").strip()
@@ -228,7 +228,7 @@ def push(project_id: str, task_id: str, event: str,
                     "data": dict(data or {})}
             ch.buf.append(item)
             targets = list(ch.subs)
-        # ⛔ 投递放在锁外：call_soon_threadsafe 可能阻塞，持锁会拖慢 begin/end_task
+        # 投递放在锁外：call_soon_threadsafe 可能阻塞，持锁会拖慢 begin/end_task
         for q, loop in targets:
             _deliver(q, loop, item)
         return True
@@ -248,7 +248,7 @@ async def subscribe(project_id: str, since_seq: int = 0,
       5. `{"event": "_idle"}` —— 每 idle_timeout 秒无事件时一次（端点据此发心跳）
       6. `{"event": "_channel_closed"}` —— 通道被回收（仅 clear_all 时），订阅应结束
 
-    ⛔ 订阅者注销必须放 finally：客户端断开（GeneratorExit / CancelledError）时
+    订阅者注销必须放 finally：客户端断开（GeneratorExit / CancelledError）时
     也要摘掉自己的队列，否则通道永远"有订阅者"而无法回收 → 内存泄漏。
     """
     pid = str(project_id or "").strip()
@@ -259,7 +259,7 @@ async def subscribe(project_id: str, since_seq: int = 0,
         return
 
     q: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
-    # ⛔ 记录**本订阅者所在的事件循环**：push 可能来自另一个 loop（见 _deliver 注释），
+    # 记录**本订阅者所在的事件循环**：push 可能来自另一个 loop（见 _deliver 注释），
     # 必须据此判断是同循环直投还是 call_soon_threadsafe，否则订阅者收不到唤醒。
     _my_loop = asyncio.get_running_loop()
     with _LOCK:
@@ -296,7 +296,7 @@ async def subscribe(project_id: str, since_seq: int = 0,
             yield item
     finally:
         with _LOCK:
-            # ⛔ subs 是 (queue, loop) 元组列表，须按队列对象匹配移除，
+            # subs 是 (queue, loop) 元组列表，须按队列对象匹配移除，
             # 直接 remove(q) 会因类型不符抛 ValueError（本套件首轮即因此泄漏计数）
             ch.subs[:] = [s for s in ch.subs if s[0] is not q]
             _recycle_if_idle(ch, pid)
@@ -349,7 +349,7 @@ def clear_all() -> None:
     with _LOCK:
         targets = [(q, loop) for ch in _CHANNELS.values() for q, loop in ch.subs]
         _CHANNELS.clear()
-    # ⛔ 投递放锁外，并走 _deliver（跨事件循环安全）：
+    # 投递放锁外，并走 _deliver（跨事件循环安全）：
     # clear_all 常在测试的同步上下文里调用，直接 put_nowait 不会唤醒别的 loop 上的订阅者
     for q, loop in targets:
         _deliver(q, loop, _CLOSED)

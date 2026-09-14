@@ -20,7 +20,7 @@
 /**
  * 第 2 批（0.4.15）A2/A4：每模型推理参数编辑器。
  *
- * ⛔ 参数清单与取值范围**必须与后端 `sidecar/ollama/infer_options.py` 的
+ * 参数清单与取值范围**必须与后端 `sidecar/ollama/infer_options.py` 的
  * `_PARAM_MAP` / `_PARAM_RANGE` 严格一致**。若前端允许配一个后端不认的参数或越界值，
  * 后端会在注入时**静默丢弃** → 用户看到"设了不生效"，这类缺陷极难排查。
  * 后端是权威源，改动任一侧都要同步另一侧。
@@ -51,7 +51,7 @@ interface ParamDef {
   placeholder: string;
 }
 
-// ⛔ 范围逐条对照后端 _PARAM_RANGE，勿单边修改
+// 范围逐条对照后端 _PARAM_RANGE，勿单边修改
 const PARAMS: ParamDef[] = [
   { key: 'num_ctx', label: '上下文窗口 num_ctx', ollamaOnly: true, kind: 'int', min: 256, max: 1048576,
     hint: '模型一次能处理的 token 上限。⚠️ 调大会显著拖慢首字（prefill），30B/35B 本地模型尤其明显；留空=用模型默认',
@@ -78,7 +78,7 @@ interface Props {
   onSave: (patch: Record<string, any>) => Promise<void>;
   isOllama: boolean;
   /**
-   * ⛔ 不接收 models 列表：曾设计成"在本组件里放一个模型下拉来新增配置"，
+   * 不接收 models 列表：曾设计成"在本组件里放一个模型下拉来新增配置"，
    * 但那会把每个模型名**再渲染一遍**，导致 InferencePanel 的模型列表与下拉里
    * 出现两处同名文本 —— 既有测试 `getByText('qwen3.8')` 因此报
    * "Found multiple elements"。根因是 UI 设计冗余，不该改测试去迁就。

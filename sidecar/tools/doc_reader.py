@@ -18,7 +18,7 @@ from typing import Any
 DOC_EXTS = {".docx", ".xlsx", ".xlsm", ".pptx", ".pdf"}
 
 # 旧式 .doc/.xls/.ppt 是 OLE 复合二进制，python-docx/openpyxl/pypdf 都读不了。
-# ⛔ 但 .doc 在 macOS 上**不是死路**：系统自带 /usr/bin/textutil 能把它转成 .docx，
+# 但 .doc 在 macOS 上**不是死路**：系统自带 /usr/bin/textutil 能把它转成 .docx，
 # 再交 python-docx 解析——零外部依赖、零体积增量（不要引入 antiword/libreoffice）。
 # textutil 不支持 .xls/.ppt，那两个才真的只能提示另存。
 LEGACY_EXTS = {".doc", ".xls", ".ppt"}
@@ -45,10 +45,10 @@ def _convert_legacy(path: Path) -> tuple[Any, Path, str] | None:
     返回 (临时目录对象, 转换后路径, 小写扩展名)；不可行时返回 None
     （平台无 textutil、格式不在其支持列表、或转换命令失败）。
 
-    ⛔ 用 macOS 自带 textutil，**不要**引入 antiword / textract / libreoffice：
+    用 macOS 自带 textutil，**不要**引入 antiword / textract / libreoffice：
     零外部依赖、零体积增量，且与 PyInstaller 打包无冲突。
-    ⛔ 只读源文件、只写临时目录——绝不修改或覆盖用户的原始文件。
-    ⛔ 临时目录由调用方 cleanup()（TemporaryDirectory 上下文对象）。
+    只读源文件、只写临时目录——绝不修改或覆盖用户的原始文件。
+    临时目录由调用方 cleanup()（TemporaryDirectory 上下文对象）。
     """
     ext = path.suffix.lower()
     target_fmt = _TEXTUTIL_TARGET.get(ext)
@@ -80,10 +80,10 @@ def extract(path: Path, budget: int) -> dict[str, Any]:
       ok=True  → content 为解析出的文本（格式概要在前、正文在后）
       ok=False → content 为**说明性文字**（不是乱码），parse_error 为机器可读原因
 
-    ⛔ 失败也返回说明文字而非抛异常：read_file 的调用方是模型，
+    失败也返回说明文字而非抛异常：read_file 的调用方是模型，
     给它一句"这个格式读不了，因为 X，建议 Y"远比给它一个 500 有用。
     """
-    orig = path  # ⛔ 提示文案一律用原文件名（转换后的临时名对用户毫无意义）
+    orig = path  # 提示文案一律用原文件名（转换后的临时名对用户毫无意义）
     ext = path.suffix.lower()
     detail = ""
     body = ""
@@ -157,7 +157,7 @@ def extract(path: Path, budget: int) -> dict[str, Any]:
 def _iter_docx_blocks(doc: Any):
     """按文档流顺序交替产出 Paragraph / Table。
 
-    ⛔ 不能用 doc.paragraphs + doc.tables 分别遍历再拼接——那样表格会全部
+    不能用 doc.paragraphs + doc.tables 分别遍历再拼接——那样表格会全部
     堆到正文末尾，丢失原始排版次序（用户参考文档里"表格夹在段落之间"
     是常见版式，顺序错了 Agent 复刻出来的格式就是错的）。
     """
@@ -210,7 +210,7 @@ def _align_label(al: Any) -> str | None:
 def _docx_image_count(path: Path) -> tuple[int, int]:
     """统计 docx 内嵌图片数与字节数。
 
-    ⛔ 必须有这个：实测 7.6MB 的「证据（王永斌）.docx」是图片为主的文档，
+    必须有这个：实测 7.6MB 的「证据（王永斌）.docx」是图片为主的文档，
     文本只有几十字。若只回文本，模型会误判"这文件基本是空的"，
     进而凭空编造或反复重试——如实告知"含 N 张图、共 X MB，需走图像识别"才有用。
     """
@@ -316,7 +316,7 @@ def _docx_format_summary(d: Any, path: Path | None = None) -> str:
             pf = p.paragraph_format
             if pf.first_line_indent is not None:
                 fli = round(pf.first_line_indent.cm, 2)
-            # ⛔ line_spacing 有两种语义，必须区分（实测踩坑）：
+            # line_spacing 有两种语义，必须区分（实测踩坑）：
             #   · float（如 1.5）= **倍数**行距 → 原样输出
             #   · Length（有 .pt）= **固定**行距，其 int 值是 EMU（22磅 → 279400）
             #     直接输出就是"行距=279400.0"这种鬼数字，模型无法据此复刻排版。
@@ -355,7 +355,7 @@ def _docx_format_summary(d: Any, path: Path | None = None) -> str:
 
 
 # 对齐 label（人话）→ WD_ALIGN_PARAGRAPH 枚举值（写出端套用参考格式时反查）
-# ⛔ 与上方 _ALIGN_LABEL 互为逆映射；新增对齐方式时两处必须同步。
+# 与上方 _ALIGN_LABEL 互为逆映射；新增对齐方式时两处必须同步。
 _ALIGN_VALUE = {v: k for k, v in _ALIGN_LABEL.items()}
 
 
@@ -370,11 +370,11 @@ def extract_docx_style(path: Path) -> dict[str, Any]:
        "body": {"font","ascii_font","size_pt","align_value","first_line_indent_cm",
                 "line_spacing"(float 倍数 或 None),"line_spacing_pt"(float 磅 或 None)}}
 
-    ⛔ body 取「正文主格式」：遍历段落，按出现次数最多的 (字体,字号,对齐,缩进,行距) 组合
+    body 取「正文主格式」：遍历段落，按出现次数最多的 (字体,字号,对齐,缩进,行距) 组合
       判定为正文格式——标题/页脚的少数格式不应主导正文排版。与 _docx_format_summary
       的聚合口径一致，但这里只要"出现最多的那一组"而非全部组合。
-    ⛔ 字体须读 eastAsia（_docx_run_font 已兼顾 ascii/eastAsia），中文文档才取得到。
-    ⛔ 全部 try 包裹：参考文件可能缺字段或结构异常，任一处失败都回退默认、绝不抛断写入。
+    字体须读 eastAsia（_docx_run_font 已兼顾 ascii/eastAsia），中文文档才取得到。
+    全部 try 包裹：参考文件可能缺字段或结构异常，任一处失败都回退默认、绝不抛断写入。
     """
     result: dict[str, Any] = {"page": {}, "body": {}}
     try:
@@ -453,7 +453,7 @@ def _read_xlsx(path: Path) -> tuple[str, str]:
     import openpyxl
 
     # data_only=True 取公式的**计算结果**而非公式串（Agent 要的是数据本身）。
-    # ⛔ 但它只读 Excel 写入的缓存值：文件若从未被 Excel 打开计算过
+    # 但它只读 Excel 写入的缓存值：文件若从未被 Excel 打开计算过
     # （程序新建的表、脚本导出的表），缓存为空 → 公式单元格读出来是空白，
     # 会被误当成"原表这格没值"。故同时开 data_only=False 取公式串兜底，
     # 结果缺失时如实显示 `=SUM(B2:B3)` 并标注未计算，绝不静默留空。
@@ -504,7 +504,7 @@ def _read_xlsx(path: Path) -> tuple[str, str]:
 # ────────────────────────────── pptx ──────────────────────────────
 
 def _xml_unescape(s: str) -> str:
-    # ⛔ &amp; 必须最后替换，否则 "&amp;lt;" 会被二次解成 "<"
+    # &amp; 必须最后替换，否则 "&amp;lt;" 会被二次解成 "<"
     return (s.replace("&lt;", "<").replace("&gt;", ">")
              .replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&"))
 

@@ -84,7 +84,7 @@ export function ProjectPanel({ onSelect, onProjectDeleted, selectedProjectId }: 
   }
 
   // A13（0.4.22）：Agent 建/删/改项目后实时重拉列表，无需重启应用。
-  // ⛔ fetchProjects 是函数声明（每次渲染重建）→ 用 ref 持最新版，订阅只建一次。
+  // fetchProjects 是函数声明（每次渲染重建）→ 用 ref 持最新版，订阅只建一次。
   const fetchProjectsRef = useRef(fetchProjects);
   fetchProjectsRef.current = fetchProjects;
   useEffect(() => {

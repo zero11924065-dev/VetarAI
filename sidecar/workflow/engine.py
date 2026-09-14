@@ -66,7 +66,7 @@ NODE_TYPES = ("start", "inference", "tool", "condition", "parallel", "loop",
 _APPROVALS: dict[str, dict[str, Any]] = {}
 
 # C5（0.4.16）：运行取消**事件**：run_id → Event。
-# ⛔ Event 是「已取消」的**唯一真相源**。曾同时维护 bool 字典 `_CANCEL_FLAGS` 与
+# Event 是「已取消」的**唯一真相源**。曾同时维护 bool 字典 `_CANCEL_FLAGS` 与
 # Event 字典两个真相源，并在懒建时写了一段"补置 bool 标志"的同步代码——
 # 但 `request_workflow_cancel` 必定同时 set Event，故那段补置**永不独立触发**（死代码），
 # 变异测试也证实删除它无任何断言失败。两个表示同一状态的容器本身就是 bug 温床
@@ -82,7 +82,7 @@ APPROVAL_HEARTBEAT_S = 15.0
 def cancel_event(run_id: str) -> asyncio.Event:
     """取（或懒建）该 run 的取消事件。
 
-    ⛔ 懒建而非在 request 时创建：`request_workflow_cancel` 可能在引擎开始等待之前
+    懒建而非在 request 时创建：`request_workflow_cancel` 可能在引擎开始等待之前
     就被调用（用户手快），此时也必须能正确记录"已取消"。故两边都走这个函数，谁先到谁创建。
     Event 在 Python 3.10+ 构造时不绑定 loop（await 时才取运行中的 loop），
     故在非 async 上下文（如 FastAPI 端点线程）创建也是安全的。
@@ -100,7 +100,7 @@ def request_workflow_cancel(run_id: str) -> None:
 
 
 def clear_workflow_cancel(run_id: str) -> None:
-    # ⛔ 必须把 Event **整个丢弃**而非 clear()：残留已置位的 Event 会让该 run_id 的
+    # 必须把 Event **整个丢弃**而非 clear()：残留已置位的 Event 会让该 run_id 的
     # 下一次运行一开始就被取消（与 C2 聊天侧"停止按钮永久生效"是同一类缺陷）。
     # pop 掉后，下次 cancel_event() 懒建的是全新未置位 Event，结构上杜绝残留。
     _CANCEL_EVENTS.pop(run_id, None)
@@ -141,7 +141,7 @@ class NodeResult:
 def _exc_text(e: BaseException, *, timeout_hint: str = "") -> str:
     """把异常格式化为**可诊断**文本（0.4.11）。
 
-    ⛔ 为什么需要它：多处曾写 `f"xxx失败：{e}"`，而 `asyncio.TimeoutError` /
+    为什么需要它：多处曾写 `f"xxx失败：{e}"`，而 `asyncio.TimeoutError` /
     `TimeoutError` / `CancelledError` 的 `str()` 都是【空字符串】→ 用户只看到
     "xxx失败："后面一片空白，完全无从判断根因。真机事故：工作流 n7 节点跑了
     300180ms 被 `READING_TIMEOUT=300s` 掐断，界面只显示"模型调用失败："，
@@ -330,7 +330,7 @@ class WorkflowEngine:
     _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".heic")
 
     # ---- C4（0.4.18）：file_read 需走解析器的二进制文档格式 ----
-    # ⛔ **从 parser 推导，不另写一份清单**：C3 刚清理过"前端 PARSEABLE_EXTS 与后端
+    # **从 parser 推导，不另写一份清单**：C3 刚清理过"前端 PARSEABLE_EXTS 与后端
     #    SUPPORTED_EXTS 双源漂移"（前端缺 .pptx 致其永不解析），此处不能重犯。
     #    文档格式 = 解析器支持的全部 − 纯文本族 − 图片（后两者无需解析器）。
     #    → 后端将来加格式（如 .odt），本节点自动跟上，无需改这里。
@@ -344,7 +344,7 @@ class WorkflowEngine:
         _DOC_PARSE_EXTS = frozenset(_P_SUPPORTED - _P_TEXT - _P_IMAGE)
     except Exception:                                  # pragma: no cover - 导入失败兜底
         _DOC_PARSE_EXTS = frozenset({".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".pptx"})
-    # ⛔ 源文件字节上限：二进制格式必须**整读**才能解析（截断会破坏 PDF/ZIP 中央目录），
+    # 源文件字节上限：二进制格式必须**整读**才能解析（截断会破坏 PDF/ZIP 中央目录），
     #    故需要一个独立于 max_bytes（那是输出文本上限）的内存保护阈值。
     #    20MB：远超正常文档（律所案件材料多在数 MB 内），只挡异常大文件。
     _FILE_READ_MAX_SOURCE_BYTES = 20 * 1024 * 1024
@@ -451,7 +451,7 @@ class WorkflowEngine:
         task = asyncio.create_task(
             self.connector.chat(model, [{"role": "user", "content": user_content}],
                                 images=images if images else None))
-        # C5（0.4.16）：⛔ 原实现 `asyncio.wait({task}, timeout=2.0)` 每 2 秒才轮询一次
+        # C5（0.4.16）：原实现 `asyncio.wait({task}, timeout=2.0)` 每 2 秒才轮询一次
         # 取消标志 → 用户点停止最坏要**等 2 秒**才生效（模型还在烧算力）。
         # 改为同时 await 取消 Event：点停止**立即**唤醒，无轮询延迟。
         # ⚠️ waiter task 必须在循环外创建一次并复用（与 app.py C2 同一教训）：
@@ -512,7 +512,7 @@ class WorkflowEngine:
         except WorkflowCancel:
             raise
         except Exception as e:
-            # 0.4.11：⛔ 此前写 f"模型调用失败：{e}"，而 asyncio.TimeoutError 的 str() 是
+            # 0.4.11：此前写 f"模型调用失败：{e}"，而 asyncio.TimeoutError 的 str() 是
             #    【空字符串】→ 用户只看到"模型调用失败："后面一片空白，无从判断根因
             #    （真机事故：n7 节点跑了 300180ms 被 READING_TIMEOUT=300s 掐断，
             #     界面只显示"模型调用失败："，用户以为是模型出错，实际是超时）。
@@ -895,15 +895,15 @@ class WorkflowEngine:
 
         输出：拼接后的文本（供推理/分析节点消费）。
 
-        ⛔ C4（0.4.18）：本节点原本 `read_bytes()[:max].decode('utf-8','replace')`，
+        C4（0.4.18）：本节点原本 `read_bytes()[:max].decode('utf-8','replace')`，
         **不调任何解析器** → PDF/docx/xlsx/pptx/.doc 读出来是乱码（用户报告"工作流不可读 pdf"）。
         现按扩展名分发到 `attachments/parser.py`（聊天附件同一解析链，含 C3 的 .doc）。
         ⚠️ **两个必须区分的上限**（旧实现只有一个 max_bytes，对二进制格式语义是错的）：
           * `max_bytes` = **输出文本**上限。上下文里装的是文本，不是原始字节。
           * `_FILE_READ_MAX_SOURCE_BYTES` = **源文件字节**上限（防整读超大文件爆内存）。
-        ⛔ 二进制格式**不能沿用"先截断字节再解析"**：截断会破坏容器结构
+        二进制格式**不能沿用"先截断字节再解析"**：截断会破坏容器结构
         （PDF/ZIP 的中央目录在文件尾部）→ 解析必然失败。必须整读→解析→再截断文本。
-        ⛔ 解析是 sync 且 CPU 密集（pypdf/openpyxl 逐页逐行），引擎是 async →
+        解析是 sync 且 CPU 密集（pypdf/openpyxl 逐页逐行），引擎是 async →
         必须 `run_in_executor`，否则阻塞事件循环（心跳/SSE/取消全部卡住，
         用户点停止都无响应）。本模块 `_run_code` 已有同一先例。
         """
@@ -948,7 +948,7 @@ class WorkflowEngine:
                         f"{f.name} 过大（{src_size} 字节 > 上限 "
                         f"{self._FILE_READ_MAX_SOURCE_BYTES} 字节）：{suffix} 需整读后解析，"
                         f"无法像纯文本那样只读前段（截断会破坏文件结构）"))
-                # ⛔ 二进制格式是**整读后解析**，故源文件不存在截断（cut=False）；
+                # 二进制格式是**整读后解析**，故源文件不存在截断（cut=False）；
                 #    截断只可能发生在"解析出的文本超 max_bytes"这一步，由下方统一处理。
                 cut = False
                 try:
@@ -957,20 +957,20 @@ class WorkflowEngine:
                     return NodeResult(node["id"], ok=False, error=f"读取失败 {f.name}：{e.strerror}")
                 try:
                     from sidecar.attachments.parser import parse_attachment
-                    # ⛔ sync + CPU 密集 → 丢线程池，不阻塞事件循环
+                    # sync + CPU 密集 → 丢线程池，不阻塞事件循环
                     text, _ = await loop.run_in_executor(
                         None, parse_attachment, f.name, raw)
                 except Exception as e:
                     return NodeResult(node["id"], ok=False,
                                       error=f"解析异常 {f.name}：{_exc_text(e)}")
                 if text is None:
-                    # ⛔ 如实报错而不是塞乱码/空串——乱码会让下游推理节点产出无意义结论，
+                    # 如实报错而不是塞乱码/空串——乱码会让下游推理节点产出无意义结论，
                     #    且用户无法察觉（这正是本节点改造前的病症）。
                     return NodeResult(node["id"], ok=False, error=(
                         f"无法解析 {f.name}（{suffix or '无扩展名'}）：文件损坏、加密，"
                         f"或该格式不支持文本提取"))
             else:
-                # ⛔ C4 补漏（0.4.18，本批自查发现）：旧写法 `read_bytes()[:max_bytes]`
+                # C4 补漏（0.4.18，本批自查发现）：旧写法 `read_bytes()[:max_bytes]`
                 #    **先截字节再解码**，有两个真实缺陷（测试 T6b 抓到）：
                 #    ① 在多字节字符中间切断 → 半个汉字解码成 U+FFFD 乱码，喂给下游推理节点；
                 #    ② 截断后 len(text) 恒 ≤ max_bytes → 统一的"已截断"标注**永不触发**，

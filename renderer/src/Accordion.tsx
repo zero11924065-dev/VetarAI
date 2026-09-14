@@ -24,8 +24,8 @@
  * 无需量高、无需第三方库。关闭时**延迟卸载内容**（动画播完再移除 DOM），
  * 展开时首帧 0fr、次帧 1fr，保证两个方向都有过渡。
  *
- * ⛔ jsdom 兼容：测试环境可能没有 requestAnimationFrame，降级 setTimeout(0)。
- * ⛔ 语义约束：本组件只做"延迟 200ms 卸载"，不改变子组件挂载期行为；
+ * jsdom 兼容：测试环境可能没有 requestAnimationFrame，降级 setTimeout(0)。
+ * 语义约束：本组件只做"延迟 200ms 卸载"，不改变子组件挂载期行为；
  *    有"收起后立即不在 textContent"硬契约的场景（如 B4 工具组自动收拢）
  *    不要直接套本组件——见 ToolStepsGroup 的折中实现注释。
  */

@@ -46,7 +46,7 @@ def _to_pos_float(v: Any) -> float | None:
     """把模型给的尺寸值安全转成正浮点数；无效则返回 None（0.4.12，A7）。
 
     返回 None 的语义是"用户没指定这一维"，调用方据此决定传不传给 add_picture
-    ——⛔ 不能返回 0 兜底：0 会被当成"指定了 0cm"，与"未指定"语义不同。
+    ——不能返回 0 兜底：0 会被当成"指定了 0cm"，与"未指定"语义不同。
     容忍模型常见写法：数字、数字字符串（"13"/"13.5"）、带单位（"13cm"）。
     """
     if v is None or isinstance(v, bool):
@@ -110,7 +110,7 @@ def _set_cjk_font(d, font: str = "宋体", ascii_font: str = "Times New Roman",
     使全文（含表格、标题）中文统一宋体。不依赖本机安装 Office，纯文件层操作。
 
     size_pt（0.4.20 #14）：正文字号（磅）。给了就套用参考文件字号；
-    None 时沿用默认小四（12pt）。⛔ 单位是磅，docx 的 w:sz 存半磅 → ×2。
+    None 时沿用默认小四（12pt）。单位是磅，docx 的 w:sz 存半磅 → ×2。
     """
     from docx.oxml.ns import qn
     style = d.styles["Normal"]
@@ -140,7 +140,7 @@ def _setup_a4_page(d, page: dict | None = None) -> None:
 
     page（0.4.20 #14）：参考文件的页面设置 dict，键 width_cm/height_cm/
     top_cm/bottom_cm/left_cm/right_cm。给了某项就套用、缺某项回退默认值——
-    ⛔ 逐项回退而非整体回退：参考文件可能只提取到尺寸没提取到边距（或反之），
+    逐项回退而非整体回退：参考文件可能只提取到尺寸没提取到边距（或反之），
     整体丢弃会让已拿到的部分白提取。无效值（None/非正数）同样按缺省处理。
     """
     from docx.shared import Cm
@@ -229,9 +229,9 @@ def _add_page_number_footer(d, fmt: str = "第{p}页 共{t}页") -> None:
 def _apply_body_fmt(para, body: dict) -> None:
     """把一个正文段落套用参考文件的段落格式（#14）：对齐 / 首行缩进 / 行距。
 
-    ⛔ 逐项判空套用——参考文件可能只提取到对齐没提取到行距，缺的项保持
+    逐项判空套用——参考文件可能只提取到对齐没提取到行距，缺的项保持
       python-docx 默认，不能因为某项为 None 就整体跳过。
-    ⛔ line_spacing 有两种语义（与 doc_reader 提取端对应，实测踩坑同源）：
+    line_spacing 有两种语义（与 doc_reader 提取端对应，实测踩坑同源）：
       · line_spacing（float）= **倍数**行距 → 直接赋给 paragraph_format.line_spacing
       · line_spacing_pt（float）= **固定**行距（磅）→ 赋 Pt 值
       两者都给了优先用倍数（更接近原文档观感）；都缺则不动。
@@ -309,7 +309,7 @@ def _write_docx(target: Path, content: dict, ref_style: dict | None = None) -> i
             paths = b.get("paths") or ([b["path"]] if b.get("path") else [])
             layout = b.get("layout", "single")
             caption = b.get("caption") or ""
-            # 0.4.12（A7）：支持 height_cm。⛔ 语义陷阱——python-docx 的 add_picture
+            # 0.4.12（A7）：支持 height_cm。语义陷阱——python-docx 的 add_picture
             #   同时传 width+height 会【强制拉伸到该尺寸、不保持宽高比】；只传其一则
             #   另一维按图片原始比例自动推算。故 width_cm 默认值不能再恒为 13.0，
             #   否则"只给 height"会变成"两个都给"→ 图片变形。
@@ -438,8 +438,8 @@ def write_document(doc_type: str, target: Path, content: dict,
     reference_path（0.4.20 #14）：可选的参考 .docx 路径。给了就提取它的格式
     （字体/字号/对齐/首行缩进/行距/页面尺寸边距）套用到新生成的 docx——
     "读参考文件格式 → 按该格式写出"，是通用能力（用户拍板：通用能力非模板）。
-    ⛔ 仅 docx 生效：参考格式提取依赖 python-docx，xlsx/pptx/md 无段落级排版概念。
-    ⛔ 提取失败（文件不存在/非 docx/结构异常）一律静默回退到默认格式，绝不阻断写出——
+    仅 docx 生效：参考格式提取依赖 python-docx，xlsx/pptx/md 无段落级排版概念。
+    提取失败（文件不存在/非 docx/结构异常）一律静默回退到默认格式，绝不阻断写出——
       参考格式是"锦上添花"，不该因为参考文件有问题就让用户拿不到任何产物。
     """
     if not isinstance(content, dict):

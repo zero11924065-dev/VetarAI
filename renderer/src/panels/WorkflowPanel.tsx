@@ -98,7 +98,7 @@ export function WorkflowPanel() {
   useEffect(() => { loadWorkflows(); loadModels(); }, [loadWorkflows, loadModels]);
 
   // A13（0.4.22）：Agent 改工作流后实时重拉列表，无需重启应用。
-  // ⛔ dirty 守卫：用户正在编辑（有未保存改动）时**跳过**重拉，绝不冲掉编辑内容。
+  // dirty 守卫：用户正在编辑（有未保存改动）时**跳过**重拉，绝不冲掉编辑内容。
   //    用 ref 读最新 dirty（订阅只建一次，避免 dirty 变化反复重订阅）。
   const dirtyRef = useRef(dirty);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
@@ -107,7 +107,7 @@ export function WorkflowPanel() {
       // gap 对账（resource==='*'）也要重拉；否则只认 workflow 资源
       const match = ev.gap || ev.resource === 'workflow';
       if (!match) return;
-      if (dirtyRef.current) return;        // ⛔ 编辑中不冲掉未保存改动
+      if (dirtyRef.current) return;        // 编辑中不冲掉未保存改动
       void loadWorkflows();
     });
     return off;                            // 卸载注销（不重连、无幽灵监听）

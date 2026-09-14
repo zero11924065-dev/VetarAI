@@ -54,7 +54,7 @@ COMPUTER_USE_MAX_STRIKES = 2    # 0.4.11：同一 Computer Use 动作连续失�
                                 #   用户连点十几二十个仍停不下来。截屏不计入——它只读无弹窗）
 SEARCH_CIRCUIT_STOP = 1        # TS-105：web_search 返回 circuit_open=True → 立即停止（熔断器已确认重试无意义；任务单写 2 但实际时序导致第 1 次 False 第 2 次 True，strikes 永远到不了 2，故改为 1）
 SUMMARY_MAX_CHARS = 200         # tool_result 摘要截断长度（协议常量）
-# 0.4.9（3.47.3 委派模型换装）：⛔ 0.4.7 回退教训——卸载必须带独立超时，
+# 0.4.9（3.47.3 委派模型换装）：0.4.7 回退教训——卸载必须带独立超时，
 # 且卸载前先查 /api/ps 确认模型确在内存（Ollama 对未加载模型会"先加载再卸载"）。
 SWAP_TIMEOUT = 20.0             # 单次 unload_model 的独立超时上限（秒）；超时即放弃卸载，绝不阻塞委派
 SWAP_PS_TIMEOUT = 8.0           # 卸载前查 /api/ps（已加载模型）的超时（秒）
@@ -151,7 +151,7 @@ def archive_work_unit(project_id: str, session_id: str, title: str, summary: str
 
 
 async def safe_unload_model(conn: Any, model: str) -> bool:
-    """0.4.9（3.47.3）安全卸载模型——⛔ 0.4.7 回退教训的两条防护都在这里。
+    """0.4.9（3.47.3）安全卸载模型——0.4.7 回退教训的两条防护都在这里。
 
     防护①：卸载与查 ps 各自带独立超时（SWAP_TIMEOUT / SWAP_PS_TIMEOUT）。超时即放弃卸载
             继续走，绝不阻塞委派主流程（0.4.7 两处 unload 在活性超时守卫之外，
@@ -379,7 +379,7 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
                             "description": "要随委派传给子 Agent 的图片文件路径列表（相对沙盒根或绝对路径，如 'images/a.png'）。"
                                            "适用场景：批量图片识别/转写等。不填时仅传聊天附着图。",
                         },
-                        # ⛔ #15（0.4.19）：文档路径通道。此前委派只有 image_paths，
+                        # #15（0.4.19）：文档路径通道。此前委派只有 image_paths，
                         # 主 Agent 想把 docx/pdf 交给子 Agent，唯一办法是自己先 read_file
                         # 再把全文塞进任务书 → 90KB PDF 自读、大 prompt prefill 极慢
                         # （0.4.8 实测一次委派前空耗约 20 分钟）。有了本参数：
@@ -619,11 +619,11 @@ def build_system_prompt(
         "搜索结果不理想时，换个不同角度的关键词再搜一次，仍不理想就直接基于已有信息回答并说明局限。\n"
         "【重要】不要根据网络状态预判拒绝——用户询问实时信息时直接调用 web_search，以工具返回为准。"
         "工具返回结构化 JSON，ok=false 时按 error 字段处理。\n"
-        # ⛔ 表#6（0.4.19）：附件改为拉模式后，这段纪律是**配套必需项**。
+        # 表#6（0.4.19）：附件改为拉模式后，这段纪律是**配套必需项**。
         # 此前系统提示词里**完全没有附件相关说明**（实测 grep 零命中）——推模式下不需要，
         # 因为全文已塞进用户消息正文；改拉模式后正文只剩路径，若不告诉模型"看到路径要去读"，
         # 模型会直接回答"我看不到文件内容"（这正是用户报的表#5「导出有内容 agent 说看不到」同类症状）。
-        # ⛔ 表#5（0.4.19）推广：措辞从"用户上传的文件"扩为**任何文件路径**——
+        # 表#5（0.4.19）推广：措辞从"用户上传的文件"扩为**任何文件路径**——
         # 导出产物（会话 MD / 工作组 JSON）、用户口头给出的路径同样适用。
         # 原因：表#6 初版只覆盖上传附件，而导出文件不经附件链路、路径也不进消息正文，
         # 留下同类缺口（agent 面对导出路径仍可能声称看不到）。统一成"见路径必读"一条纪律，
@@ -720,7 +720,7 @@ def _measure_ctx_chars(msgs: list, tools_spec_list) -> int:
     口径：msgs 全部角色、全部字符串字段之和 + tools 声明的 JSON 长度。
     前端指示器据此 ×0.6 显示 token（含 system prompt 与工具声明基线）。
 
-    ⛔ 0.4.22 重打包修复二（checkpoint-109）：**轮末 state 前必须重算一次**。
+    0.4.22 重打包修复二（checkpoint-109）：**轮末 state 前必须重算一次**。
     原实现只在轮初统计一次 → 本轮新增的 tool_report / 注入消息不进指示器，
     用户看到"一轮之内纹丝不动、像不增"（2026-09-12 实测）。轮初与轮末两处
     共用本函数，保证口径不漂移。
@@ -845,7 +845,7 @@ _DELEGATION_FILE_EXTS = {
 def _resolve_delegation_files(file_paths: list, sandbox_root: str) -> tuple[list[str], list[str]]:
     """把委派文档路径解析为绝对路径 → (解析成功列表, 跳过列表)。
 
-    ⛔ 只做路径解析，**不读文件内容**（读的动作交给子 Agent，见上方设计说明）。
+    只做路径解析，**不读文件内容**（读的动作交给子 Agent，见上方设计说明）。
 
     与 _load_delegation_images 同一套自纠正纪律（模型常只写裸文件名，而文件在子目录）：
     - 相对路径按 sandbox_root 解析；绝对路径直接校验
@@ -1091,7 +1091,7 @@ async def run_tool_loop(
     + 每步动作确认（computer_use_confirm_each，经 authorizer 弹窗，拒绝则不执行）。
     cancel_check（TS-114 3.25）：回调为真时，本轮开始前（未发起模型调用）yield cancelled 事件并返回。
     inject_check（A5 / 0.4.16）：每轮开始前调用，返回用户在「思考中」插入的新消息列表。
-      ⛔ 语义是**不打断当前轮**——用户拍板：助手处理用户在其工作时发来的新消息，
+      语义是**不打断当前轮**——用户拍板：助手处理用户在其工作时发来的新消息，
       是先做完手上这一段，下一轮开始时再读到新消息并据此纠偏或补充。
       取出即清空（同一条只并入一次）。与 cancel_check 共用同一检查点。
     """
@@ -1108,7 +1108,7 @@ async def run_tool_loop(
     # 次即熔断该工具，直接报错终止而非继续弹窗。
     computer_use_strikes: dict[str, int] = {}
     tool_calls_log: list[dict[str, Any]] = []
-    # ⛔ #3（0.4.19）：full_text 必须在【轮次循环外】累积，不能每轮重置。
+    # #3（0.4.19）：full_text 必须在【轮次循环外】累积，不能每轮重置。
     #   旧实现把 `full_text = ""` 放在 for step 循环体内 → 一个多轮工具调用流里，
     #   每轮模型说的话只在【本轮】累积，下一轮被清零；而 done 只带【最后一轮】的 full_text。
     #   后果（用户实测最致命的 bug）：第1~N-1 轮模型已流式输出给用户看的内容
@@ -1138,7 +1138,7 @@ async def run_tool_loop(
                 yield {"event": "cancelled", "data": {"detail": "已停止"}}
                 return
         # A5（0.4.16）：每轮开始前读取用户「思考中」插入的新消息，并入上下文。
-        # ⛔ 不打断当前轮：模型照常做完这一轮，下一轮开始时才看到新消息，
+        # 不打断当前轮：模型照常做完这一轮，下一轮开始时才看到新消息，
         # 然后自行判断是纠偏（方向错了）还是补充（用户只是加了内容）。
         # 与 cancel_check 共用检查点：停止=读到取消就退出，A5=读到新消息就继续。
         if inject_check is not None:
@@ -1149,12 +1149,12 @@ async def run_tool_loop(
             # #1（0.4.20）插入点分裂：drain 到注入消息时，先 yield segment_break，
             # 让前端把「当前正在生成的气泡」就地定格、插入用户气泡、为新 assistant
             # 气泡开新的 streamMsgId，再把注入消息并入上下文（A5 原有逻辑不变）。
-            # ⛔ 只在真有新消息时发（空列表不打扰前端）；payload 只带文本，
+            # 只在真有新消息时发（空列表不打扰前端）；payload 只带文本，
             #    过滤空白，与下面 append 的判据保持一致。
             _inj_payload = [{"role": "user", "content": str(_t)}
                             for _t in _injected if str(_t).strip()]
             if _inj_payload:
-                # ⛔ break_at = 截至此刻已生成的正文字符数（full_text 长度）。
+                # break_at = 截至此刻已生成的正文字符数（full_text 长度）。
                 #    full_text 跨轮累加（#3/0.4.19），done 的 content 是【全文】。
                 #    前端据此把 done 全文切成「段1=[:break_at] / 段2=[break_at:]」，
                 #    否则 done 用全文覆盖段2 会让段2 重复显示段1 的全部内容。
@@ -1189,7 +1189,7 @@ async def run_tool_loop(
                 else:
                     yield {"event": "compact_required", "data": {"used": last_pe, "limit": context_limit, "est_rounds_left": est}}
                     return
-        # ⛔ #3（0.4.19）：full_text 在【循环外】累积（见上方声明），此处绝不可每轮重置——
+        # #3（0.4.19）：full_text 在【循环外】累积（见上方声明），此处绝不可每轮重置——
         #   重置即丢失前几轮已输出给用户的文本（done 只带最后一轮 = 内容消失 bug 的根源）。
         #   pending_tcs / step_counts / had_done 是每轮局部状态，照常重置。
         pending_tcs: list[dict[str, Any]] = []
@@ -1255,7 +1255,7 @@ async def run_tool_loop(
             prompt_eval_history.append(step_counts["prompt_eval_count"])
 
         if not pending_tcs:
-            # ⛔⛔ 最后一轮插入补救（0.4.23，用户 2026-09-12 实测报障 + 真实 uvicorn 实验确证）
+            # 最后一轮插入补救（0.4.23，用户 2026-09-12 实测报障 + 真实 uvicorn 实验确证）
             #
             # 缺陷：inject_check 只在每轮**开头**调用。若用户在【最后一轮】（本轮不再调工具、
             # 正要给最终答复）生成途中插入消息，此后**没有下一轮** → 该消息永不被 drain、
@@ -1266,7 +1266,7 @@ async def run_tool_loop(
             # 修法：done 之前**补 drain 一次**。有待注入消息 → 发 segment_break（前端据此分裂气泡）
             # + 并入 msgs + continue 让模型真的读到它（保住 A5 的"不打断当前轮、下一轮读到"语义，
             # 而不是发个事件就完事）。
-            # ⛔ 必须守 `step < max_rounds`：轮次预算已耗尽时 continue 会掉出 for 循环 →
+            # 必须守 `step < max_rounds`：轮次预算已耗尽时 continue 会掉出 for 循环 →
             #   走到循环后的"达到最大轮次"error（loop.py 末尾），把**正常完成**变成**报错**。
             #   此时如实保留 done，接受残留限制（见下）。
             if inject_check is not None and step < max_rounds:
@@ -1285,7 +1285,7 @@ async def run_tool_loop(
                     for _txt in _final_injected:
                         if str(_txt).strip():
                             msgs.append({"role": "user", "content": str(_txt)})
-                    # ⛔ 不 yield done：让下一轮的 inject_check 之外的正常流程接管，
+                    # 不 yield done：让下一轮的 inject_check 之外的正常流程接管，
                     #   模型会在下一轮真正看到这条消息并作出回应（可能继续调工具或直接答复）。
                     continue
             if full_text.strip():
@@ -1418,7 +1418,7 @@ async def run_tool_loop(
                         "当前会话未启用 Computer Use（工具不应出现在列表中）。"
                         "请如实告知用户：需在 设置 → Computer Use 开启总开关后才能操作电脑。")}
                 else:
-                    # 0.4.11 连败熔断：⛔ 必须在【白名单 / 权限 / 确认弹窗】之前判断，
+                    # 0.4.11 连败熔断：必须在【白名单 / 权限 / 确认弹窗】之前判断，
                     # 否则被熔断的那一次仍会弹窗，用户还得白点一下。
                     # 真机事故（2026-09-07）：动作失败后模型反复重发同一动作，
                     # 每次重试都触发每步确认弹窗 → 用户连点十几二十个仍停不下来。
@@ -1449,7 +1449,7 @@ async def run_tool_loop(
                             _wl_r = check_whitelist(_wl if isinstance(_wl, list) else [])
                             if not _wl_r.get("ok"):
                                 result = {"ok": False, "error": f"app_not_allowed: {_wl_r.get('reason')}"}
-                            # 0.4.11 防线1 前置：⛔ 权限检查必须在【确认弹窗之前】。
+                            # 0.4.11 防线1 前置：权限检查必须在【确认弹窗之前】。
                             # 此前顺序是 弹窗 → 用户点「允许执行」→ 执行时才查权限 → 失败，
                             # 于是用户批准了一个注定失败的动作（真机事故：二十次点击全白费），
                             # 还给模型"用户同意了、再试一次"的错觉 → 无限重发 + 弹窗风暴。
@@ -1609,7 +1609,7 @@ async def run_tool_loop(
                                     "委派已中止——若继续，子 Agent 将收不到任何图片而只能编造识别结果。"
                                     "请改用【完整绝对路径】重试；以下是工作目录下真实存在的图片："
                                     + _real_images_hint(sandbox_root))}
-                        # ⛔ #15（0.4.19）：文档路径通道。解析为绝对路径后写进任务书，
+                        # #15（0.4.19）：文档路径通道。解析为绝对路径后写进任务书，
                         # 由【子 Agent 自己 read_file】——主 Agent 不代读、不把内容抄进上下文。
                         # 与图片同纪律：全部落空则拦截并附真实文档清单，让主 Agent 自纠正，
                         # 绝不放它带着"一个文件都找不到"的委派继续跑（那样子 Agent 只能编造）。
@@ -1667,7 +1667,7 @@ async def run_tool_loop(
                             _parent_model = delegation_ctx.get("model") or ""
                             _conn = delegation_ctx.get("connector") or get_ollama_connector()
                             # ── 0.4.9（3.47.3）委派模型换装编排 ──────────────────
-                            # ⛔ 0.4.7 回退教训（三条防护，缺一不可，否则批量委派必卡死）：
+                            # 0.4.7 回退教训（三条防护，缺一不可，否则批量委派必卡死）：
                             #   ① 每处卸载加独立超时（wait_for ≤ SWAP_TIMEOUT）——超时即放弃
                             #      卸载继续走，绝不阻塞委派主流程；
                             #   ② 卸载前先查 /api/ps 确认模型确在内存——Ollama 对"未加载模型"
@@ -1701,7 +1701,7 @@ async def run_tool_loop(
                                     # TS-114（3.27）+ TS-117（3.31）：主会话附着图片 + image_paths 图片
                                     # 随委派传给子 Agent 视觉流
                                     images=_deleg_images if _deleg_images else None,
-                                    # ⛔ #15（0.4.19）：文档路径清单（已解析为绝对路径）。
+                                    # #15（0.4.19）：文档路径清单（已解析为绝对路径）。
                                     # 传的是【路径】不是【内容】——由子 Agent 自己 read_file，
                                     # 主 Agent 上下文不被文档撑爆（这正是 0.4.8 慢 20 分钟的病根）。
                                     file_paths=_resolved_files or None,
@@ -1808,7 +1808,7 @@ async def run_tool_loop(
             }
             msgs.append({"role": "user", "content": json.dumps(report, ensure_ascii=False)})
 
-        # ⛔ 0.4.22 重打包修复二（checkpoint-109）：轮末 state 前**重算** ctx_chars——
+        # 0.4.22 重打包修复二（checkpoint-109）：轮末 state 前**重算** ctx_chars——
         #   本轮新增的 tool_report / 注入消息必须进指示器（用户实测"一轮之内纹丝不动"）。
         #   轮初那次统计只用于轮内事件（无消费方），轮末这次才是回传前端的真值。
         _ctx_chars = _measure_ctx_chars(msgs, tools_spec_list)

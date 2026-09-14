@@ -31,7 +31,7 @@ from typing import Any
 from sidecar.network.guard import guard_request, NetworkGuardError
 from sidecar.config import get_config
 # 第 2 批（0.4.15）A1-A4：推理超时与参数的**唯一取值口径**。
-# ⛔ 不要在 connector 里直接 get_config() 读 timeout_*/model_options——
+# 不要在 connector 里直接 get_config() 读 timeout_*/model_options——
 # payload 构造点有 4 处、超时常量还被 openai_compat 跨模块复用，散着读必然改漏。
 from sidecar.ollama import infer_options as _infer
 
@@ -122,7 +122,7 @@ class OllamaConnector:
         关闭旧 client 并按新 base/host 重建（设置面板改配置即时生效，无需重启）。
 
         A1（0.4.15）：超时改为**每次调用动态读 config**（`timeout_reading`/`timeout_connect`）。
-        ⛔ 原来的写法 `reading: float = READING_TIMEOUT` 有陷阱：Python 默认参数在
+        原来的写法 `reading: float = READING_TIMEOUT` 有陷阱：Python 默认参数在
         **模块加载时求值一次**，用户在设置页改了超时也永远拿不到新值（必须重启）。
         故改为 None 哨兵 + 函数体内取值。传 None = 用非流式默认；
         流式调用方显式传 `infer_options.timeout_stream_reading()`。
@@ -182,7 +182,7 @@ class OllamaConnector:
             "stream": False,
         }
         # A2/A4（0.4.15）：注入该模型的推理参数（num_ctx / temperature / top_p ...）。
-        # ⛔ 未配置时 model_options() 返回**空 dict**，update 后 payload 逐字节不变——
+        # 未配置时 model_options() 返回**空 dict**，update 后 payload 逐字节不变——
         # 绝不能注入一个空 `options: {}`，部分服务端会因此报 400。
         payload.update(_infer.model_options(model))
 

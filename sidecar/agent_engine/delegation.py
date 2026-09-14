@@ -48,7 +48,7 @@ from sidecar.agent_engine.loop import run_tool_loop, build_system_prompt, tools_
 REPORT_STATUSES = ("success", "partial", "failed")
 SUMMARY_MAX_LEN = 1000
 ARTIFACTS_MAX_ITEMS = 20
-# ⛔ #7（0.4.19）：JSON 交卷块【外】正文的最小保留长度。低于此视为噪声（如"好的""完成"）
+# #7（0.4.19）：JSON 交卷块【外】正文的最小保留长度。低于此视为噪声（如"好的""完成"）
 #   不并入 summary，避免污染。实测子 Agent 的真实成果（律师函正文等）远超此值。
 _OUTSIDE_BODY_MIN_LEN = 20
 
@@ -172,7 +172,7 @@ def _task_user_message_simple(task_id: str, task: str, expect: str,
     且违背用户"只发图片不发文字"的意图）。"""
     img_hint = (f"附图 {image_count} 张已随任务书发送，请直接识别，无需 read_file。\n\n"
                 if image_count > 0 else "")
-    # ⛔ #15（0.4.19）：简单模式也支持必读文件，但措辞从简（小模型注意力有限），
+    # #15（0.4.19）：简单模式也支持必读文件，但措辞从简（小模型注意力有限），
     # 只列路径 + 一句"先读再做"，不拼防幻觉长段。
     file_hint = ""
     if file_paths:
@@ -264,7 +264,7 @@ def _extract_json_candidate(text: str) -> str | None:
 def _extract_outside_body(text: str, candidate: str | None) -> str:
     """提取 JSON 交卷块【之外】的实质正文（子 Agent 常把成果写在 JSON 外面）。
 
-    ⛔ #7（0.4.19）根因：`parse_report` 只取 JSON 块，块外正文【全部丢弃】。
+    #7（0.4.19）根因：`parse_report` 只取 JSON 块，块外正文【全部丢弃】。
     实测三次委派丢失 89%/67%/29%——本次子 Agent 产出 1959 字符（含完整律师函+法条），
     主 Agent 只收到 213 字符的 JSON 壳，artifacts 里"修改后的律师函文本"是【字符串标签】
     既非内容也非路径。后果：主 Agent 拿不到成果 → 只能重写 → 用户看到"重复执行"。
@@ -278,7 +278,7 @@ def _extract_outside_body(text: str, candidate: str | None) -> str:
         outside = t.replace(candidate, "\n", 1)
     else:
         outside = t
-    # ⛔ 只剥离【独占整行】的围栏标记与分隔线（``` / ```json / --- / *** / ===）。
+    # 只剥离【独占整行】的围栏标记与分隔线（``` / ```json / --- / *** / ===）。
     #   绝不用全局 replace —— 实测会破坏正文 markdown：表格分隔行 |---|---| 被打散成
     #   |\n|\n|、粗斜体 ***重要*** 被拆成三行、正文 2024---2025 被切断。
     #   判据：一行 strip 后【全部】由同一种 -/*/ = 组成且长度≥3 才算分隔线。
@@ -337,7 +337,7 @@ def parse_report(text: str, task_id: str) -> dict | None:
         artifacts_raw = []
         corrected = True
     artifacts = [str(a) for a in artifacts_raw][:ARTIFACTS_MAX_ITEMS]
-    # ⛔ #7（0.4.19）核心修复：把 JSON 块【外】的实质正文并入 summary。
+    # #7（0.4.19）核心修复：把 JSON 块【外】的实质正文并入 summary。
     #   为什么必须并入 summary 而非新字段：主 Agent 只读 summary（loop.py:885
     #   `body = f"[{status}] {summary}"`），放新字段它看不到 = 白修。
     #   并入后 summary 通常 >1000 字 → _finalize_summary 自动落盘 full_text 并回传路径，
@@ -459,9 +459,9 @@ async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
     TS-114（3.25）：cancel_check 回调为真时，run_tool_loop 在下一轮开始前中止。
     TS-114（3.27）：first_round_images 把委派附着的图片传给子会话视觉流。
     0.4.20（#15）：project_id+task_id 非空时，把进度转发进事件总线供任务面板实时显示。
-      ⛔ token **不逐字转发**（逐 SSE 行 yield，一次委派可达上千条，会淹没总线）→
+      token **不逐字转发**（逐 SSE 行 yield，一次委派可达上千条，会淹没总线）→
       节流为 `progress` 事件（≥2s 一次，带累计字数）；tool_call/tool_result/state 逐条转发。
-      ⛔ 转发全部包 try/except：总线是旁路，任何失败都不得影响委派本身。"""
+      转发全部包 try/except：总线是旁路，任何失败都不得影响委派本身。"""
     from sidecar.ollama.connector import get_ollama_connector
     conn = connector or get_ollama_connector()
     full_text = ""
@@ -478,7 +478,7 @@ async def _run_one_pass(model: str, msgs: list[dict], sandbox_root: str,
             from sidecar.agent_engine import delegation_events as _de
             _de.push(project_id, task_id, event, data)
         except Exception:
-            pass   # ⛔ 总线失败绝不影响委派
+            pass   # 总线失败绝不影响委派
 
     async for ev in run_tool_loop(model, msgs,
                                   # 0.4.9 F2：子 Agent 既不可再委派（防递归），也不可有联网安装权
@@ -544,7 +544,7 @@ def _task_user_message(task_id: str, task: str, expect: str, image_count: int = 
     # TS-114（3.27）：附图提示——图片已随任务书进入视觉流，子 Agent 直接看，无需 read_file
     img_hint = (f"附图 {image_count} 张已随任务书发送，请直接识别，无需 read_file。\n\n"
                 if image_count > 0 else "")
-    # ⛔ #15（0.4.19）：必读文件清单。给出【绝对路径】并要求子 Agent 自己 read_file。
+    # #15（0.4.19）：必读文件清单。给出【绝对路径】并要求子 Agent 自己 read_file。
     # 路径已由 loop._resolve_delegation_files 校验存在，故直接列清单、不再要求先 list_dir
     # （与下方"凭猜测文件名"的执行须知不冲突：那些路径是系统解析确认过的，不是模型猜的）。
     file_hint = ""
@@ -615,8 +615,8 @@ async def run_delegated_task(
       - 复用已有子 Agent → 本任务临时用指定模型（不改其持久配置，角色身份优先）；
       - 指定模型在本地不存在 → 直接报错并列出可用模型，不静默回退（否则模型分工失效）。
     TS-114（3.27）：images=委派附着图片（base64 列表），传入子会话视觉流。
-    ⛔ #15（0.4.19）：file_paths=要交给子 Agent 阅读的【文档/文本文件】绝对路径列表
-      （已由 loop._resolve_delegation_files 解析校验）。⛔ 本函数**不读这些文件的内容**——
+    #15（0.4.19）：file_paths=要交给子 Agent 阅读的【文档/文本文件】绝对路径列表
+      （已由 loop._resolve_delegation_files 解析校验）。本函数**不读这些文件的内容**——
       只把路径写进任务书【必读文件】段，由子 Agent 自己 read_file（#4 已让 read_file
       能解析 docx/xlsx/pptx/pdf 为文本+格式）。代读会把整篇文档塞回主 Agent 上下文，
       正是 0.4.8「主 Agent 自读 90KB PDF、委派前空耗约 20 分钟」的病根。
@@ -705,7 +705,7 @@ async def run_delegated_task(
     task_id = create_agent_task(project_id, parent_agent_id, parent_session_id,
                                 target_agent_id, target_name, task, expect)
     # 0.4.20（#15）：建事件通道并推 queued——面板无需等轮询就能看到任务已排队。
-    # ⛔ 全部包 try/except：总线是旁路，失败绝不影响委派本身。
+    # 全部包 try/except：总线是旁路，失败绝不影响委派本身。
     try:
         from sidecar.agent_engine import delegation_events as _de
         _de.begin_task(project_id, task_id)
@@ -778,7 +778,7 @@ async def run_delegated_task(
 
             # 0.1.71（TS-118）：简单模式任务消息只留任务书本身（不拼执行须知/
             # 防幻觉约束/契约提醒），符合用户"只发图片不发文字"的委派意图
-            # ⛔ #15（0.4.19）：file_paths 一并传入两种模板 → 任务书带【必读文件】绝对路径清单，
+            # #15（0.4.19）：file_paths 一并传入两种模板 → 任务书带【必读文件】绝对路径清单，
             # 由子 Agent 自己 read_file；本函数不读内容（读的动作交给子 Agent，主 Agent 不自读）。
             user_msg = (_task_user_message_simple(task_id, task, expect,
                                                   image_count=len(images) if images else 0,
@@ -886,7 +886,7 @@ async def run_delegated_task(
                 clear_delegation_cancel(task_id)  # TS-114：标志残留清理（防误伤后续重试）
                 update_agent_task(project_id, task_id, status="done", report=json.dumps(report, ensure_ascii=False))
                 # 0.4.20（#15）：交卷成功 → 面板立刻显示完成与摘要，不必等下一次轮询。
-                # ⛔ 只推 status=done 这一处；failed 路径不逐个推（14 处 update_agent_task
+                # 只推 status=done 这一处；failed 路径不逐个推（14 处 update_agent_task
                 # 里 10 处是 failed，逐个加既冗长又易漏）——统一靠 finally 的 end_task
                 # 推 `task_end` 收口，面板收到后重拉一次快照即可拿到最终 failed 状态与原因。
                 try:
@@ -944,7 +944,7 @@ async def run_delegated_task(
             pass
         raise
     finally:
-        # 0.4.20（#15）：⛔ **必须放 finally**——任何返回/异常/取消路径都要推 task_end
+        # 0.4.20（#15）：**必须放 finally**——任何返回/异常/取消路径都要推 task_end
         # 并回收通道。否则订阅者永远等不到结束信号 → 前端转圈不停
         # （与 0.4.16 C2 根因③「running 状态未收敛致步骤组永不折叠」同源缺陷）。
         # task_id 在本 try 之前已由 create_agent_task 创建，进入此处时必定已定义。

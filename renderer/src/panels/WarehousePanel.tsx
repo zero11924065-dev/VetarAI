@@ -134,7 +134,7 @@ export function WarehousePanel({ projectId, onInject, onClose, initialScope }: {
 
   return (
     /* A12（0.4.25）：白底面板 + 右侧滑入动效；主操作改石墨黑（方向A）。
-       ⛔ 全部文案、data-tip、title 原文保留；检索/注入逻辑零改动。 */
+       全部文案、data-tip、title 原文保留；检索/注入逻辑零改动。 */
     <div className="ui-slide-in-right" style={{ width: 300, flexShrink: 0, borderLeft: `1px solid ${colors.borderSubtle}`, background: colors.bgCard, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* 头部 */}
       <div style={{ padding: '12px 14px', borderBottom: `1px solid ${colors.borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

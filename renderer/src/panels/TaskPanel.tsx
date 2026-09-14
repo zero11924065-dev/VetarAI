@@ -30,7 +30,7 @@ import { startResilientStream } from '../lib/sseStream';
 // - 失败任务提供"重试"（决策 5 一键重试，生成新任务记录）
 // - 0.4.20（#15）：**实时进度**——订阅 `GET /api/projects/{pid}/tasks/stream`，
 //   显示子 Agent 正在调用的工具、轮次与已生成字数。
-//   ⛔ 原注释写「后端无任务推送通道，刷新即拉」**已失真**：后端此前确实没有委派 SSE 端点，
+//   原注释写「后端无任务推送通道，刷新即拉」**已失真**：后端此前确实没有委派 SSE 端点，
 //   面板只在 mount 时拉一次、之后全靠手点刷新（连自动轮询都没有），
 //   用户实测即「委派跑起来后中途看不到任何进展，要等任务整个结束」。
 //   手动"刷新"仍保留，作为流断开时的兜底。
@@ -48,7 +48,7 @@ interface AgentTask {
 }
 
 // 0.4.20（#15）：某任务的实时进度（来自 SSE 增量，DB 里没有这些字段）
-// ⛔ 不再设 `ended` 字段：渲染已用 DB 的 `t.status`（queued/running）门控，
+// 不再设 `ended` 字段：渲染已用 DB 的 `t.status`（queued/running）门控，
 //   任务结束后进度本就不显示，再存一个布尔是冗余的"只写不读"状态。
 //   收口改为**直接删除该任务的进度记录**（见 task_end 分支），防止反复委派累积。
 interface LiveProgress {
@@ -100,7 +100,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
     return () => clearInterval(timer);
   }, [hasActive]);
 
-  // silent=true 用于流事件触发的刷新：⛔ 不能走 setLoading(true)，
+  // silent=true 用于流事件触发的刷新：不能走 setLoading(true)，
   // 否则每条事件都让"刷新"按钮闪一次"刷新中…"（一次委派上百条事件 = 全程闪烁）。
   const loadTasks = useCallback(async (silent: boolean) => {
     if (!silent) setLoading(true);
@@ -122,15 +122,15 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
   useEffect(() => { fetchTasks(); }, [fetchTasks]);
 
   // 0.4.20（#15）：订阅委派实时进度流。
-  // ⛔ 卸载/切项目必须 abort：项目已有 chatPanelUnmountLeak 先例——
+  // 卸载/切项目必须 abort：项目已有 chatPanelUnmountLeak 先例——
   //   卸载后继续写状态会导致内存泄漏与"写已卸载组件"告警。
-  // ⛔ 不叠加定时器：上方每秒计时 setInterval 保持不动，本 effect 只负责流。
-  // ⛔ 断流后自动重连（3s 退避），但**卸载后绝不重连**。
+  // 不叠加定时器：上方每秒计时 setInterval 保持不动，本 effect 只负责流。
+  // 断流后自动重连（3s 退避），但**卸载后绝不重连**。
   useEffect(() => {
     let cancelled = false;
 
     const applyEvent = (ev: SSEEvent) => {
-      if (cancelled) return;                       // ⛔ 卸载后不再写任何状态
+      if (cancelled) return;                       // 卸载后不再写任何状态
       const d = ev.data || {};
       const tid = String(d.task_id || '');
       switch (ev.event) {
@@ -149,7 +149,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
         case 'status': {
           if (!tid) break;
           const st = String(d.state || '');
-          // ⛔ 这里原先有一行 `setLive(... ended: false)`，删掉 ended 后它成了纯空操作。
+          // 这里原先有一行 `setLive(... ended: false)`，删掉 ended 后它成了纯空操作。
           // 状态本身不在这里改：**终态一律以 DB 为准**（静默重拉拿 report/fail_reason
           // 等完整字段），避免流事件与 DB 两个真相源打架。
           if (st === 'done' || st === 'failed') void loadTasks(true);
@@ -181,7 +181,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
         case 'task_end':
           if (!tid) break;
           // 收口：删除该任务的实时进度记录。
-          // ⛔ 不是行为变更（渲染已按 DB 的 status 门控，终态本就不显示进度），
+          // 不是行为变更（渲染已按 DB 的 status 门控，终态本就不显示进度），
           //    而是**内存清理**：一个长会话里反复委派会不断新增 task_id，
           //    只增不删会让 live 记录无上限累积。
           setLive(prev => {
@@ -204,7 +204,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
     };
 
     // B9-2 C8：消费壳+重连壳归并至 lib/sseStream（形状逐行同构）。
-    // ⛔ retryMs 传原值 3000；⛔ setStreamOn 时序不变：onConnect=原 setStreamOn(true) 位置，
+    // retryMs 传原值 3000；setStreamOn 时序不变：onConnect=原 setStreamOn(true) 位置，
     //    onClose=原 finally 内 if(!cancelled) setStreamOn(false)；卸载不重连守卫在壳内。
     const stopStream = startResilientStream({
       url: () => `${API}/projects/${projectId}/tasks/stream`,
@@ -260,7 +260,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <span style={typo.panelTitle}>
               委派任务（最近30条）
-              {/* 0.4.20（#15）：实时流连接指示。⛔ streamOn 此前是只写不读的死状态
+              {/* 0.4.20（#15）：实时流连接指示。streamOn 此前是只写不读的死状态
                   （声明 + 3 处 setStreamOn，从未被读取），现接入让用户知道
                   看到的是实时进度还是已退回手动刷新兜底——流断开时静默降级是最糟的，
                   用户会以为"没进展"其实是"没连上"。圆点做法沿用状态徽标，不引入新图标名。 */}
@@ -399,7 +399,7 @@ export function TaskPanel({ projectId, onJumpToAgent }: {
                   {brief}{(t.task || '').length > 40 ? '…' : ''}
                 </div>
                 {/* 0.4.20（#15）：实时进度——只在任务进行中显示，终态交给下方 DB 字段渲染。
-                    ⛔ 数据来自 SSE 增量（DB 里没有），任务结束后由 snapshot/task_end 重拉清除。 */}
+                    数据来自 SSE 增量（DB 里没有），任务结束后由 snapshot/task_end 重拉清除。 */}
                 {(t.status === 'queued' || t.status === 'running') && live[t.id] && (
                   <div data-testid="live-progress" style={{
                     display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
