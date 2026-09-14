@@ -7,7 +7,7 @@
 > **Compute is free. Context is precious.**
 > VetarAI is a 100% local desktop app: multi-agent collaboration, visual workflows, a pull-mode knowledge warehouse with on-device semantic retrieval. All data stays on your disk — zero dependency on any cloud service.
 
-**当前版本 / Current version：0.4.11**（macOS · Apple Silicon）
+**当前版本 / Current version：0.4.26**（macOS · Apple Silicon）
 
 **Note: This project is developed by a Chinese team. English translations are provided immediately following each corresponding Chinese section. Full English language support will be included in a future update.**
 
@@ -37,10 +37,10 @@
 
 ## ⬇️ 下载 VetarAI / Download VetarAI
 
-**[⬇️ 下载 VetarAI 0.4.11 安装包 / Download VetarAI 0.4.11 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.11)**
+**[⬇️ 下载 VetarAI 0.4.26 安装包 / Download VetarAI 0.4.26 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.4.26)**
 
-（589MB · macOS Apple Silicon · dmg 格式 · **内置 bge-m3 语义嵌入模型，安装即用，无需额外下载**）
-(589MB · macOS Apple Silicon · dmg · **bge-m3 semantic embedding model is bundled — works out of the box, no extra download needed**)
+（588MB · macOS Apple Silicon · dmg 格式 · **已签名 + Apple 公证，首装无需额外放行** · **内置 bge-m3 语义嵌入模型，安装即用，无需额外下载**）
+(588MB · macOS Apple Silicon · dmg · **signed + Apple-notarized, no extra bypass needed on first launch** · **bge-m3 semantic embedding model is bundled — works out of the box, no extra download needed**)
 
 ---
 
@@ -207,21 +207,17 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 使用安装包（推荐普通用户）
 
-1. 下载 `VetarAI-0.4.11-arm64.dmg`，双击挂载
+1. 下载 `VetarAI-0.4.26-arm64.dmg`，双击挂载
 2. 把 **VetarAI** 拖入 **Applications** 文件夹
 3. 从启动台打开
-
-> 首装因未签名可能提示"无法验证开发者"：右键 → 打开；或在终端执行 `xattr -cr /Applications/VetarAI.app`
 
 **准备本地模型**：需本机运行 **Ollama** 并拉取模型（如 `ollama pull qwen3.8`）。想用 LM Studio 等其他启动器？设置 → 推理后端 → 选"OpenAI 兼容"，填入启动器地址即可。
 
 ## 🚀 Install (Recommended)
 
-1. Download `VetarAI-0.4.10-arm64.dmg` and double-click to mount
+1. Download `VetarAI-0.4.26-arm64.dmg` and double-click to mount
 2. Drag **VetarAI** into **Applications**
 3. Open from Launchpad
-
-> First launch may show an "unidentified developer" warning (the app is unsigned): right-click → Open, or run `xattr -cr /Applications/VetarAI.app` in Terminal.
 
 **Prepare local models**: run **Ollama** locally and pull a model (e.g., `ollama pull qwen3.8`). Prefer LM Studio or another launcher? Settings → Inference Backend → choose "OpenAI Compatible" and enter the launcher's address.
 
