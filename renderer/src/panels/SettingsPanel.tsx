@@ -702,11 +702,9 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
                 <input className="ui-input" style={inpStyle} type="number" value={cfg.proxy_http_port}
                   onChange={e => setCfg({ ...cfg, proxy_http_port: Number(e.target.value) })} />
               </div>
-              <div style={{ flex: 1 }}>
-                <label style={formLabel}>SOCKS 代理端口（可选）</label>
-                <input className="ui-input" style={inpStyle} type="number" value={cfg.proxy_socks_port}
-                  onChange={e => setCfg({ ...cfg, proxy_socks_port: Number(e.target.value) })} />
-              </div>
+              {/* 📌 SOCKS 端口入口 0.4.26 起隐藏：proxy_socks_port 后端零消费（仅存默认值+整数校验，
+                  全部代理流量只走 proxy_http_port），配置键保留作未来 SOCKS 支持预留，
+                  详见 交接/20-界面功能清单-供UI重构.md「SOCKS 代理端口」行 */}
             </div>
 
             <label style={formLabel}>联网范围（境外网站）</label>
