@@ -1121,7 +1121,10 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
     # work/state.json，中断后文件保留最后现场（status != done 即中断态，可据此续跑）。
     _exec_state: dict = {
         "session_id": _sid, "agent_id": _aid, "model": req.model,
-        "status": "running", "step": 0, "max_rounds": 5, "tokens_used": 0,
+        # REQ-MSG-021（0.4.28）：快照初始 max_rounds 同样读配置真值（此前硬编码 5，
+        #   与 gen() 内 :1144 的实际轮次上限不一致，快照首帧会撒谎）。
+        "status": "running", "step": 0,
+        "max_rounds": int(get_config().get("max_tool_rounds", 200)), "tokens_used": 0,
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "text_chars": 0, "steps": [],
@@ -1231,6 +1234,14 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         _cancel_waiter: asyncio.Task | None = (
             asyncio.ensure_future(_cancel_event.wait()) if _cancel_event is not None else None)
         try:
+            # REQ-MSG-021（0.4.28）：流启动后、第一轮开始前先发一个初始 state 事件。
+            #   此前 state 只在轮末回传（loop.py 轮末统一发），第一轮期间前端步骤分母
+            #   只能停在占位值（实测显示「步骤 0/5」，而真实上限是配置 max_tool_rounds）。
+            #   只多发一个事件、不改既有字段结构：step/tokens_used 均为 0，
+            #   max 直接给配置真值；前端 state 分支按同一路径落地（缺省字段有 typeof 守卫）。
+            #   ⛔ 必须放在 try 内、while 之前：此刻 register_stream/begin_stream 已完成，
+            #     客户端在此断开（GeneratorExit）也能走 finally 的完整清理与 interrupted 落盘。
+            yield _sse_format("state", {"step": 0, "max": _max_rounds, "tokens_used": 0})
             while True:
                 if next_task is None:
                     next_task = asyncio.ensure_future(aiter.__anext__())

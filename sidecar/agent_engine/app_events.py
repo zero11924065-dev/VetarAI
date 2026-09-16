@@ -77,6 +77,10 @@ RESOURCE_PLUGIN = "plugin"          # → PluginPanel
 RESOURCE_KNOWLEDGE = "knowledge"    # → KnowledgePanel / WarehouseManager
 RESOURCE_INFERENCE = "inference"    # → InferencePanel（SettingsPage 内）
 RESOURCE_AGENT = "agent"            # → IndependentAgentsPanel / AgentPanel
+# REQ-AGT-020（0.4.28）：会话消息变更 → ChatPanel。只在委派写子会话路径发射
+# （delegation.py 四处 save_message 后），⛔ 不挂全局 save_message——主聊天热路径
+# 每条消息都过，挂上即事件风暴。payload 带 session_id，前端据此定向重拉。
+RESOURCE_SESSION = "session"
 
 # ── 动作类型常量 ──
 ACTION_CREATE = "create"

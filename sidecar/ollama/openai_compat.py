@@ -173,7 +173,11 @@ class OpenAICompatConnector:
 
     # ── 非流式 chat（圆桌/总结等在用）──
     async def chat(self, model: str, messages: list[dict[str, Any]], *,
-                   stream: bool = False, images: list[str] | None = None) -> str:
+                   stream: bool = False, images: list[str] | None = None,
+                   read_timeout_s: float | None = None) -> str:
+        """read_timeout_s（0.4.28，REQ-WF-015）：调用方级读超时覆盖
+        （与 OllamaConnector.chat 同参，工作流引擎按节点 timeout_s 透传）；
+        None（缺省）→ 走 _client() 动态读 config，行为与之前完全一致。"""
         payload: dict[str, Any] = {"model": model, "messages": list(messages), "stream": False}
         # A2/A4（0.4.15）：注入推理参数。⚠️ OpenAI 兼容端参数是**顶层字段**（非嵌套 options），
         # 且 num_ctx / top_k 不被支持 → model_options() 内部已按后端映射并静默丢弃，
@@ -193,7 +197,9 @@ class OpenAICompatConnector:
                          for b in parsed]
                 payload["messages"] = self._merge_images_into_messages(payload["messages"], parts)
 
-        client = await self._client()
+        # 0.4.28（REQ-WF-015）：调用方显式给 read_timeout_s 时覆盖配置值；缺省行为不变
+        client = await self._client(reading=read_timeout_s) if read_timeout_s is not None \
+            else await self._client()
         r = await client.post(f"{self._base()}/chat/completions", json=payload)
 
         # 400/500 + 带图 → 模型不支持多模态：剥图重试一次（同款降级；

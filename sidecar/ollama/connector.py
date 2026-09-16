@@ -170,11 +170,17 @@ class OllamaConnector:
         *,
         stream: bool = False,
         images: list[str] | None = None,
+        read_timeout_s: float | None = None,
     ) -> str:
         """Send a non-streaming chat request with vision support auto-detection.
 
         Timeout: connect 10s (防空转) + reading 300s (长回复不中断). 非 2xx 不重试;
         we raise a NetworkGuardError with a clear Chinese message (403 included).
+
+        read_timeout_s（0.4.28，REQ-WF-015）：调用方级读超时覆盖（工作流 inference /
+        条件裁判节点的 timeout_s 经引擎传到这里）。提供时覆盖 config `timeout_reading`；
+        None（缺省）→ 走原有 _client() 动态取值，行为与之前完全一致。
+        超时值参与 client 缓存 key，故不同超时的调用各自复用独立 client，互不影响。
         """
         payload: dict[str, Any] = {
             "model": model,
@@ -201,7 +207,10 @@ class OllamaConnector:
                 if payload["messages"]:
                     payload["messages"] = payload["messages"][:-1] + [merged]
 
-        client = await self._client()
+        # 0.4.28（REQ-WF-015）：调用方显式给 read_timeout_s 时覆盖配置值；
+        # 缺省（None）→ _client() 内部动态读 config，与改造前完全一致。
+        client = await self._client(reading=read_timeout_s) if read_timeout_s is not None \
+            else await self._client()
         r = await client.post(f"{self._base}/api/chat", json=payload)
 
         # 400/500 + 带图 → 模型不支持图片，剥图重试一次（M6 checkpoint-041：

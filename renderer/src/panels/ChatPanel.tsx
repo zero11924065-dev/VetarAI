@@ -29,6 +29,7 @@ import { colors, fonts, radius, shadow, btnPrimary, btnSecondary, btnGhost, btnD
 import { Icon, Spinner, IconName } from '../Icon';
 import { confirmDialog, promptDialog } from '../Dialog';
 import { on } from '../events';
+import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
 import { WarehousePanel } from './WarehousePanel';
 import { reportBusy } from '../busyState';
 
@@ -736,10 +737,16 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   // M5（TS-111）：断线重连提示条 + 最大重试次数（读配置，默认 3）
   const [reconnectNotice, setReconnectNotice] = useState<string | null>(null);
   const reconnectMaxRef = useRef(3);
+  // REQ-MSG-021（0.4.28）：步骤分母的真实上限（读配置 max_tool_rounds，回落 200，⛔ 不许再用占位 5）。
+  //   后端 state 事件只在轮末回传，建气泡/显示兜底都以此 ref 为准，自第一轮起显示真实上限。
+  const maxToolRoundsRef = useRef(200);
   useEffect(() => {
     fetch(`${API}/config`).then(r => r.ok ? r.json() : null).then((cfg: any) => {
       const n = Number(cfg?.reconnect_max_attempts);
       if (Number.isFinite(n) && n >= 1 && n <= 10) reconnectMaxRef.current = Math.floor(n);
+      // 校验域与 sidecar/config/store.py 一致（1-1000 整数）；非法/缺失一律保持回落 200
+      const m = Number(cfg?.max_tool_rounds);
+      if (Number.isFinite(m) && m >= 1 && m <= 1000) maxToolRoundsRef.current = Math.floor(m);
     }).catch(() => {});
   }, []);
   // 0.4.12 附带修复：卸载收尾。
@@ -844,6 +851,30 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionId]);
+
+  // REQ-AGT-020（0.4.28）：子会话消息视图实时刷新。
+  // 委派写子会话由服务端直写 DB（save_message 无流式事件），本面板此前只在切会话/
+  // 初始化/跳转时一次性加载 → 用户打开子会话看委派进度时，视图不随委派推进更新。
+  // 后端委派写点后经 A13 总线发 resource='session' 事件（payload 带 session_id）→
+  // 这里订阅 APP_RESOURCE_CHANGED（与五个面板同一条 SSE→广播通道），三道过滤后
+  // 走既有 loadSessionMessages 重拉 DB 合并——DB 仍是权威源，F6 缓存结构不动，
+  // 滚动位置由 autoScrollRef 跟随语义自然保留（用户上翻时 autoScroll=false 不拽回），
+  // 不新发明合并/滚动逻辑：
+  //   ① 只看 resource==='session'：gap（'*'）与其他资源变更不碰消息区；
+  //   ② session_id 必须等于当前打开的会话，其他会话的事件忽略；
+  //   ③ ⛔ 该会话有活跃流（activeStreamSidRef===sid）绝不重拉——重拉以 DB 为准合并，
+  //      会冲掉进行中的乐观/流式气泡态。
+  useEffect(() => {
+    const off = on(APP_RESOURCE_CHANGED, (ev: AppResourceEvent) => {
+      if (ev.gap || ev.resource !== 'session') return;                    // ① 只处理 session 资源变更
+      const sid = String(ev.session_id || '');
+      if (!sid || sid !== currentSessionIdRef.current) return;            // ② 仅当前打开的会话
+      if (activeStreamSidRef.current === sid) return;                     // ③ ⛔ 流式中的会话绝不重拉
+      void loadSessionMessages(sid);                                      // 走既有 DB 合并路径
+    });
+    return off;                            // 卸载注销（不重连、无幽灵监听）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   // ── 数据加载 ──
   const fetchAgentData = useCallback(async () => {
@@ -1398,7 +1429,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     const assistantMsg: Message = {
       id: newLocalMsgId(), // TS-102 B14：改用单调序号生成器，杜绝同毫秒碰撞
       role: 'assistant', content: '', model_used: modelUsed,
-      toolSteps: [], step: 0, maxStep: 5, tokensUsed: 0,
+      toolSteps: [], step: 0, maxStep: maxToolRoundsRef.current, tokensUsed: 0,
       startedAt: Date.now(), // TS-116（3.29）：气泡出现时间
     };
     setLocalMessages(prev => [...prev, assistantMsg]);
@@ -1693,7 +1724,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             });
           const newAssistant: Message = {
             id: newId, role: 'assistant', content: '', model_used: modelUsed,
-            toolSteps: [], step: 0, maxStep: next[idx].maxStep ?? 5, tokensUsed: 0,
+            toolSteps: [], step: 0, maxStep: next[idx].maxStep ?? maxToolRoundsRef.current, tokensUsed: 0,
             startedAt: Date.now(),
           };
           next.splice(idx + 1, 0, ...injectedBubbles, newAssistant);
@@ -1915,12 +1946,24 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         // 长加载计时：发送后 8s 未收到正文 → 气泡显示等待秒数（每秒刷新）。
         // H19 修复：清除条件必须是"首个正文 token"——thinking/tool_call 等事件几秒内就会到达，
         // 若任何事件都清除计时器，指示器永远到不了 8s 阈值；用户真正等待的是正文输出。
-        const waitTimer = setInterval(() => {
-          // 止血（0.4.24）：persist:false —— 同流级计时器，waitingSeconds 是瞬态显示值，
-          //   每秒 tick 不得引发 47MB 缓存全量重写。
-          patchStreamMsg(m => ({ ...m, waitingSeconds: (m.waitingSeconds || 0) + 1 }), { persist: false });
-        }, 1000);
-        const stopWaitTimer = () => clearInterval(waitTimer);
+        // REQ-MSG-022（0.4.28）：等待计时改【按 segment 复位】。
+        //   旧缺陷：gotFirstContent 是流级一次性门闩——段1 首 token 到达即停表后，
+        //   segment_break 切出的段2 气泡永不再起计 → 其 waitingSeconds 恒 0，
+        //   「已等待 Ns」横幅判据（waitingSeconds>=8 且 content 为空）对段2 永不成立。
+        //   修法：segment_break 落地（origApplyEvent 已把 streamMsgId 重指向段2）后
+        //   重新放开首 token 门闩并重起计时器，后续 tick 写入段2 气泡（从 0 起计）。
+        //   ⛔ 止血纪律（0.4.24）不变：tick 仍走 persist:false 不落盘通道。
+        let waitTimer: ReturnType<typeof setInterval> | null = null;
+        const startWaitTimer = () => {
+          if (waitTimer) clearInterval(waitTimer);
+          waitTimer = setInterval(() => {
+            // 止血（0.4.24）：persist:false —— 同流级计时器，waitingSeconds 是瞬态显示值，
+            //   每秒 tick 不得引发 47MB 缓存全量重写。
+            patchStreamMsg(m => ({ ...m, waitingSeconds: (m.waitingSeconds || 0) + 1 }), { persist: false });
+          }, 1000);
+        };
+        const stopWaitTimer = () => { if (waitTimer) { clearInterval(waitTimer); waitTimer = null; } };
+        startWaitTimer();
         const gotFirstContent = { v: false };
         const origApplyEvent = applyEvent;
         const applyEventWrapped = (ev: { event: string; data: any }) => {
@@ -1930,6 +1973,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             patchStreamMsg(m => (m.waitingSeconds ? { ...m, waitingSeconds: 0 } : m));
           }
           origApplyEvent(ev);
+          if (ev.event === 'segment_break') {
+            // 段2 重新起计：必须在 origApplyEvent 之后——它已完成定格段1（waitingSeconds 清 0）
+            // 并把 streamMsgId 重指向段2 新气泡，重起计时器的下一个 tick（1s 后）自然写段2。
+            gotFirstContent.v = false;
+            startWaitTimer();
+          }
         };
         try {
           const res = await fetch(`${API}/ollama/chat/stream`, {
@@ -2494,7 +2543,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                 {/* M1-4：state 计数（步骤 x/max · 已用 N tokens） */}
                 {msg.role === 'assistant' && (msg.tokensUsed != null || (msg.step != null && msg.step > 0)) && (
                   <div style={{ marginTop:6, fontSize:11, color:colors.textTertiary }}>
-                    步骤 {msg.step ?? 0}/{msg.maxStep ?? 5} · 已用 {msg.tokensUsed ?? 0} tokens
+                    步骤 {msg.step ?? 0}/{msg.maxStep ?? maxToolRoundsRef.current} · 已用 {msg.tokensUsed ?? 0} tokens
                   </div>
                 )}
                 </>

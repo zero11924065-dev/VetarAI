@@ -699,6 +699,10 @@ def build_system_prompt(
             "不要声称“无法把图片发给子 Agent”；任务书里直接引用附图（如“将附图逐张转写为文字”）。"
             "若图片在文件夹中（不在聊天里），先用 list_dir 拿到清单，再通过 image_paths 参数"
             "把图片路径列表传入，子 Agent 将直接看到图片，无需自己逐张 read_file。\n"
+            "- 【分批委派图片·强制】分批委派处理图片时，每批必须经 image_paths 传【该批图片的"
+            "绝对路径子集】（先 list_dir 盘点，再按批切分路径列表）。聊天附着图在每次委派时"
+            "全量自动携带、【无法按批拆分】，故分批场景一律用 image_paths；"
+            "任务书涉及图片却一张图都没带的委派会被系统拦截退回，需补图后重试。\n"
             "- 【文档传递·强制】委派涉及文档（docx/xlsx/pptx/pdf/doc 等）时，⛔ 必须用 "
             "file_paths 参数传【文件路径】，由子 Agent 自己 read_file 读取"
             "（它能把这些格式解析为文本+格式概要）。【绝不要自己先 read_file 再把全文抄进任务书】"
@@ -749,6 +753,15 @@ _MIME_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"
                 ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp"}
 _MAX_DELEGATION_IMAGES = 50      # 上限：最多 50 张（任务单 2.2）
 _MAX_DELEGATION_IMAGE_MB = 10    # 单张 ≤10MB（与聊天附件上限一致，需求文档 3.20②）
+
+# REQ-AGT-019（0.4.28）：零图片委派的图片意图关键词（匹配任务书 task/expect，大小写不敏感）。
+# 根因：技能不提 image_paths → 主模型不传 → F1 拦截（只在"传了参但一张没加载到"时触发）
+# 与 delegation.py 视觉守卫（只在"有图"时查模型能力）双双以"传了图"为前提 →
+# 零图片静默委派成功，子 Agent 只能说"不支持OCR"或编造识别结果。
+# ⛔ 关键词刻意【不含】裸"识别"——"识别这段文字的语种/意图"这类纯文本任务太常见，
+#    误伤面太大；图片意图由 图片/图像/照片/截图/OCR/识图/看图/图中/影像/扫描件 表达。
+_IMAGE_INTENT_RE = _re.compile(
+    r"图片|图像|照片|截图|OCR|识图|看图|图中|影像|扫描件", _re.IGNORECASE)
 
 
 def _load_delegation_images(image_paths: list, sandbox_root: str) -> tuple[list[str], list[str]]:
@@ -1628,6 +1641,31 @@ async def run_tool_loop(
                                     "委派已中止——若继续，子 Agent 将读不到任何文件而只能编造内容。"
                                     "请改用【完整绝对路径】重试；以下是工作目录下真实存在的文档："
                                     + _real_docs_hint(sandbox_root))}
+                        # REQ-AGT-019（0.4.28）：零图片 + 图片意图守卫。
+                        # 位置：合并图片（附着图 first_round_images + image_paths 加载图）
+                        # 之后、真正发起委派（resolve_target/建新/执行）之前。
+                        # 触发：合并后【零图片】且任务书（task/expect）含图片意图关键词
+                        # → 不发起委派，回传结构化失败引导主模型自纠正重试（对齐 F1 风格：
+                        # 哨兵短路 + 附工作目录真实图片清单），绝不放它静默成功——
+                        # 否则子 Agent 只能说"不支持OCR"或凭空编造识别结果（0.4.27 实测）。
+                        # 不拦：有附着图 / image_paths 加载成功 / 任务书无图片意图。
+                        if not _f1_blocked \
+                                and not (first_round_images or []) and not _loaded_images:
+                            _intent_m = _IMAGE_INTENT_RE.search(f"{_task_arg}\n{_expect_arg}")
+                            if _intent_m is not None:
+                                _f1_blocked = True
+                                result = {"ok": False, "error": (
+                                    f"images_missing: 任务书含图片意图（命中「{_intent_m.group(0)}」），"
+                                    "但本次委派一张图片都没有：既没有聊天附着图，"
+                                    "也未通过 image_paths 传入任何图片。委派已中止——若继续，"
+                                    "子 Agent 将收不到任何图片，只能回答“不支持OCR”或编造识别结果。\n"
+                                    "图片有两条通道：\n"
+                                    "① 聊天附着图：附着在消息里的图片会在【每次委派时全量自动携带】，"
+                                    "无需传参——但它无法按批拆分；\n"
+                                    "② 文件夹图片：必须用 image_paths 参数传【该批图片的绝对路径列表】"
+                                    "（可先 list_dir 盘点工作目录拼路径；分批委派时每批传该批子集）。\n"
+                                    "请按上述通道补图后重新委派；以下是工作目录下真实存在的图片："
+                                    + _real_images_hint(sandbox_root))}
                         _agent = None
                         _terr = ""
                         _auto_created = False

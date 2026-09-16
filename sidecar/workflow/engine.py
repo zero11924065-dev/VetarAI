@@ -387,6 +387,25 @@ class WorkflowEngine:
         return []
 
     @staticmethod
+    def _node_timeout_s(node: dict) -> float | None:
+        """0.4.28（REQ-WF-015）：读节点的 timeout_s（秒），无效/未配 → None（用全局默认）。
+
+        引擎侧再 clamp 到 10~7200 兜底：创建走 strict=False 宽松校验时硬伤才拦截，
+        且字段表只是读面——非法值可能绕过 schema 校验进来（如直接写库的旧定义）。
+        bool 拒绝（True 会变 1.0，是常见误配），NaN/inf 同样拒绝。
+        """
+        raw = node.get("timeout_s")
+        if raw is None or isinstance(raw, bool):
+            return None
+        try:
+            f = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if f != f or f in (float("inf"), float("-inf")):   # NaN / inf
+            return None
+        return min(max(f, 10.0), 7200.0)
+
+    @staticmethod
     def _filter_image_paths(paths: list) -> list[str]:
         """过滤出真实存在且扩展名为图片的文件路径。"""
         imgs: list[str] = []
@@ -435,7 +454,8 @@ class WorkflowEngine:
         return kept, dropped
 
     async def _interruptible_chat(self, model: str, user_content: str,
-                                  images: list[str]) -> str:
+                                  images: list[str],
+                                  read_timeout_s: float | None = None) -> str:
         """0.2.3：可中断的模型调用。
 
         旧实现直接 await 一次 HTTP 调用——模型加载/推理动辄数分钟，期间
@@ -447,10 +467,16 @@ class WorkflowEngine:
           * C5（0.4.16）改为后台任务 + **await 取消 Event**：点停止立即唤醒并
             cancel 底层 task，实测延迟 0.000s。Event 由 `cancel_event(run_id)` 懒建，
             `request_workflow_cancel` 置位。
+          * 0.4.28（REQ-WF-015）：read_timeout_s 透传节点级读超时。
+            **为 None 时调用形态与之前逐字节一致**（不传该 kwarg）——
+            部分测试桩 connector 的 chat 签名不收 **kw，无条件传参会 TypeError。
         """
+        chat_kw: dict[str, Any] = {}
+        if read_timeout_s is not None:
+            chat_kw["read_timeout_s"] = read_timeout_s
         task = asyncio.create_task(
             self.connector.chat(model, [{"role": "user", "content": user_content}],
-                                images=images if images else None))
+                                images=images if images else None, **chat_kw))
         # C5（0.4.16）：原实现 `asyncio.wait({task}, timeout=2.0)` 每 2 秒才轮询一次
         # 取消标志 → 用户点停止最坏要**等 2 秒**才生效（模型还在烧算力）。
         # 改为同时 await 取消 Event：点停止**立即**唤醒，无轮询延迟。
@@ -507,8 +533,11 @@ class WorkflowEngine:
                                           "dropped": dropped[:10],
                                           "reason": "非图片文件（如音频）不能作为图片输入，已剔除"})
         user_content = prompt or "请处理输入。"
+        # 0.4.28（REQ-WF-015）：节点级读超时（缺省 None → 全局 timeout_reading 默认 300s 不变）
+        node_timeout = self._node_timeout_s(node)
         try:
-            text = await self._interruptible_chat(model, user_content, images)
+            text = await self._interruptible_chat(model, user_content, images,
+                                                  read_timeout_s=node_timeout)
         except WorkflowCancel:
             raise
         except Exception as e:
@@ -517,11 +546,15 @@ class WorkflowEngine:
             #    （真机事故：n7 节点跑了 300180ms 被 READING_TIMEOUT=300s 掐断，
             #     界面只显示"模型调用失败："，用户以为是模型出错，实际是超时）。
             #    与 T1（0.4.8）同一类缺陷、同一修法：走 _exc_text 统一带上异常类型名。
+            # 0.4.28：报错里的"已等待 Ns"必须写**实际生效**的超时——节点配了 timeout_s
+            #    时还写全局值会误导（与 A1 改动态取值是同一类失真）。
+            eff_timeout = node_timeout if node_timeout is not None else _infer.timeout_reading()
             return NodeResult(node["id"], ok=False, error=f"模型调用失败：{_exc_text(e, timeout_hint=(
-                f"模型调用超时：{type(e).__name__}。已等待 {_infer.timeout_reading():.0f}s 仍未返回"
+                f"模型调用超时：{type(e).__name__}。已等待 {eff_timeout:.0f}s 仍未返回"
                 f"（非流式调用的 reading 超时上限）。常见原因：本地大参数模型（如 35B）"
                 f"处理超长文本推理耗时超过该上限。可尝试：① 减小单批输入（循环节点分批更小）"
-                f"② 换更小的模型 ③ 在 设置→推理 调大「非流式读超时」。模型：{model}"))}",
+                f"② 换更小的模型 ③ 给本节点配置更大的 timeout_s（秒，10~7200），"
+                f"或在 设置→推理 调大「非流式读超时」。模型：{model}"))}",
                 model_used=model)
         return NodeResult(node["id"], ok=True, output=text, model_used=model)
 
@@ -553,16 +586,21 @@ class WorkflowEngine:
         if model:
             await self._ensure_model(model)
             prompt = render_template(str(node.get("prompt") or "请判断并只输出分支名。"), self.variables)
+            # 0.4.28（REQ-WF-015）：动态裁判同走 connector.chat → 同样支持节点级 timeout_s
+            node_timeout = self._node_timeout_s(node)
             try:
-                text = await self._interruptible_chat(model, prompt, [])
+                text = await self._interruptible_chat(model, prompt, [],
+                                                      read_timeout_s=node_timeout)
             except WorkflowCancel:
                 raise
             except Exception as e:
                 # 0.4.11：走 _exc_text 统一带类型名 + 超时专项提示（TimeoutError 的
                 # str() 为空，此前会让用户看到"裁判模型调用失败："后面一片空白）
+                # 0.4.28：提示写实际生效超时（节点 timeout_s 优先于全局值）。
+                eff_timeout = node_timeout if node_timeout is not None else _infer.timeout_reading()
                 return (NodeResult(node["id"], ok=False, error=f"裁判模型调用失败：{_exc_text(e, timeout_hint=(
                                        f'裁判模型调用超时：{type(e).__name__}。已等待 '
-                                       f'{_infer.timeout_reading():.0f}s 仍未返回（条件分支的动态裁判无法判定，'
+                                       f'{eff_timeout:.0f}s 仍未返回（条件分支的动态裁判无法判定，'
                                        f'已按 false 分支继续）。模型：{model}'))}",
                                    model_used=model), "false")
             lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]

@@ -68,6 +68,47 @@ async def _workflow_list(params: dict, ctx: dict) -> dict:
     return {"ok": True, "count": len(brief), "workflows": brief}
 
 
+async def _workflow_get(params: dict, ctx: dict) -> dict:
+    """查看单个工作流的完整定义（查询类，直接执行）。
+
+    workflow_list 只回裁剪后的摘要（id/name/描述前 120 字），**没有 definition**；
+    Agent 要参考现有流程的节点写法、或修改前先看现状，都需要完整定义。
+    与 REST 端点 GET /api/workflows/{wf_id} 同一数据源（store.get_workflow），
+    返回含 definition 的完整工作流对象。
+    """
+    from sidecar.storage.store import get_workflow
+    wf_id = str(params.get("workflow_id") or params.get("id") or "").strip()
+    if not wf_id:
+        return {"ok": False, "error": "bad_arg: 需要 workflow_id（可先用 workflow.list 查看有哪些工作流）"}
+    wf = get_workflow(wf_id)
+    if wf is None:
+        return {"ok": False, "error": f"workflow_not_found: 工作流 {wf_id} 不存在（可先用 workflow.list 查现有 id）"}
+    return {"ok": True, "workflow": wf}
+
+
+async def _workflow_get_node_schema(params: dict, ctx: dict) -> dict:
+    """查询工作流节点类型的字段说明（查询类，直接执行）。
+
+    数据源是 schema.NODE_FIELD_SPECS（每种节点类型的字段表：字段名/必填/类型/说明），
+    漂移由测试守护（断言其键集与 NODE_TYPES 完全一致），故本动作只是读取转交，
+    不在此另写第二份清单（静态抄一份注定漂移——节点类型清单曾因此漏 file_output）。
+    """
+    from sidecar.workflow.schema import NODE_FIELD_SPECS, NODE_TYPES
+    ntype = str(params.get("node_type") or params.get("type") or "").strip()
+    if ntype:
+        fields = NODE_FIELD_SPECS.get(ntype)
+        if fields is None:
+            return {"ok": False, "error": (
+                f"unknown_node_type: 没有名为 {ntype!r} 的节点类型。"
+                f"合法节点类型：{'、'.join(NODE_TYPES)}。")}
+        return {"ok": True, "node_type": ntype, "fields": fields}
+    return {"ok": True, "count": len(NODE_FIELD_SPECS),
+            "node_types": list(NODE_TYPES),
+            "schemas": NODE_FIELD_SPECS,
+            "note": "每种节点类型的字段表：name=字段名，required=是否必填，type=取值类型，desc=说明。"
+                    "通用字段：label（显示名）与 retry（失败重试次数）对所有节点可用。"}
+
+
 async def _workflow_get_runs(params: dict, ctx: dict) -> dict:
     """查询工作流运行记录与状态（查询类）。运行是长任务，故触发后靠本动作轮询结果。"""
     from sidecar.storage.store import list_workflow_runs, get_workflow_run
@@ -355,7 +396,8 @@ async def _workflow_create(params: dict, ctx: dict) -> dict:
         except Exception:
             _types = ""
         hint = "若是定义校验失败，请按上述错误修正 nodes/edges 后重试；" \
-               "可先用 workflow_list 参考现有工作流结构。"
+               "可先用 workflow.get 查看现有工作流的完整定义作参考，" \
+               "用 workflow.get_node_schema 查各节点类型的字段说明。"
         if _types:
             hint += f" 合法节点类型：{_types}。"
         return {"ok": False, "error": f"workflow_create_failed: {_exc_detail(e)}", "hint": hint}
@@ -439,6 +481,25 @@ APP_MODULE_REGISTRY: dict[str, dict[str, Any]] = {
                 "description": "列出全部工作流（id/名称/描述）。调用 workflow_run 前先用它拿到 workflow_id。",
                 "params": {},
                 "handler": _workflow_list,
+                "needs_confirm": False,
+            },
+            "get": {
+                "description": "查看单个工作流的完整定义（含 definition 的 nodes/edges/节点字段详情），只读。"
+                             "workflow.list 只回摘要，搭建或修改前需要参考节点写法时用本动作。",
+                "params": {
+                    "workflow_id": "str（必填，工作流 id；用 workflow.list 查）",
+                },
+                "handler": _workflow_get,
+                "needs_confirm": False,
+            },
+            "get_node_schema": {
+                "description": "查询工作流节点类型的字段说明（字段名/是否必填/类型/一句话说明），只读。"
+                             "传 node_type 查单个类型；不传则返回全部类型的字段表。"
+                             "写 definition 前先查它，避免臆造字段名。",
+                "params": {
+                    "node_type": "str（可选，节点类型名，如 inference/loop/file_input；不传返回全部）",
+                },
+                "handler": _workflow_get_node_schema,
                 "needs_confirm": False,
             },
             "run": {

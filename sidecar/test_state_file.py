@@ -105,6 +105,11 @@ def main():
                                    messages=[{"role": "user", "content": "读文件"}])
         response = await appmod.api_ollama_chat_stream(req)
         aiter = response.body_iterator
+        # REQ-MSG-021（0.4.28）：gen() 在 while 前多发一个初始 state 事件（step=0、max=配置、
+        #   tokens_used=0）→ 首个 __anext__ 消费它，第二个才是 tool_call。
+        #   只多这一个事件，后续序列与旧口径一致。
+        ev0 = await aiter.__anext__()   # 初始 state 事件（0.4.28 新增）
+        assert "event: state" in ev0, f"首事件应为初始 state，实际：{ev0[:120]}"
         await aiter.__anext__()   # tool_call 事件
         await aiter.aclose()      # 客户端断开 → CancelledError → 终态落盘
         await asyncio.sleep(0.05)

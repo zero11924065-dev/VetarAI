@@ -58,7 +58,9 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
       ev('token', { delta: '目录' }),
       ev('tool_call', { id: 'c1', name: 'list_dir', args: { path: '.' }, status: 'running' }),
       ev('tool_result', { id: 'c1', name: 'list_dir', ok: true, summary: '2 个条目' }),
-      ev('state', { step: 1, max: 5, tokens_used: 673 }),
+      // REQ-MSG-021（0.4.28）：真实后端的 state.max 来自配置 max_tool_rounds（缺省 200），
+      // 不再有硬编码 5；mock 载荷同步对齐真实协议（断言随之改 步骤 1/200）。
+      ev('state', { step: 1, max: 200, tokens_used: 673 }),
       ev('token', { delta: '里有 2 个文件' }),
       ev('done', { content: '目录里有 2 个文件', tool_calls: [] }),
     ]);
@@ -133,9 +135,9 @@ describe('ChatPanel 流式渲染（mock SSE）', () => {
       expect(screen.getAllByText(/list_dir 完成/).length).toBeGreaterThan(0);
     }, { timeout: 3000 });
 
-    // state 计数显示
+    // state 计数显示（REQ-MSG-021：分母与 0.4.28 真实后端协议对齐，max=配置缺省 200）
     await waitFor(() => {
-      expect(screen.getByText(/步骤 1\/5/)).toBeTruthy();
+      expect(screen.getByText(/步骤 1\/200/)).toBeTruthy();
     }, { timeout: 3000 });
 
     // 停止按钮：生成中应出现；生成结束后消失（这里验证按钮逻辑存在且可点——用发送中状态）

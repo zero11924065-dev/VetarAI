@@ -14,8 +14,8 @@ test_p15_delegation_stream / test_office_io / test_loop），一条命令即可�
 
 ## 用法
 
-    python3 scripts/mutate_frontend.py            # 跑全部 4 项变异
-    python3 scripts/mutate_frontend.py 1          # 只跑第 1 项
+    python3 scripts/mutate_frontend.py            # 跑全部变异档
+    python3 scripts/mutate_frontend.py 1          # 只跑第 1 档
     python3 scripts/mutate_frontend.py --list     # 只列清单不执行
 
 ## ⛔ 判定规则（与后端 MUTATE 一致）
@@ -314,6 +314,147 @@ MUTATIONS: list[dict] = [
         "mutant": "position:'absolute', top:34, right:0, zIndex:1201 /* MUTATE-19：改回顶栏内 absolute */",
         "test": "src/__tests__/chatMoreMenuPortal.test.tsx",
         "expect_fail": ["M1"],
+    },
+    # ── REQ-INFER-009（0.4.28）推理参数面板草稿模式 ─────────────────────
+    {
+        "id": 20,
+        "name": "REQ-INFER-009 撤掉 blur 提交（改了不保存）",
+        "why": "草稿模式的保存入口只有 blur 与 Enter 两条。撤掉 blur 提交后，用户改完点别处"
+               "就丢修改——正是草稿模式要替代的旧体验之一。凡以 blur 收尾的用例都必须红。",
+        "file": PANELS / "ModelOptionsEditor.tsx",
+        "anchor": """                        onBlur={() => {
+                          focusKeyRef.current = null;
+                          void commitParam(name, def, val);
+                        }}""",
+        "mutant": """                        onBlur={() => {
+                          focusKeyRef.current = null;
+                          /* MUTATE-20：撤掉 blur 提交 */
+                        }}""",
+        "test": "src/__tests__/modelOptionsEditor.test.tsx",
+        "expect_fail": ["编辑 num_ctx", "清空某项", "越界值", "D1", "D2"],
+    },
+    {
+        "id": 21,
+        "name": "REQ-INFER-009 提交时不校验（越界照存）",
+        "why": "coerce 是注入前的最后一道闸：撤掉校验，越界值会直送 onSave → PUT /config，"
+               "后端 _PARAM_RANGE 之外靠后端静默丢弃兜底 → 回到「设了不生效」的坑。"
+               "越界值用例与 D2 的「不调用 onSave」必须红。",
+        "file": PANELS / "ModelOptionsEditor.tsx",
+        "anchor": "    if (!r.ok) { setErr(r.why); return; }          // ⛔ 草稿保留，不回弹（REQ-INFER-009）",
+        "mutant": "    if (!r.ok) { /* MUTATE-21：越界照存 */ }",
+        "test": "src/__tests__/modelOptionsEditor.test.tsx",
+        "expect_fail": ["越界值", "D2"],
+    },
+    {
+        "id": 22,
+        "name": "REQ-INFER-009 校验失败时草稿回弹旧值（吞输入回归）",
+        "why": "⛔ 新语义底线：非法值提示错误后**草稿必须保留**，用户接着改；回弹旧值就是"
+               "REQ-INFER-009 原始缺陷的另一半（输入被吞）。D2/越界值用例的草稿保留断言必须红。",
+        "file": PANELS / "ModelOptionsEditor.tsx",
+        "anchor": "    if (!r.ok) { setErr(r.why); return; }          // ⛔ 草稿保留，不回弹（REQ-INFER-009）",
+        "mutant": "    if (!r.ok) { setErr(r.why); setDrafts(d => ({ ...d, [fieldKey(model, def.key)]: valueToString(def, (mo[model] || {})[def.key]) })); return; }  // MUTATE-22：失败回弹旧值",
+        "test": "src/__tests__/modelOptionsEditor.test.tsx",
+        "expect_fail": ["越界值", "D2"],
+    },
+    {
+        "id": 23,
+        "name": "REQ-INFER-009 onChange 逐键提交（回到原始缺陷形态）",
+        "why": "这就是 0.4.27 实测缺陷本身：onChange 直接校验提交 → num_ctx 第一个数字必越界"
+               " → 逐键输入中间态报错/被拦。D1 的「未提交前不校验不保存」与"
+               "「编辑 num_ctx / 清空某项 / D3」的「change 后不立即 onSave」断言必须红。",
+        "file": PANELS / "ModelOptionsEditor.tsx",
+        "anchor": "                        onChange={e => setDrafts(d => ({ ...d, [k]: e.target.value }))}",
+        "mutant": "                        onChange={e => { setDrafts(d => ({ ...d, [k]: e.target.value })); void commitParam(name, def, e.target.value); /* MUTATE-23：逐键提交 */ }}",
+        "test": "src/__tests__/modelOptionsEditor.test.tsx",
+        "expect_fail": ["编辑 num_ctx", "清空某项", "D1", "D3"],
+    },
+    {
+        "id": 24,
+        "name": "REQ-INFER-009 撤掉 Enter 提交（键盘党丢保存入口）",
+        "why": "Enter 是与 blur 并列的提交入口：表单习惯是回车即存。撤掉后按 Enter 毫无反应，"
+               "只能靠移开焦点。D3（Enter 提交合法值）必须红。",
+        "file": PANELS / "ModelOptionsEditor.tsx",
+        "anchor": """                        onKeyDown={e => {
+                          if (e.key !== 'Enter') return;
+                          e.preventDefault();
+                          void commitParam(name, def, val);
+                        }} />""",
+        "mutant": "                        onKeyDown={() => { /* MUTATE-24：撤掉 Enter 提交 */ }} />",
+        "test": "src/__tests__/modelOptionsEditor.test.tsx",
+        "expect_fail": ["D3"],
+    },
+    {
+        "id": 25,
+        "name": "REQ-INFER-009 撤掉草稿同步 effect（外部刷新不同步）",
+        "why": "保存成功 / Agent 改配置后的重拉（A13）要把草稿同步回已存值，否则界面显示"
+               "与持久化配置长期脱节。撤掉 effect 后外部刷新覆盖不了旧草稿，D4 必须红。",
+        "file": PANELS / "ModelOptionsEditor.tsx",
+        "anchor": """  React.useEffect(() => {
+    setDrafts(prev => {
+      const next: Record<string, string> = {};
+      for (const name of Object.keys(mo)) {
+        const params = mo[name] || {};
+        for (const def of PARAMS) {
+          const k = fieldKey(name, def.key);
+          next[k] = (k === focusKeyRef.current && prev[k] !== undefined)
+            ? prev[k]
+            : valueToString(def, params[def.key]);
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg]);""",
+        "mutant": "  // MUTATE-25：撤掉草稿同步 effect（外部刷新不再同步草稿）",
+        "test": "src/__tests__/modelOptionsEditor.test.tsx",
+        "expect_fail": ["D4"],
+    },
+    # ── REQ-AGT-020（0.4.28）ChatPanel 订阅 session 事件的三道过滤 + 重拉 ─────────
+    {
+        "id": 26,
+        "name": "REQ-AGT-020 撤掉「仅当前打开的会话」过滤",
+        "why": "事件总线是全局广播：每个委派中的子会话都在发 session 事件。不过滤 session_id "
+               "会把别的委派子会话的 DB 内容重拉进用户当前打开的会话（串会话事故）。"
+               "E3 的「其他会话事件 → 忽略」必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "      if (!sid || sid !== currentSessionIdRef.current) return;            // ② 仅当前打开的会话",
+        "mutant": "      // MUTATE-26：撤掉「仅当前会话」过滤（任何会话的事件都重拉当前视图）",
+        "test": "src/__tests__/chatPanelSessionEvents.test.tsx",
+        "expect_fail": ["E3"],
+    },
+    {
+        "id": 27,
+        "name": "REQ-AGT-020 撤掉「流式中的会话绝不重拉」守卫",
+        "why": "⛔ 计划明令底线：当前会话正在流式时重拉会以 DB 为准合并，冲掉进行中的"
+               "乐观/流式气泡态（token 增量、工具步骤活态、计时器）。E2 必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "      if (activeStreamSidRef.current === sid) return;                     // ③ ⛔ 流式中的会话绝不重拉",
+        "mutant": "      // MUTATE-27：撤掉流式守卫（流式中也重拉，冲掉流式气泡）",
+        "test": "src/__tests__/chatPanelSessionEvents.test.tsx",
+        "expect_fail": ["E2"],
+    },
+    {
+        "id": 28,
+        "name": "REQ-AGT-020 撤掉 resource/gap 过滤",
+        "why": "总线广播全部资源变更（workflow/plugin/...）与 gap 对账事件。不按 resource 过滤，"
+               "任何资源变更都会触发消息区重拉——无意义的全表请求风暴，且 gap 无 session_id "
+               "无法定向。E3 的「非 session 资源（带 session_id）→ 忽略」必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "      if (ev.gap || ev.resource !== 'session') return;                    // ① 只处理 session 资源变更",
+        "mutant": "      // MUTATE-28：撤掉 resource/gap 过滤（任何资源变更都重拉消息区）",
+        "test": "src/__tests__/chatPanelSessionEvents.test.tsx",
+        "expect_fail": ["E3"],
+    },
+    {
+        "id": 29,
+        "name": "REQ-AGT-020 撤掉重拉调用（订阅形同虚设）",
+        "why": "这是本修复的核心动作：过滤通过后必须走既有 loadSessionMessages 重拉 DB 合并，"
+               "否则子会话视图依旧不刷新（原始缺陷）。E1 的「新消息合并可见」必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "      void loadSessionMessages(sid);                                      // 走既有 DB 合并路径",
+        "mutant": "      // MUTATE-29：撤掉重拉调用（收到事件但什么都不做）",
+        "test": "src/__tests__/chatPanelSessionEvents.test.tsx",
+        "expect_fail": ["E1"],
     },
 ]
 

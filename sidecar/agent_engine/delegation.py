@@ -90,6 +90,29 @@ def _is_delegation_cancelled(task_id: str) -> bool:
     return bool(_DELEGATION_CANCEL.get(str(task_id)))
 
 
+def _notify_child_session_changed(project_id: str, session_id: str, message_role: str) -> None:
+    """REQ-AGT-020（0.4.28）：委派写子会话消息后，经 A13 资源总线广播 session 变更。
+
+    根因：子会话消息由本模块直写 DB（store.save_message 是纯存储、无事件通知），
+    前端 ChatPanel 此前只在切会话/初始化/跳转时一次性加载 → 用户打开子会话
+    看委派进度时，视图不会随委派推进而更新。这里在写点后发事件（payload 带
+    session_id），ChatPanel 订阅后定向重拉 DB 合并（DB 仍是权威源，F6 缓存不动）。
+
+    ⛔ 只在委派写路径调用，**绝不挂全局 save_message**：主聊天热路径每条消息都过
+       save_message，挂上即事件风暴（用户实测场景是子会话刷新，主会话本身有流式推送）。
+    ⛔ 绝不抛异常：总线是变更可视化的旁路（notify 内部已吞异常，这里再兜一层），
+       前端没连上也不能让委派写库失败。
+    线程/async 安全：notify 是同步函数 + `_deliver` 跨事件循环安全投递
+    （call_soon_threadsafe），在本模块的 async 上下文直接调用安全。
+    """
+    try:
+        from sidecar.agent_engine import app_events as _ae
+        _ae.notify(_ae.RESOURCE_SESSION, _ae.ACTION_CREATE, project_id,
+                   session_id=str(session_id or ""), message_role=message_role)
+    except Exception:
+        pass
+
+
 def _norm_task_text(t: str) -> str:
     """归一化任务书文本用于去重比对：去首尾空白、压缩连续空白、去首尾标点。"""
     import re as _re
@@ -790,6 +813,9 @@ async def run_delegated_task(
             # 0.1.71（TS-118）：委派附着的图片落库存档，子会话回看可见
             save_message(project_id, child_sid, target_agent_id, "user", user_msg,
                          images=images or None)
+            # REQ-AGT-020（0.4.28）：写子会话后广播 session 变更（带 session_id），
+            # ChatPanel 收到且该会话已打开且非流式时重拉 DB 合并（子会话视图实时刷新）
+            _notify_child_session_changed(project_id, child_sid, "user")
 
             # TS-114（3.25）：本任务取消检查回调（loop 每轮开始前调用）
             _cc = (lambda: _is_delegation_cancelled(task_id))
@@ -812,6 +838,7 @@ async def run_delegated_task(
                             "error": f"子 Agent「{target_name}」任务已被用户停止。"}
                 save_message(project_id, child_sid, target_agent_id, "assistant", full_text,
                              model_used=model, tool_steps=steps or None)
+                _notify_child_session_changed(project_id, child_sid, "assistant")   # REQ-AGT-020
                 if err:
                     update_agent_task(project_id, task_id, status="failed", fail_reason=err)
                     return {"ok": False, "task_id": task_id,
@@ -843,6 +870,7 @@ async def run_delegated_task(
                     # 追问 1 次（决策 3）：子会话完整历史 + 固定追问文案
                     retry_msg = _RETRY_PROMPT_TMPL.format(task_id=task_id)
                     save_message(project_id, child_sid, target_agent_id, "user", retry_msg)
+                    _notify_child_session_changed(project_id, child_sid, "user")   # REQ-AGT-020
                     msgs2 = msgs + [{"role": "assistant", "content": full_text},
                                     {"role": "user", "content": retry_msg}]
                     full_text2, steps2, err2, pe2 = await _run_pass_with_timeout(
@@ -859,6 +887,7 @@ async def run_delegated_task(
                                 "error": f"子 Agent「{target_name}」任务已被用户停止。"}
                     save_message(project_id, child_sid, target_agent_id, "assistant", full_text2,
                                  model_used=model, tool_steps=steps2 or None)
+                    _notify_child_session_changed(project_id, child_sid, "assistant")   # REQ-AGT-020
                     _final_text = full_text2
                     if err2:
                         update_agent_task(project_id, task_id, status="failed",

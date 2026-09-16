@@ -17,6 +17,15 @@
 # along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """checkpoint-076 TS-118 简单委派模式与配套修复 专项测试。
 
+⚠ 0.4.28 口径变化（REQ-AGT-019 零图片+图片意图守卫）：
+  任务书含图片意图关键词（图片/图像/OCR/识别 等）且合并后【零图片】的委派
+  一律拦截回错（loop.py images_missing 守卫），不再静默放行。
+  本文件的 T2（suggested_role 兜底搜索）测的是**委派成功路径的路由**——
+  其任务书恰好是"识别图片"，0.4.28 起必须带图才能发起委派，
+  故给 run_tool_loop 补 first_round_images 附着图（模拟聊天附着图通道），
+  断言目标与强度不变（命中现有 Agent + 结果回传 + 未新建）。
+  T1（漏填 target 回错）不受影响：缺参检查在图片守卫之前。
+
 覆盖（0.1.71 五项修复）：
 1. 简单委派模式：
   S1 resolve_simple_mode：带图 → 强制 True
@@ -279,12 +288,14 @@ async def main():
                 yield {"content_delta": "结束"}
             yield {"done": True, "counts": {"prompt_eval_count": 1, "eval_count": 1}}
 
-    # 委派目标命中后走真实执行：给 ScriptConn 一个纯文字回复（简单模式，无图则按模型类型）
-    # 子模型是 glm-ocr → 简单模式，直接采纳
+    # 委派目标命中后走真实执行：给 ScriptConn 一个纯文字回复（子模型是 glm-ocr → 简单模式，直接采纳）
+    # 0.4.28（REQ-AGT-019）：任务书"识别图片"含图片意图 → 必须带图才能发起委派，
+    # 补 first_round_images 附着图过守卫（本用例测 suggested_role 兜底路由，不是零图片路径）。
     events2 = []
     async for ev in run_tool_loop("qwen3.6:35b", [{"role": "user", "content": "hi"}],
                                   tools_spec(True), str(sandbox6), authorizer=None,
                                   max_rounds=3, connector=AliasConn(),
+                                  first_round_images=["data:image/png;base64,QUJD"],
                                   delegation_ctx={"project_id": pid6, "agent_id": main6,
                                                   "session_id": "s1", "model": "qwen3.6:35b",
                                                   "connector": ScriptConn(["识别结果：ABC"])}):

@@ -70,12 +70,15 @@ def main():
 
     # ── T1 注册表登记：写能力真的接入了（不是只写了 handler 没登记）──
     acts = list_actions()
-    check("T1a 动作总数 7 → 10", len(acts) == 10, str(len(acts)))
-    for a in ("workflow_create", "workflow_update", "workflow_delete"):
+    # 0.4.28（REQ-WF-013/014）：10 → 12，新增只读 workflow get / get_node_schema
+    check("T1a 动作总数 7 → 12", len(acts) == 12, str(len(acts)))
+    for a in ("workflow_create", "workflow_update", "workflow_delete",
+              "workflow_get", "workflow_get_node_schema"):
         check(f"T1b {a} 已登记且可路由", a in acts, str(acts))
     wf_acts = set(APP_MODULE_REGISTRY["workflow"]["actions"].keys())
-    check("T1c workflow 模块含 6 个动作",
-          wf_acts == {"list", "run", "get_runs", "create", "update", "delete"}, str(wf_acts))
+    check("T1c workflow 模块含 8 个动作",
+          wf_acts == {"list", "get", "get_node_schema", "run", "get_runs",
+                      "create", "update", "delete"}, str(wf_acts))
 
     # ── T2 needs_confirm 分级 ──
     check("T2a create 默认不需确认（只写定义、可逆）",
@@ -139,6 +142,11 @@ def main():
           str(r7.get("error"))[:160])
     check("T7c 附 hint 指引自修正（含合法类型清单）",
           "hint" in r7 and "合法节点类型" in str(r7["hint"]), str(r7.get("hint"))[:120])
+    # 0.4.28（REQ-WF-013/014）：hint 改指**真实存在**的读面（曾让参考 workflow_list 的结构，
+    # 但 list 只回裁剪摘要、没有 definition——参照能力实际不存在）
+    check("T7c2 hint 指向真实读面 workflow.get / workflow.get_node_schema",
+          "workflow.get" in str(r7.get("hint")) and "get_node_schema" in str(r7.get("hint")),
+          str(r7.get("hint"))[:160])
     check("T7d 非法定义未落库（不产生垃圾工作流）",
           not any(w.get("name") == "非法流" for w in __import__("sidecar.storage.store", fromlist=["list_workflows"]).list_workflows()))
 

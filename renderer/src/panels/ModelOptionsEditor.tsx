@@ -32,6 +32,11 @@
  * ⚠️ 两个后端支持的参数不同：OpenAI 兼容端**没有 num_ctx / top_k**，
  * 且 repeat_penalty→frequency_penalty、num_predict→max_tokens（映射在后端做）。
  * 故非 Ollama 后端时这两项显示为不可用并说明原因，而不是让用户填了再被静默丢弃。
+ *
+ * REQ-INFER-009（0.4.28）草稿模式：每个字段是**本地草稿**受控——onChange 只写草稿，
+ * 不校验不保存；blur / Enter 才走 coerce 校验并提交。旧实现 onChange 直接校验保存：
+ * num_ctx 下限 256，逐键输入第一个数字（"2"）必越界 → 不保存 → 受控值回弹旧值，
+ * 用户根本输不进去。新语义：非法值提交时提示错误且**草稿保留不回弹**；清空＝回落模型默认。
  */
 import React, { useState } from 'react';
 import { colors, fonts, radius, typo, input, calloutStyle } from '../theme';
@@ -72,6 +77,11 @@ const PARAMS: ParamDef[] = [
     hint: '遇到这些字符串就停止生成，多个用英文逗号分隔。留空=不限制', placeholder: '如 </s>, 用户:' },
 ];
 
+/** 草稿键：一模型一参数一格（REQ-INFER-009 草稿模式） */
+function fieldKey(model: string, key: string): string {
+  return `${model}${key}`;
+}
+
 interface Props {
   cfg: any;
   busy: boolean;
@@ -93,6 +103,33 @@ export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props
   const configured = Object.keys(mo);
   const [expanded, setExpanded] = useState<string | null>(configured[0] ?? null);
   const [err, setErr] = useState<string | null>(null);
+
+  // REQ-INFER-009（0.4.28）草稿模式：每个字段的**本地草稿**（键见 fieldKey）。
+  // onChange 只写这里；受控值优先取草稿，未初始化时回落已存值。
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // 正在聚焦编辑的字段：外部配置刷新时**不同步**它，避免打字到一半被覆盖
+  const focusKeyRef = React.useRef<string | null>(null);
+  // 上次成功提交的草稿原文：防 Enter 提交后紧接的 blur 对同一草稿重复 PUT
+  const lastCommitRef = React.useRef<Record<string, string>>({});
+
+  // 保存成功 / 外部配置刷新（如 Agent 改配置后的重拉）→ 草稿同步为已存值；
+  // 聚焦中的字段除外（保留用户正在输入的内容）。
+  React.useEffect(() => {
+    setDrafts(prev => {
+      const next: Record<string, string> = {};
+      for (const name of Object.keys(mo)) {
+        const params = mo[name] || {};
+        for (const def of PARAMS) {
+          const k = fieldKey(name, def.key);
+          next[k] = (k === focusKeyRef.current && prev[k] !== undefined)
+            ? prev[k]
+            : valueToString(def, params[def.key]);
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg]);
 
   // 父级点了某个模型的「参数」按钮 → 展开它（受控）
   React.useEffect(() => {
@@ -130,14 +167,27 @@ export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props
     if (expanded === name) setExpanded(Object.keys(next)[0] ?? null);
   }
 
-  async function setParam(model: string, def: ParamDef, raw: string) {
+  /**
+   * blur / Enter 提交（REQ-INFER-009 草稿模式的唯一保存入口）：
+   * 走 coerce 校验——通过则按原路径 onSave 落库；失败则 setErr 提示，
+   * ⛔ 草稿保留不回弹（用户能接着改，而不是看着输入被吞掉）。
+   * 空草稿 = 清空该项，沿用「回落模型默认值」语义。
+   */
+  async function commitParam(model: string, def: ParamDef, raw: string) {
+    const k = fieldKey(model, def.key);
+    const savedStr = valueToString(def, (mo[model] || {})[def.key]);
+    if (raw === savedStr) return;                  // 未改动：不校验不保存（避免无意义 PUT）
+    if (lastCommitRef.current[k] === raw) return;  // Enter 提交后紧接 blur：同一草稿不重复提交
     const r = coerce(def, raw);
-    if (!r.ok) { setErr(r.why); return; }
+    if (!r.ok) { setErr(r.why); return; }          // ⛔ 草稿保留，不回弹（REQ-INFER-009）
     setErr(null);
     const cur = { ...(mo[model] || {}) };
-    if (r.value === null) delete cur[def.key];      // 空值 = 移除该项，回落模型默认
+    if (r.value === null) delete cur[def.key];     // 空值 = 移除该项，回落模型默认
     else cur[def.key] = r.value;
     await onSave({ model_options: { ...mo, [model]: cur } });
+    lastCommitRef.current[k] = raw;
+    // 保存成功 → 草稿同步为已存值（含归一化，如 " 256 " → "256"）
+    setDrafts(d => ({ ...d, [k]: r.value === null ? '' : valueToString(def, r.value) }));
   }
 
   return (
@@ -186,7 +236,10 @@ export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props
               <div style={{ padding: '10px 12px', borderTop: `1px solid ${colors.borderSubtle}` }}>
                 {PARAMS.map(def => {
                   const disabled = !isOllama && !!def.ollamaOnly;
-                  const val = valueToString(def, params[def.key]);
+                  const k = fieldKey(name, def.key);
+                  const savedStr = valueToString(def, params[def.key]);
+                  // 草稿模式：受控值 = 草稿（未初始化时回落已存值）；onChange 只写草稿
+                  const val = drafts[k] ?? savedStr;
                   return (
                     <div key={def.key} style={{ marginBottom: 10, opacity: disabled ? 0.5 : 1 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
@@ -201,14 +254,24 @@ export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props
                             该后端不支持
                           </span>
                         )}
-                        {val && !disabled && (
+                        {savedStr && !disabled && (
                           <Icon name="check" size={11} style={{ color: colors.ok }} />
                         )}
                       </div>
                       <input className="ui-input" style={{ ...input, fontFamily: fonts.mono, fontSize: 12.5 }}
                         value={val} disabled={busy || disabled}
                         placeholder={def.placeholder}
-                        onChange={e => setParam(name, def, e.target.value)} />
+                        onFocus={() => { focusKeyRef.current = k; }}
+                        onChange={e => setDrafts(d => ({ ...d, [k]: e.target.value }))}
+                        onBlur={() => {
+                          focusKeyRef.current = null;
+                          void commitParam(name, def, val);
+                        }}
+                        onKeyDown={e => {
+                          if (e.key !== 'Enter') return;
+                          e.preventDefault();
+                          void commitParam(name, def, val);
+                        }} />
                       <div style={{ fontSize: 11, color: colors.textTertiary, lineHeight: 1.5, marginTop: 2 }}>
                         {def.hint}
                       </div>
@@ -216,7 +279,7 @@ export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props
                   );
                 })}
                 <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 4 }}>
-                  清空某项 = 该参数回落模型默认值。修改后自动保存。
+                  清空某项 = 该参数回落模型默认值。输入后按 Enter 或移开焦点保存；越界/非法值不会保存，已输入内容保留。
                 </div>
               </div>
             )}

@@ -97,8 +97,10 @@ def test_a_registry_structure():
     actions = list_actions()
     # ⛔ A6（0.4.18）：7 → 10。新增 workflow create/update/delete 三个写动作
     #    （此前写类只有 roundtable_create，Agent 能跑工作流却不能建/改/删）。
-    check("A1 注册表暴露 10 个动作", len(actions) == 10, str(actions))
-    expected = {"workflow_list", "workflow_run", "workflow_get_runs",
+    # ⛔ 0.4.28（REQ-WF-013/014）：10 → 12。新增 workflow get / get_node_schema 两个只读动作。
+    check("A1 注册表暴露 12 个动作", len(actions) == 12, str(actions))
+    expected = {"workflow_list", "workflow_get", "workflow_get_node_schema",
+                "workflow_run", "workflow_get_runs",
                 "workflow_create", "workflow_update", "workflow_delete",
                 "knowledge_search", "knowledge_inject", "knowledge_groups",
                 "roundtable_create"}
@@ -129,7 +131,8 @@ def test_a_registry_structure():
           action_needs_confirm("workflow", "run", None) is True)
     check("A6 roundtable_create 默认需确认（多方多轮推理，高成本）",
           action_needs_confirm("roundtable", "create", None) is True)
-    for m, a in (("workflow", "list"), ("workflow", "get_runs"),
+    for m, a in (("workflow", "list"), ("workflow", "get"), ("workflow", "get_node_schema"),
+                 ("workflow", "get_runs"),
                  ("knowledge", "search"), ("knowledge", "inject"), ("knowledge", "groups")):
         check(f"A7 {m}_{a} 查询类默认不确认（避免弹窗骚扰）",
               action_needs_confirm(m, a, None) is False)
@@ -499,6 +502,108 @@ def test_e_workflow_run_wait():
     asyncio.run(go())
 
 
+def test_f_workflow_get_and_node_schema():
+    """0.4.28（REQ-WF-013/014）：只读读面 workflow.get 与 workflow.get_node_schema。
+
+    - get：返回**完整** workflow（含 definition）——list 只回裁剪摘要，Agent 搭建/
+      修改前需要看节点写法；与 REST GET /api/workflows/{wf_id} 同一 store 数据源。
+    - get_node_schema：字段表数据源是 schema.NODE_FIELD_SPECS；
+      ⛔ 漂移守护——键集必须与 NODE_TYPES 完全一致（加节点类型不补表即红）。
+    """
+    from sidecar.app_modules import dispatch
+    tmp = isolate_all("ac_f_")
+    import sidecar.storage.store as store
+    from sidecar.workflow.schema import NODE_FIELD_SPECS, NODE_TYPES
+
+    # ── 漂移守护（REQ-WF-014 的命门）──
+    check("F1 ⛔ NODE_FIELD_SPECS 键集与 NODE_TYPES 完全一致（漂移守护）",
+          set(NODE_FIELD_SPECS) == set(NODE_TYPES),
+          f"差异：{set(NODE_FIELD_SPECS) ^ set(NODE_TYPES)}")
+    bad = []
+    for t, fields in NODE_FIELD_SPECS.items():
+        if not isinstance(fields, list):
+            bad.append(f"{t} 不是 list")
+            continue
+        for f in fields:
+            if not all(k in f for k in ("name", "required", "type", "desc")):
+                bad.append(f"{t}.{f.get('name', '?')} 字段项缺键")
+            if not isinstance(f.get("required"), bool):
+                bad.append(f"{t}.{f.get('name', '?')} required 非 bool")
+    check("F2 每种节点类型的字段项结构齐备（name/required/type/desc）",
+          not bad, str(bad[:4]))
+    inf_names = {f["name"] for f in NODE_FIELD_SPECS["inference"]}
+    check("F3 inference 字段表含 timeout_s（REQ-WF-015 文档面）",
+          "timeout_s" in inf_names, str(inf_names))
+    check("F4 inference 字段表覆盖核心字段（model/prompt/images/retry）",
+          {"model", "prompt", "images", "retry"} <= inf_names, str(inf_names))
+
+    defn = {"nodes": [{"id": "s", "type": "start", "label": "开始"},
+                      {"id": "n1", "type": "inference", "model": "m1",
+                       "prompt": "识别 {{item}}", "timeout_s": 1200},
+                      {"id": "e", "type": "end"}],
+            "edges": [{"from": "s", "to": "n1"}, {"from": "n1", "to": "e"}],
+            "params": {}}
+    wf_id = store.create_workflow("读面测试流", defn, description="F 组用")
+
+    async def go():
+        ctx = {"project_id": "", "session_id": "", "sandbox_root": str(tmp)}
+
+        # ── workflow.get ──
+        r = await dispatch("workflow", "get", {}, ctx)
+        check("F5 get 缺 workflow_id → bad_arg 且指引先 list",
+              r.get("ok") is False and "bad_arg" in str(r.get("error", ""))
+              and "workflow.list" in str(r.get("error", "")), str(r)[:180])
+        r2 = await dispatch("workflow", "get", {"workflow_id": "不存在"}, ctx)
+        check("F6 get 不存在 → workflow_not_found（可读原因）",
+              r2.get("ok") is False and "workflow_not_found" in str(r2.get("error", "")),
+              str(r2)[:180])
+        r3 = await dispatch("workflow", "get", {"workflow_id": wf_id}, ctx)
+        check("F7 get 成功返回完整 workflow", r3.get("ok") is True
+              and isinstance(r3.get("workflow"), dict), str(r3)[:150])
+        wf = r3.get("workflow") or {}
+        check("F8 get 返回**含 definition**（list 的裁剪摘要没有）",
+              isinstance(wf.get("definition"), dict)
+              and wf["definition"].get("nodes") == defn["nodes"], str(wf)[:200])
+        check("F9 get 含元信息（name/description/updated_at）",
+              wf.get("name") == "读面测试流" and "updated_at" in wf, str(wf)[:200])
+        r4 = await dispatch("workflow", "get", {"id": wf_id}, ctx)
+        check("F10 get 接受 id 别名（与 run/update/delete 一致）", r4.get("ok") is True)
+
+        # ── workflow.get_node_schema ──
+        r5 = await dispatch("workflow", "get_node_schema", {}, ctx)
+        check("F11 get_node_schema 无参 → 返回全部类型字段表",
+              r5.get("ok") is True and isinstance(r5.get("schemas"), dict)
+              and set(r5["schemas"]) == set(NODE_TYPES), str(r5)[:150])
+        check("F12 无参返回带 node_types 清单",
+              r5.get("node_types") == list(NODE_TYPES), str(r5.get("node_types")))
+        r6 = await dispatch("workflow", "get_node_schema", {"node_type": "inference"}, ctx)
+        check("F13 按类型过滤 → 只回该类型字段表",
+              r6.get("ok") is True and r6.get("node_type") == "inference"
+              and isinstance(r6.get("fields"), list)
+              and any(f.get("name") == "timeout_s" for f in r6["fields"]), str(r6)[:200])
+        r7 = await dispatch("workflow", "get_node_schema", {"node_type": "不存在的类型"}, ctx)
+        check("F14 未知类型 → unknown_node_type 且列出合法类型（纠正指引）",
+              r7.get("ok") is False and "unknown_node_type" in str(r7.get("error", ""))
+              and "inference" in str(r7.get("error", "")), str(r7)[:200])
+        r8 = await dispatch("workflow", "get_node_schema", {"type": "loop"}, ctx)
+        check("F15 接受 type 别名；loop 字段表含 items/branch/fail_policy/wait_ms/batch_size",
+              r8.get("ok") is True
+              and {"items", "branch", "fail_policy", "wait_ms", "batch_size"}
+              <= {f.get("name") for f in r8.get("fields", [])}, str(r8)[:200])
+
+        # ── create 失败 hint 指向真实存在的新读面（曾指向不存在的参照能力）──
+        bad_def = {"nodes": [{"id": "s", "type": "start"},
+                             {"id": "x", "type": "不存在的类型"}], "edges": []}
+        r9 = await dispatch("workflow", "create", {"name": "hint测试", "definition": bad_def}, ctx)
+        hint = str(r9.get("hint", ""))
+        check("F16 create 失败 hint 指向 workflow.get（真实读面）",
+              r9.get("ok") is False and "workflow.get" in hint, hint[:200])
+        check("F17 create 失败 hint 指向 workflow.get_node_schema",
+              "workflow.get_node_schema" in hint, hint[:220])
+
+    asyncio.run(go())
+
+
 def main():
     print("=" * 70)
     print("0.4.9（3.48.2）应用内模块控制 专项回归")
@@ -509,6 +614,7 @@ def main():
     test_d_loop_routing()
     test_d_tools_spec_and_config()
     test_e_workflow_run_wait()
+    test_f_workflow_get_and_node_schema()
     print("\n" + "=" * 70)
     print(f"===== SUMMARY: PASS={PASS} FAIL={FAIL} =====")
     if FAILURES:

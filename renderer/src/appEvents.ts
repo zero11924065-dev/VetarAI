@@ -38,7 +38,8 @@ export const APP_RESOURCE_CHANGED = 'app:resource-changed';
 
 /** 广播给面板的变更事件载荷。 */
 export interface AppResourceEvent {
-  /** 资源类型：workflow/project/plugin/knowledge/inference/agent；`'*'` = gap 对账（全部重拉）。 */
+  /** 资源类型：workflow/project/plugin/knowledge/inference/agent/session；`'*'` = gap 对账（全部重拉）。
+   *  session（0.4.28 REQ-AGT-020）：委派写子会话消息，payload 带 session_id/message_role，ChatPanel 定向重拉。 */
   resource: string;
   /** 动作：create/update/delete（gap 对账时无）。 */
   action?: string;
