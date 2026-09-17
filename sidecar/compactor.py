@@ -20,7 +20,7 @@
 流程：
 1. 取会话全部消息，保留最近 keep_recent 条，其余为"待压缩区"
 2. 归档：待压缩区写 MD 文件到 compact_archive_dir（写失败→中止）
-3. 摘要：调 Ollama chat 生成 300 字摘要（失败→中止，消息原样保留）
+3. 摘要：走推理后端工厂（get_inference_connector）chat 生成 300 字摘要（失败→中止，消息原样保留）
 4. 落库：写 compact_log → 删待压缩区消息 → 插 role=system 摘要消息
 """
 from __future__ import annotations
@@ -29,8 +29,6 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-import httpx
 
 from sidecar.config import get_config
 from sidecar.storage.store import (
@@ -82,7 +80,6 @@ async def compact_session(project_id: str, session_id: str, keep_recent: int | N
     if keep_recent is None:
         keep_recent = int(cfg.get("compact_keep_recent", 10))
     archive_dir = Path(os.path.expanduser(cfg.get("compact_archive_dir", "~/.subagent/compressed")))
-    base_url = cfg.get("ollama_base_url", "http://localhost:11434").rstrip("/")
 
     # 1. 取全部消息
     all_msgs = load_messages(project_id, session_id)
@@ -106,18 +103,18 @@ async def compact_session(project_id: str, session_id: str, keep_recent: int | N
         for m in to_compress:
             prompt_parts.append(f"[{m.get('role','?')}] {m.get('content','')}")
         prompt_text = "\n".join(prompt_parts)
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": "请将以下对话历史压缩为 300 字以内的摘要，保留关键决策、结论、待办，去掉寒暄和过程细节：\n\n" + prompt_text}],
-            "stream": False,
-        }
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0), trust_env=False) as client:
-            r = await client.post(f"{base_url}/api/chat", json=payload)
-            r.raise_for_status()
-            data = r.json()
-            summary_text = data.get("message", {}).get("content", "")
-            if not summary_text:
-                raise ValueError("Ollama 返回空摘要")
+        messages = [{"role": "user", "content": "请将以下对话历史压缩为 300 字以内的摘要，保留关键决策、结论、待办，去掉寒暄和过程细节：\n\n" + prompt_text}]
+        # 0.4.29（根因修复）：原实现 raw httpx 直连 ollama_base_url + /api/chat，
+        # openai_compatible 后端下压缩必坏。改走 get_inference_connector() 工厂——
+        # 两后端非流式 chat 签名一致（async chat(model, messages, *, stream, images,
+        # read_timeout_s) -> str），调用方零感知跟随当前后端。
+        # 模型选择逻辑不变（沿用入参 model）；read_timeout_s=120.0 沿用原硬编码
+        # httpx.Timeout(120.0, connect=10.0) 的读超时语义。
+        from sidecar.ollama.connector import get_inference_connector
+        connector = get_inference_connector()
+        summary_text = await connector.chat(model, messages, read_timeout_s=120.0)
+        if not summary_text:
+            raise ValueError("推理后端返回空摘要")
     except Exception as e:
         log_compact(project_id, session_id, before_tokens, before_tokens, str(archive_path), None, f"摘要失败: {e}")
         return {"ok": False, "error": f"摘要失败: {e}"}

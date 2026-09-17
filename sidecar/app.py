@@ -893,6 +893,7 @@ def _notify_change(resource: str, action: str,
 from sidecar.agent_engine.app_events import (
     RESOURCE_WORKFLOW, RESOURCE_PROJECT, RESOURCE_PLUGIN,
     RESOURCE_KNOWLEDGE, RESOURCE_INFERENCE, RESOURCE_AGENT,
+    RESOURCE_MODEL_PACK,
     ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE,
 )
 
@@ -2492,3 +2493,140 @@ async def api_open_project_working_dir(req: OpenProjectDirReq):
                 return {"ok": False, "dir": str(d), "detail": "打开超时"}
             return {"ok": True, "dir": str(d)}
     raise HTTPException(status_code=404, detail="项目不存在")
+    raise HTTPException(status_code=404, detail="项目不存在")
+
+
+# ─────────────────────────────────────────────
+# 模型包 API（0.4.29 P1 可扩展模型包接口）
+# ─────────────────────────────────────────────
+# 存储/校验/下载全部落在 sidecar/model_packs/ 子系统；本区只做 HTTP 适配。
+# 进度与生命周期事件由下载器经 app_events 推全局 SSE（resource="model_pack"），
+# 端点写操作成功后按 A13 惯例补 _notify_change。
+from sidecar.model_packs import manifest as _mp_manifest
+from sidecar.model_packs import store as _mp_store
+from sidecar.model_packs.downloader import (
+    PackDownloadError as _PackDownloadError,
+    pack_download_manager as _mp_downloads,
+    fetch_catalog as _mp_fetch_catalog,
+)
+
+
+class ModelPackInstallReq(BaseModel):
+    pack_id: str
+    catalog_entry: dict[str, Any]  # catalog 中的 PACK 条目（可含 source/installed 等标注键，校验时忽略）
+
+
+class ModelPackCancelReq(BaseModel):
+    pack_id: str
+
+
+class ModelPackToggleReq(BaseModel):
+    enabled: bool
+
+
+@app.get("/api/model-packs")
+async def api_model_packs_list():
+    """已安装模型包列表（注册表 + 磁盘探测：缺文件/实际占用/半截下载残留）。"""
+    return {"packs": _mp_store.list_installed()}
+
+
+@app.get("/api/model-packs/catalog")
+async def api_model_packs_catalog():
+    """逐个拉 model_pack_catalog_urls 合并目录（单源失败不拖死整列，标注源错误）。
+
+    每个 pack 标注：source（来自哪个 catalog 源）、installed/enabled/installed_version。
+    pack_id 跨源去重：先出现的源生效（列表序即优先级，与 sources 按序回退同哲学）。
+    """
+    urls = get_config().get("model_pack_catalog_urls") or []
+    installed = _mp_store.read_registry()
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    source_errors: list[dict[str, str]] = []
+    ok_sources = 0
+    for u in urls:
+        packs, err = await _mp_fetch_catalog(str(u))
+        if err is not None:
+            source_errors.append({"source": str(u), "error": err})
+            continue
+        ok_sources += 1
+        for p in packs or []:
+            pid = p.get("pack_id", "")
+            if pid in seen:
+                continue
+            seen.add(pid)
+            entry = installed.get(pid)
+            merged.append({
+                **p,
+                "source": str(u),
+                "installed": entry is not None,
+                "enabled": bool(entry and entry.get("status") == "installed"),
+                "installed_version": str(entry.get("version", "")) if entry else "",
+            })
+    return {"packs": merged, "sources": ok_sources, "source_errors": source_errors}
+
+
+@app.post("/api/model-packs/install")
+async def api_model_pack_install(req: ModelPackInstallReq):
+    """安装模型包：后台 asyncio 任务下载（进度走 SSE），立即返回 {accepted: true}。
+
+    续装语义（注释定稿）：
+      * 已安装（registry 有条目）→ 409，需先卸载再装（不静默覆盖——
+        覆盖会把"版本回退/换源"这类用户该知情的事藏起来）；
+      * 下载进行中 → 409；
+      * 上次中断/取消留了 .partial → 本次自动断点续传（无需前端区分）。
+    """
+    pack = req.catalog_entry or {}
+    if req.pack_id != str(pack.get("pack_id", "")):
+        raise HTTPException(status_code=400,
+                            detail="pack_id 与 catalog_entry.pack_id 不一致")
+    if not _mp_manifest.valid_pack_id(req.pack_id):
+        raise HTTPException(status_code=400,
+                            detail=f"非法 pack_id（须 slug 小写字母/数字/-/_，1~64 长）: {req.pack_id!r}")
+    errors = _mp_manifest.validate_pack(pack)
+    if errors:
+        raise HTTPException(status_code=400,
+                            detail="catalog_entry 校验失败: " + "；".join(errors[:5]))
+    if _mp_store.is_installed(req.pack_id):
+        raise HTTPException(status_code=409,
+                            detail=f"模型包 {req.pack_id} 已安装；如需重装请先卸载")
+    try:
+        _mp_downloads.start(req.pack_id, pack)
+    except _PackDownloadError as e:  # 重复启动（进行中）
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:  # 安装根解析失败（如落在 .app 内）
+        raise HTTPException(status_code=500, detail=str(e))
+    # 生命周期事件（download_start/done/error）由下载器发射，这里不重复 notify
+    return {"accepted": True, "pack_id": req.pack_id}
+
+
+@app.post("/api/model-packs/cancel")
+async def api_model_pack_cancel(req: ModelPackCancelReq):
+    """取消进行中的下载（.partial 保留供续传）。"""
+    ok = await _mp_downloads.cancel(req.pack_id)
+    if not ok:
+        raise HTTPException(status_code=404,
+                            detail=f"模型包 {req.pack_id} 没有进行中的下载任务")
+    _notify_change(RESOURCE_MODEL_PACK, ACTION_UPDATE, pack_id=req.pack_id, phase="cancelled")
+    return {"cancelled": True, "pack_id": req.pack_id}
+
+
+@app.delete("/api/model-packs/{pack_id}")
+async def api_model_pack_delete(pack_id: str):
+    """卸载：有下载进行中先取消，删目录（含 .partial）+ 注册表条目。"""
+    if _mp_downloads.is_active(pack_id):
+        await _mp_downloads.cancel(pack_id)
+    ok = _mp_store.remove_pack(pack_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"模型包 {pack_id} 未安装")
+    _notify_change(RESOURCE_MODEL_PACK, ACTION_DELETE, pack_id=pack_id)
+    return {"deleted": True, "pack_id": pack_id}
+
+
+@app.post("/api/model-packs/{pack_id}/toggle")
+async def api_model_pack_toggle(pack_id: str, req: ModelPackToggleReq):
+    """启用/禁用（禁用保留文件不删，推理侧按 enabled 过滤）。"""
+    new_state = _mp_store.set_enabled(pack_id, bool(req.enabled))
+    if new_state is None:
+        raise HTTPException(status_code=404, detail=f"模型包 {pack_id} 未安装")
+    _notify_change(RESOURCE_MODEL_PACK, ACTION_UPDATE, pack_id=pack_id, enabled=new_state)
+    return {"ok": True, "pack_id": pack_id, "enabled": new_state}

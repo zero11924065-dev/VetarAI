@@ -397,6 +397,26 @@ class OpenAICompatConnector:
         data = r.json().get("data", [])
         return [{"name": m.get("id", "")} for m in data if m.get("id")]
 
+    # ── 生命周期（0.4.29 补，与 OllamaConnector 同名方法签名一致的 no-op）──
+    async def unload_model(self, name: str) -> bool:
+        """no-op：OpenAI 兼容服务侧无 keep_alive 卸载语义，模型生命周期由对方管理。
+
+        根因：工作流引擎 engine.py 在相邻节点换模型时裸调本方法（无 try/except），
+        缺它会在 openai_compatible 后端下抛 AttributeError。
+        返回 False 表示"未执行卸载"（与 OllamaConnector 失败兜底语义一致）。
+        已知代价：llama.cpp 驱动的模型包后端（0.4.29 D1）将在子类覆盖为杀子进程。
+        """
+        return False
+
+    async def list_loaded_models(self) -> list:
+        """no-op：OpenAI 兼容协议无 /api/ps 等价物，无法查询服务侧驻留模型。
+
+        返回空列表——与 OllamaConnector 失败兜底语义一致
+        （调用方 loop.py safe_unload_model 据此跳过卸载，不阻塞主流程）。
+        已知代价：llama.cpp 驱动的模型包后端（0.4.29 D1）将在子类覆盖为真实实现。
+        """
+        return []
+
 
 class _ToolsUnsupported(Exception):
     """带 tools 请求被 400 拒绝且判定为工具不支持 → 转降级事件（非致命）。"""

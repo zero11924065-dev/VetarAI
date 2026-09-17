@@ -81,6 +81,10 @@ RESOURCE_AGENT = "agent"            # → IndependentAgentsPanel / AgentPanel
 # （delegation.py 四处 save_message 后），⛔ 不挂全局 save_message——主聊天热路径
 # 每条消息都过，挂上即事件风暴。payload 带 session_id，前端据此定向重拉。
 RESOURCE_SESSION = "session"
+# 0.4.29（P1 可扩展模型包）：模型包安装/卸载/启停/下载进度 → 前端模型管理器面板。
+# 生命周期/进度动作名见 model_packs/downloader.py（download_start/progress/done/
+# error/cancelled）；端点写操作（删/toggle）仍用 ACTION_* 常量。
+RESOURCE_MODEL_PACK = "model_pack"
 
 # ── 动作类型常量 ──
 ACTION_CREATE = "create"

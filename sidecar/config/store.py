@@ -146,6 +146,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 0.4.12（B2）：权限确认弹窗的等待超时（秒）。此前硬编码 120s（app.py _AUTH_TIMEOUT），
     # 用户离开一会儿回来点确认就被记为"拒绝"（真机反馈）。0=无限等待（不超时，只能手动关闭）。
     "auth_confirm_timeout": 600,         # 默认提到 10 分钟；0=不超时
+
+    # ── 0.4.29（P1 可扩展模型包）─────────────────────────────────────────
+    "model_packs_dir": "",               # 模型包安装根；空 = data_root()/models/packs
+                                         # （解析链：env VETARAI_MODEL_PACKS_DIR > 本键 > 默认；勿指向 .app 内）
+    "model_pack_catalog_urls": [],       # 模型包目录索引源列表（每元素 http(s):// 或 file://，
+                                         # 逐源拉取合并，单源失败不拖死整列；列表键先例=egress_proxy_required）
+    "confirm_model_pack_download": True, # 下载模型包前弹窗确认（confirm_network_install :129 先例；
+                                         # 确认弹窗在前端做，后端只暴露本开关供前端读取）
 }
 
 _MEM: dict[str, Any] = {}
@@ -348,7 +356,8 @@ def _validate(cur: dict[str, Any]) -> None:
             raise ValueError(f"{k} 必须是 bool")
     # 0.4.9 新增配置校验
     for k in ("confirm_network_install", "delegation_model_swap",
-              "app_control_enabled", "computer_use_enabled", "computer_use_confirm_each"):
+              "app_control_enabled", "computer_use_enabled", "computer_use_confirm_each",
+              "confirm_model_pack_download"):
         v = cur.get(k)
         if v is not None and not isinstance(v, bool):
             raise ValueError(f"{k} 必须是 bool")
@@ -371,6 +380,21 @@ def _validate(cur: dict[str, Any]) -> None:
     wl = cur.get("computer_use_app_whitelist")
     if wl is not None and (not isinstance(wl, list) or not all(isinstance(x, str) for x in wl)):
         raise ValueError("computer_use_app_whitelist 必须是字符串数组（应用名）")
+    # 0.4.29（P1 模型包）：安装根与 catalog 源列表校验
+    mpd = cur.get("model_packs_dir")
+    if mpd is not None:
+        if not isinstance(mpd, str):
+            raise ValueError("model_packs_dir 必须是字符串（空 = data_root()/models/packs）")
+        if mpd.strip() and not (mpd.startswith("/") or mpd.startswith("~")):
+            raise ValueError("model_packs_dir 必须是绝对路径或 ~ 开头（空 = 默认安装根）")
+    mcu = cur.get("model_pack_catalog_urls")
+    if mcu is not None:
+        if not (isinstance(mcu, list) and all(isinstance(x, str) for x in mcu)):
+            raise ValueError("model_pack_catalog_urls 必须是字符串数组")
+        for u in mcu:
+            if not u.startswith(("http://", "https://", "file://")):
+                raise ValueError(
+                    f"model_pack_catalog_urls 含非法源: {u!r}（须 http(s):// 或 file://）")
 
 
 def get_config() -> dict[str, Any]:

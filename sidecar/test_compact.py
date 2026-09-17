@@ -15,8 +15,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
-"""M2 智能压缩单测（mock Ollama 摘要 + 临时目录）。
+"""M2 智能压缩单测（mock 推理连接器 + 临时目录）。
 venv 内直接跑：python test_compact.py。
+
+0.4.29 变更：compactor 摘要改走 get_inference_connector() 工厂（不再 raw httpx
+直连 ollama_base_url），mock 缝随之从 httpx.AsyncClient 换成连接器工厂。
 """
 import asyncio, sys, tempfile, os
 from pathlib import Path
@@ -31,32 +34,27 @@ def check(name, cond, detail=""):
     else: FAIL += 1; FAILURES.append(name); print(f"FAIL  {name}  {detail}")
 
 
-class MockSuccessClient:
-    def __init__(self, **kw): pass
-    async def __aenter__(self): return self
-    async def __aexit__(self, *a): return False
-    async def post(self, url, json=None, **kw):
-        class R:
-            status_code = 200
-            def raise_for_status(self): pass
-            def json(self): return {"message": {"content": "摘要：讨论了10个话题，结论X，待办Y。"}}
-        return R()
+class OkConnector:
+    """模拟推理连接器：chat 返回固定摘要，记录调用参数。"""
+    def __init__(self):
+        self.calls = []
+    async def chat(self, model, messages, *, stream=False, images=None, read_timeout_s=None):
+        self.calls.append({"model": model, "messages": messages,
+                           "stream": stream, "read_timeout_s": read_timeout_s})
+        return "摘要：讨论了10个话题，结论X，待办Y。"
 
 
-class FailClient:
-    def __init__(self, **kw): pass
-    async def __aenter__(self): return self
-    async def __aexit__(self, *a): return False
-    async def post(self, *a, **kw):
-        import httpx
-        raise httpx.ConnectError("ollama down")
+class FailConnector:
+    """模拟推理连接器：chat 抛错（等价旧 FailClient 的 ollama down 场景）。"""
+    async def chat(self, model, messages, *, stream=False, images=None, read_timeout_s=None):
+        raise ConnectionError("inference backend down")
 
 
 async def main():
-    import httpx
     import sidecar.config.store as cfgstore
     import sidecar.storage.store as store
     import sidecar.compactor as comp
+    import sidecar.ollama.connector as conn_mod
 
     tmpdir = Path(tempfile.mkdtemp(prefix="m2compact_"))
     archive_dir = tmpdir / "compressed"
@@ -83,7 +81,7 @@ async def main():
     pid = store.create_project("M2 Test", workdir)
     aid = store.add_agent_config(pid, "Test Agent", "main")
 
-    orig_httpx = httpx.AsyncClient
+    orig_factory = conn_mod.get_inference_connector
     # patch compactor 的 get_config，确保读到测试配置（get_config 会从磁盘重建 _MEM）
     import sidecar.config as _cfgmod
     orig_get_config = comp.get_config
@@ -100,7 +98,8 @@ async def main():
         for i in range(10):
             store.save_message(pid, sid1, aid, "user" if i % 2 == 0 else "assistant", f"消息 {i+1}")
 
-        httpx.AsyncClient = lambda **kw: MockSuccessClient()
+        ok_conn = OkConnector()
+        conn_mod.get_inference_connector = lambda: ok_conn
         r1 = await comp.compact_session(pid, sid1, keep_recent=3, model="qwen3.8")
         check("1 压缩成功 ok=True", r1.get("ok") is True, str(r1))
         check("1 before_tokens > 0", r1.get("before_tokens", 0) > 0, str(r1))
@@ -115,6 +114,9 @@ async def main():
         # 保留 3 条 + 摘要 1 条 = 4
         check("1 消息数 = 保留3 + 摘要1 = 4", len(msgs1) == 4, f"count={len(msgs1)} contents={[m['content'][:10] for m in msgs1]}")
         check("1 摘要消息 role=system", msgs1[-1]["role"] == "system" and "历史摘要" in msgs1[-1]["content"], msgs1[-1])
+        check("1 摘要走连接器 chat（模型沿用入参；read_timeout_s=120.0 沿用原硬编码超时语义）",
+              len(ok_conn.calls) == 1 and ok_conn.calls[0]["model"] == "qwen3.8"
+              and ok_conn.calls[0]["read_timeout_s"] == 120.0, str(ok_conn.calls))
 
         # ── 场景 2：归档写失败（目录只读）→ ok=False，消息不删 ──
         sid2 = store.create_session(pid, aid, "S2")
@@ -122,7 +124,7 @@ async def main():
             store.save_message(pid, sid2, aid, "user", f"归档测试 {i}")
         os.chmod(archive_dir, 0o555)  # 只读
         try:
-            httpx.AsyncClient = lambda **kw: MockSuccessClient()
+            conn_mod.get_inference_connector = lambda: OkConnector()
             r2 = await comp.compact_session(pid, sid2, keep_recent=3, model="qwen3.8")
             check("2 归档失败 → ok=False", r2.get("ok") is False, str(r2))
             msgs2 = store.load_messages(pid, sid2)
@@ -136,7 +138,7 @@ async def main():
         sid3 = store.create_session(pid, aid, "S3")
         for i in range(6):
             store.save_message(pid, sid3, aid, "user", f"摘要测试 {i}")
-        httpx.AsyncClient = lambda **kw: FailClient()
+        conn_mod.get_inference_connector = lambda: FailConnector()
         r3 = await comp.compact_session(pid, sid3, keep_recent=3, model="qwen3.8")
         check("3 摘要失败 → ok=False", r3.get("ok") is False, str(r3))
         msgs3 = store.load_messages(pid, sid3)
@@ -148,7 +150,7 @@ async def main():
         sid4 = store.create_session(pid, aid, "S4")
         for i in range(8):
             store.save_message(pid, sid4, aid, "user", f"保护 {i+1}")
-        httpx.AsyncClient = lambda **kw: MockSuccessClient()
+        conn_mod.get_inference_connector = lambda: OkConnector()
         msgs_before = store.load_messages(pid, sid4)
         last3 = [m["content"] for m in msgs_before[-3:]]
         r4 = await comp.compact_session(pid, sid4, keep_recent=3, model="qwen3.8")
@@ -177,7 +179,7 @@ async def main():
         except ValueError:
             check("L2 非法导出目录 → ValueError", True)
     finally:
-        httpx.AsyncClient = orig_httpx
+        conn_mod.get_inference_connector = orig_factory
         comp.get_config = orig_get_config
         cfgstore._MEM = orig_mem
         import shutil
