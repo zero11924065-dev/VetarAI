@@ -440,12 +440,17 @@ def _apply_mutation() -> None:
     _BACKUP["app"] = _read_src(appmod)
     if MUTATE == 1:
         # 撤掉跨 loop 安全投递（else 分支改为 pass）→ T10 红
-        s = _BACKUP["ae"]
+        # 投递实现 0.4.26 起收敛进共享模块 _bus_common._deliver（a133496），
+        # app_events 经 from-import 复用，故变异打在共享模块上（对本总线同样生效），
+        # 且 main() 里须先 reload _bus_common 再 reload ae，否则 ae 仍绑定旧函数对象。
+        from sidecar.agent_engine import _bus_common as bc
+        _BACKUP["bc"] = _read_src(bc)
+        s = _BACKUP["bc"]
         old = ("    else:\n        try:\n            loop.call_soon_threadsafe(_put)\n"
                "        except RuntimeError:\n            pass")
         patched = s.replace(old, "    else:\n        pass  # MUTATE1")
-        assert patched != s, "变异 1 未命中 app_events 源码，测试无效"
-        Path(ae.__file__).write_text(patched, encoding="utf-8")
+        assert patched != s, "变异 1 未命中 _bus_common 源码，测试无效"
+        Path(bc.__file__).write_text(patched, encoding="utf-8")
     elif MUTATE == 2:
         # 撤掉 workflow create 端点的 notify → T11a 红
         s = _BACKUP["app"]
@@ -473,6 +478,10 @@ def _restore() -> None:
             Path(ae.__file__).write_text(_BACKUP["ae"], encoding="utf-8")
         if "app" in _BACKUP and _read_src(appmod) != _BACKUP["app"]:
             Path(appmod.__file__).write_text(_BACKUP["app"], encoding="utf-8")
+        if "bc" in _BACKUP:
+            from sidecar.agent_engine import _bus_common as bc
+            if _read_src(bc) != _BACKUP["bc"]:
+                Path(bc.__file__).write_text(_BACKUP["bc"], encoding="utf-8")
     finally:
         _BACKUP.clear()
 
@@ -495,6 +504,9 @@ def main() -> int:
     _apply_mutation()
     if MUTATE:
         import importlib
+        # 先共享模块再 ae：变异 1 打在 _bus_common，ae 须后 reload 才能重新绑定 _deliver
+        from sidecar.agent_engine import _bus_common as bc
+        importlib.reload(bc)
         importlib.reload(ae)
     try:
         asyncio.run(_run_async_suite())
@@ -503,6 +515,8 @@ def main() -> int:
         _restore()
         if MUTATE:
             import importlib
+            from sidecar.agent_engine import _bus_common as bc
+            importlib.reload(bc)
             importlib.reload(ae)
         ae.clear_all()
 
