@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "packs": [
+    {
+      "pack_id": "sensevoice-small",
+      "name": "SenseVoiceSmall 语音识别（INT8 量化）",
+      "task": "asr",
+      "format": "onnx",
+      "driver": "onnxruntime",
+      "version": "1.0.0",
+      "description": "FunASR 团队 SenseVoiceSmall ONNX INT8 量化版。多语种语音识别（中/英/粤/日/韩），支持情感与事件标记。约 230MB，CPU 即可运行。",
+      "size_bytes": 241581392,
+      "min_app_version": "0.4.29",
+      "homepage": "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx",
+      "license": "MIT",
+      "sample_rate": 16000,
+      "files": [
+        {
+          "path": "model_quant.onnx",
+          "size_bytes": 241216270,
+          "sha256": "21dc965f689a78d1604717bf561e40d5a236087c85a95584567835750549e822",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/model_quant.onnx"
+          ]
+        },
+        {
+          "path": "am.mvn",
+          "size_bytes": 11203,
+          "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/am.mvn"
+          ]
+        },
+        {
+          "path": "tokens.json",
+          "size_bytes": 352064,
+          "sha256": "a2594fc1474e78973149cba8cd1f603ebed8c39c7decb470631f66e70ce58e97",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/tokens.json"
+          ]
+        },
+        {
+          "path": "config.yaml",
+          "size_bytes": 1855,
+          "sha256": "f71e239ba36705564b5bf2d2ffd07eece07b8e3f2bbf6d2c99d8df856339ac19",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/config.yaml"
+          ]
+        }
+      ]
+    },
+    {
+      "pack_id": "qwen25-05b-instruct-q4_k_m",
+      "name": "Qwen2.5 0.5B Instruct 对话模型（Q4_K_M）",
+      "task": "chat",
+      "format": "gguf",
+      "driver": "llamacpp",
+      "version": "1.0.0",
+      "description": "阿里通义 Qwen2.5 0.5B 指令模型 GGUF Q4_K_M 量化版。轻量本地对话模型，中英文可用，约 469MB，适合 Apple Silicon 本地推理。",
+      "size_bytes": 491400032,
+      "min_app_version": "0.4.29",
+      "homepage": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      "license": "Apache-2.0",
+      "context_length": 32768,
+      "files": [
+        {
+          "path": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+          "size_bytes": 491400032,
+          "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+          "sources": [
+            "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+          ]
+        }
+      ]
+    }
+  ]
+}
