@@ -8,7 +8,7 @@ BASE="/Users/vetar/Desktop/beta/subagent"
 # 而不必覆盖正式产物（正式产物是已备份 DMG 的来源，覆盖后两者会分叉）。
 OUT="${OUT:-$BASE/build/VetarAI.app}"
 ELECTRON="$BASE/node_modules/electron/Electron.app"
-VERSION="${VERSION:-0.4.28}"
+VERSION="${VERSION:-0.4.29}"
 
 echo "[1/6] 清理旧产物..."
 rm -rf "$OUT"
@@ -41,6 +41,52 @@ cp "$BASE/renderer/src/assets/dock_icon.png" "$APPDIR/renderer/src/assets/"
 # 侧车二进制（process.resourcesPath/sidecar/）
 cp -R "$BASE/build/dist/vetarai-sidecar" "$OUT/Contents/Resources/sidecar"
 chmod +x "$OUT/Contents/Resources/sidecar/vetarai-sidecar"
+
+# llama-server 运行时（0.4.29 模型包对话功能依赖）→ Contents/Resources/drivers/
+# 源目录解析：env VETARAI_DRIVERS_DIR > ~/.subagent/drivers/。
+# 只拷最小集：llama-server 本体 + otool 解析出的真实被引用 dylib（递归闭包，
+# /usr/lib、/System 系统项除外），与二进制同目录扁平布局（LC_RPATH=@loader_path）。
+# 源目录里 dylib 多为「版本实体 + 符号链接」三层命名，cp -L 解引用后按被引用名落盘。
+DRIVERS_SRC="${VETARAI_DRIVERS_DIR:-$HOME/.subagent/drivers}"
+if [ ! -x "$DRIVERS_SRC/llama-server" ]; then
+  echo "    ⛔ 未找到 llama-server：$DRIVERS_SRC/llama-server" >&2
+  echo "       0.4.29 的模型包对话功能依赖它，组装中止。" >&2
+  echo "       请先放置 llama.cpp 预编译运行时，或用 VETARAI_DRIVERS_DIR 指定所在目录。" >&2
+  exit 1
+fi
+DRIVERS_DST="$OUT/Contents/Resources/drivers"
+mkdir -p "$DRIVERS_DST"
+cp "$DRIVERS_SRC/llama-server" "$DRIVERS_DST/llama-server"
+chmod +x "$DRIVERS_DST/llama-server"
+queue=("llama-server")
+handled=()
+copied=0
+while ((${#queue[@]})); do
+  item="${queue[0]}"
+  queue=("${queue[@]:1}")
+  while IFS= read -r dep; do
+    # 跳过自身 install name 与已入队/已拷贝项
+    [ "$dep" = "$item" ] && continue
+    already=0
+    for c in "${handled[@]}"; do [ "$c" = "$dep" ] && already=1 && break; done
+    [ "$already" = "1" ] && continue
+    for c in "${queue[@]}"; do [ "$c" = "$dep" ] && already=1 && break; done
+    [ "$already" = "1" ] && continue
+    src_dep="$DRIVERS_SRC/$dep"
+    if [ ! -e "$src_dep" ]; then
+      echo "    ⛔ llama-server 依赖链断裂：$dep 被 $item 引用，但 $src_dep 不存在" >&2
+      exit 1
+    fi
+    cp -L "$src_dep" "$DRIVERS_DST/$dep"
+    copied=$((copied+1))
+    queue+=("$dep")
+  done < <(otool -L "$DRIVERS_SRC/$item" 2>/dev/null \
+             | awk 'NR>1 {print $1}' \
+             | grep -E '^@(rpath|executable_path|loader_path)/' \
+             | sed 's|@[a-z_]*/||')
+  handled+=("$item")
+done
+echo "    + drivers 已装入（llama-server + ${copied} 个被引用 dylib，$(du -sh "$DRIVERS_DST" | cut -f1)）"
 
 # TS-120 阶段二：bge-m3 ONNX INT8 语义模型（544MB，随安装包一键部署，用户 2026-09-04 拍板）。
 # 侧车运行时按"用户数据目录优先（可自行替换升级）→ 环境变量 → 安装包内置"三级解析。

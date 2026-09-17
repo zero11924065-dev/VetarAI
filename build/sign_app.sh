@@ -202,7 +202,7 @@ if [ -d "$EFW" ]; then
 fi
 
 # ── 6. Frameworks 下其余 dylib ───────────────────────────────────
-echo "[6/8] Frameworks 下其余 dylib..."
+echo "[6/9] Frameworks 下其余 dylib..."
 cnt=0
 while IFS= read -r f; do
   [ -L "$f" ] && continue
@@ -214,13 +214,34 @@ while IFS= read -r f; do
 done < <(find "$FW" -maxdepth 2 -type f 2>/dev/null)
 echo "      已签 $cnt 个"
 
+# ── 6.5 drivers（llama-server 运行时，0.4.29 起随组装写入）────────────
+# ggml 后端 dylib 是 llama-server 运行时 dlopen 加载的，与侧车内部 C 扩展同性质，
+# 故用侧车 entitlements（disable-library-validation）；identifier 留空按文件名派生，
+# 与其他嵌套 Mach-O 一致（固定 identifier 语义只覆盖主程序/侧车/helper 这些 bundle 级身份）。
+echo "[7/9] drivers（llama-server + 被引用 ggml/llama dylib）..."
+DRIVERS="$APP/Contents/Resources/drivers"
+if [ -d "$DRIVERS" ]; then
+  cnt=0
+  while IFS= read -r f; do
+    [ -L "$f" ] && continue
+    if file -b "$f" 2>/dev/null | grep -qE "Mach-O|universal binary"; then
+      sign_one "$f" "" "$ENT_SIDECAR" || exit 1
+      cnt=$((cnt+1))
+    fi
+  done < <(find "$DRIVERS" -type f 2>/dev/null)
+  echo "      已签 $cnt 个"
+else
+  echo "      ⛔ 未找到 drivers 目录 $DRIVERS（0.4.29 起应随 assemble 写入，模型包对话功能依赖）"
+  exit 1
+fi
+
 # ── 7. Contents 下其余 Mach-O ────────────────────────────────────
-echo "[7/8] Contents 下其余 Mach-O（兜底扫漏）..."
+echo "[8/9] Contents 下其余 Mach-O（兜底扫漏）..."
 cnt=0
 while IFS= read -r f; do
   [ -L "$f" ] && continue
   case "$f" in
-    *"$SIDECAR"/*|*"$FW"/*|*LoginItems*|*/MacOS/VetarAI) continue ;;
+    *"$SIDECAR"/*|*"$FW"/*|*"$DRIVERS"/*|*LoginItems*|*/MacOS/VetarAI) continue ;;
   esac
   if file -b "$f" 2>/dev/null | grep -qE "Mach-O|universal binary"; then
     sign_one "$f" "" "$ENT_MAIN" || exit 1
@@ -230,7 +251,7 @@ done < <(find "$APP/Contents" -type f 2>/dev/null)
 echo "      已签 $cnt 个"
 
 # ── 8. 主 bundle（最后签，封印包含以上全部内容）────────────────────
-echo "[8/8] 主 bundle → identifier=$ID_APP ⛔（必须最后签）..."
+echo "[9/9] 主 bundle → identifier=$ID_APP ⛔（必须最后签）..."
 sign_one "$APP" "$ID_APP" "$ENT_MAIN" || exit 1
 
 echo ""
@@ -356,7 +377,7 @@ echo "════════ 最终汇总 ════════"
 echo "  产物：$APP"
 if [ "${ADHOC:-0}" = "1" ]; then
   echo "  签名方式：⚠️  **ad-hoc（无证书）**"
-  echo "  封印完整性：✅ 121 个 Mach-O 全部有效（修复了此前 8 处损坏）"
+  echo "  封印完整性：✅ ${_TOTAL} 个 Mach-O 全部有效（修复了此前 8 处损坏）"
   echo "  hardened runtime：✅ 已启用（将来切正式证书无需改脚本）"
   echo "  identifier：✅ 已固定为 ${ID_APP} / ${ID_SIDECAR}（不再含内容哈希）"
   echo ""
