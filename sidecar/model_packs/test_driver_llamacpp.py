@@ -25,7 +25,7 @@
 （127.0.0.1，实现 /v1/models 与 /v1/chat/completions 含 SSE），驱动对它做
 真实 spawn / 健康探测 / 换装 / terminate→kill。行为开关走 FAKE_LLAMA_* 环境变量。
 
-变异测试机制（MUTATE=1|2|3|4|5|6 python -m sidecar.model_packs.test_driver_llamacpp）：
+变异测试机制（MUTATE=1|2|3|4|5|6|7 python -m sidecar.model_packs.test_driver_llamacpp）：
 ⛔ 变异模式下必须出现 FAIL；0 FAIL = 断言空转，需加强（不是"通过"）。
 | 变异 | 撤掉的修复 | 应失败的断言 |
 |---|---|---|
@@ -35,6 +35,7 @@
 | 4 | ensure_server 注册表门禁失效（禁用/卸载照样短路复用） | H1b/H1c/H4a/H4b |
 | 5 | 卸载端点不回收运行时（llama-server 孤儿常驻） | H6b/H6c |
 | 6 | 禁用端点不回收运行时 | H5b/H5c |
+| 7 | 同包异档重启失效（0.4.31 懒加载升档：异档也复用旧进程） | I3a/I3b/I3c/I4/I6e |
 """
 import asyncio
 import hashlib
@@ -138,8 +139,14 @@ def _apply_mutation() -> None:
                      "    if not new_state:\n"
                      "        pass  # 变异6：禁用不回收运行时", "app")
         importlib.reload(_appmod)
+    elif MUTATE == 7:
+        _mutate_file(Path(mpd.__file__),
+                     '                and _STATE.get("ctx") == want_ctx):',
+                     "                ):  # 变异7：同包异档也复用（懒加载升档失效）",
+                     "driver")
+        importlib.reload(mpd)
     else:
-        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3|4|5|6）")
+        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3|4|5|6|7）")
 
 
 def _restore() -> None:
@@ -322,7 +329,8 @@ def _setup_fake_server() -> Path:
 
 def _fresh_state() -> None:
     """清驱动活动状态（各 section 之间不复用现场）。"""
-    mpd._STATE.update({"pack_id": None, "proc": None, "port": None, "log_fp": None})
+    mpd._STATE.update({"pack_id": None, "proc": None, "port": None, "log_fp": None,
+                       "ctx": None})
 
 
 # ══════════ A. manifest context_length 可选键校验 ══════════
@@ -650,6 +658,113 @@ async def test_connector():
     _fresh_state()
 
 
+# ══════════ I. 0.4.31（P2 懒加载，D5）：同包异档重启 + 档位优先级链 ══════════
+
+async def test_ctx_tier_restart(fake: Path):
+    """驱动层：ensure_server(pack, context_length=期望档) 的复用/重启判定；
+    连接器层：config 上限 → 懒加载档位 → -c 的端到端（假 llama-server 报告 argv）。
+
+    优先级链：显式期望档（= config num_ctx 上限经懒加载档位表）> manifest context_length
+    > 驱动默认（不带 -c）。
+    """
+    from sidecar.config import reload_config
+    from sidecar.model_packs.mp_connector import ModelPackageConnector
+    from sidecar.ollama import infer_options as io
+
+    os.environ["VETARAI_LLAMA_SERVER"] = str(fake)
+    _fresh_state()
+    _install_fake_pack("tier-pack", context_length=4096)   # manifest 档 4096
+    report = TMP / "tier_spawn_report.json"
+    os.environ["FAKE_LLAMA_REPORT"] = str(report)
+
+    def _argv_c() -> str | None:
+        """最近一次 spawn 的 -c 值（假服务器启动报告；无 -c → None）。"""
+        if not report.exists():
+            return "（无报告）"
+        argv = json.loads(report.read_text(encoding="utf-8"))["argv"]
+        return argv[argv.index("-c") + 1] if "-c" in argv else None
+
+    try:
+        # I1 显式档 > manifest
+        url = await mpd.ensure_server("tier-pack", context_length=8192)
+        deadline = time.monotonic() + 5
+        while not report.exists() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        check("I1 显式档 8192 覆盖 manifest 4096", _argv_c() == "8192", str(_argv_c()))
+        proc1 = mpd._STATE["proc"]
+        check("I1b 驱动 _STATE 登记当前档", mpd._STATE.get("ctx") == 8192,
+              str(mpd._STATE.get("ctx")))
+
+        # I2 同包同档 → 复用不重启
+        url2 = await mpd.ensure_server("tier-pack", context_length=8192)
+        check("I2 同包同档 → 复用同进程不重启",
+              mpd._STATE["proc"] is proc1 and url2 == url)
+
+        # I3 同包异档 → 停旧启新（与换装同路径同锁）：-c 变化 + 进程更替
+        url3 = await mpd.ensure_server("tier-pack", context_length=16384)
+        check("I3a 同包异档 → 旧进程已停", proc1.poll() is not None)
+        check("I3b 同包异档 → 新进程 -c 16384", _argv_c() == "16384", str(_argv_c()))
+        check("I3c 同包异档 → 进程与端口更替",
+              mpd._STATE["proc"] is not proc1 and url3 != url)
+
+        # I4 显式 None → 回落 manifest（异档再重启一次，证明回落链生效）
+        await mpd.ensure_server("tier-pack")
+        check("I4 显式 None → 回落 manifest 4096", _argv_c() == "4096", str(_argv_c()))
+        await mpd.stop_server()
+
+        # I5 无显式无 manifest → 不带 -c（驱动默认，保持现状）
+        _install_fake_pack("tier-default")
+        await mpd.ensure_server("tier-default")
+        check("I5 无显式无 manifest → 不带 -c", _argv_c() is None, str(_argv_c()))
+        await mpd.stop_server()
+
+        # I6 连接器端到端：config 上限 65536 + 懒加载 → 期望档=起始档 12288
+        # （config 上限经档位表 > manifest 4096——优先级链的完整链路）
+        # 全局后端故意保持 ollama：0.4.30 并行路由的真实部署形态，
+        # 期望档必须经显式 backend="model_package" 取得（不依赖全局后端）。
+        reload_config({"model_options": {"chat-tier": {"num_ctx": 65536}},
+                       "ctx_lazy_enabled": True, "ctx_lazy_start": 12288})
+        io._reset_ctx_lazy_state()
+        _install_fake_pack("chat-tier", context_length=4096)
+        conn = ModelPackageConnector()
+        reply = await conn.chat("chat-tier", [{"role": "user", "content": "hi"}])
+        check("I6a 连接器对话成功（自动启动）", reply == "pong", reply[:60])
+        check("I6b 期望档=懒加载起始档 12288（config 上限 > manifest）",
+              _argv_c() == "12288", str(_argv_c()))
+        check("I6b2 驱动运行档登记 12288", mpd._STATE.get("ctx") == 12288,
+              str(mpd._STATE.get("ctx")))
+        proc_a = mpd._STATE["proc"]
+        await conn.chat("chat-tier", [{"role": "user", "content": "hi"}])
+        check("I6c 期望档=运行档 → 进程复用不重启", mpd._STATE["proc"] is proc_a)
+        # 升档 → 下一次对话异档重启（懒加载 llama.cpp 侧的核心动作）
+        check("I6d 触档升 12288→24576",
+              io.maybe_bump_ctx("chat-tier", 12288 * 0.85, "model_package") is True)
+        await conn.chat("chat-tier", [{"role": "user", "content": "hi"}])
+        check("I6e 升档后对话 → 旧进程停 + 新进程 -c 24576",
+              proc_a.poll() is not None and _argv_c() == "24576", str(_argv_c()))
+        # 懒加载关闭 → 期望档 None → 回 manifest 4096（异档再重启回落）
+        reload_config({"model_options": {"chat-tier": {"num_ctx": 65536}},
+                       "ctx_lazy_enabled": False})
+        io._reset_ctx_lazy_state()
+        await conn.chat("chat-tier", [{"role": "user", "content": "hi"}])
+        check("I6f 懒加载关闭 → 期望档 None 回落 manifest 4096",
+              _argv_c() == "4096", str(_argv_c()))
+        await conn.unload_model("chat-tier")
+    finally:
+        os.environ.pop("FAKE_LLAMA_REPORT", None)
+        reload_config({"model_options": {}, "ctx_lazy_enabled": True,
+                       "ctx_lazy_start": 12288, "inference_backend": "ollama"})
+        io._reset_ctx_lazy_state()
+        await mpd.stop_server()
+        # 本节注册的包清出注册表：后续 F 节断言模型列表精确等于 chat-a/chat-b
+        for pid in ("tier-pack", "tier-default", "chat-tier"):
+            try:
+                mps.remove_pack(pid)
+            except Exception:
+                pass
+        _fresh_state()
+
+
 # ══════════ F. 端点层（context/limit 从 manifest、status/models 天然工作）══════════
 
 def test_endpoints():
@@ -852,6 +967,7 @@ def main():
     asyncio.run(test_spawn_args(fake))
     asyncio.run(test_lifecycle(fake))
     asyncio.run(test_connector())
+    asyncio.run(test_ctx_tier_restart(fake))
     test_endpoints()
     asyncio.run(test_disable_uninstall_semantics(fake))
     test_disable_uninstall_endpoints(fake)

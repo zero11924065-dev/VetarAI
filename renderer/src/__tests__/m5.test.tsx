@@ -163,6 +163,45 @@ describe('M5 模型降级卡片（ChatPanel 错误块）', () => {
   });
 });
 
+describe('0.4.31（P2）顶栏指示器：懒加载当前档（上限 N）', () => {
+  // /context/limit 返回 lazy=true + ceiling → 「≈用量 / 当前档（上限 N）」；否则单值现状
+  function mockBase(limitResp: Record<string, unknown>) {
+    const impl: typeof fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x', model_name: 'm' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'm' }]);
+      if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话1', message_count: 0 }]);
+      if (u.includes('/context/limit')) return jsonRes(limitResp);
+      if (u.includes('/config')) return jsonRes({ reconnect_max_attempts: 3 });
+      if (u.includes('/messages')) return jsonRes([]);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
+  }
+
+  it('lazy=true 且有 ceiling → 显示「≈用量 / 当前档（上限 N）」', async () => {
+    mockBase({ context_length: 12288, source: 'config', ceiling: 65536, lazy: true });
+    const { ChatPanel } = await import('../panels/ChatPanel');
+    const r = render(<ChatPanel projectId="p1" agentId="a1" />);
+    await waitFor(() => {
+      const txt = document.body.textContent || '';
+      expect(txt).toContain('/ 12288（上限 65536）');
+    }, { timeout: 3000 });
+    r.unmount();
+  });
+
+  it('无 lazy 追加字段 → 保持单值（不显示上限）', async () => {
+    mockBase({ context_length: 262144, source: 'show' });
+    const { ChatPanel } = await import('../panels/ChatPanel');
+    const r = render(<ChatPanel projectId="p1" agentId="a1" />);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('/ 262144');
+    }, { timeout: 3000 });
+    expect(document.body.textContent).not.toContain('（上限');
+    r.unmount();
+  });
+});
+
 describe('M5 长加载提示（H19：思考事件不得清除计时器）', () => {
   it('只有思考事件、正文未达 → ≥8s 显示等待提示；正文到达 → 消失', async () => {
     const impl2: typeof fetch = async (url) => {

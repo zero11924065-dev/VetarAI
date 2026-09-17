@@ -72,9 +72,14 @@ def setcfg(model_options=None, backend="ollama", **extra) -> None:
         "network_switch": "auto",
         "inference_backend": backend,
         "model_options": model_options or {},
+        # 0.4.31：本套件断的是「配置 num_ctx 即全量注入」的旧语义——
+        # 显式关闭懒加载钉住旧预期（懒加载语义由 test_ctx_lazy.py 专项覆盖），
+        # 防止默认开启的懒加载随起始档默认值变化让这些断言悄悄漂移。
+        "ctx_lazy_enabled": False,
     }
     base.update(extra)
     (_TMP / "config.json").write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+    io._reset_ctx_lazy_state()   # 档位表是模块级状态，跨用例必须复位
 
 
 from sidecar.ollama import infer_options as io   # noqa: E402
@@ -150,6 +155,19 @@ def main() -> None:
     setcfg({"qwen3.8": {"num_ctx": 4096}})
     check("A2-7 configured_num_ctx 精确取值", io.configured_num_ctx("qwen3.8") == 4096)
     check("A2-8 configured_num_ctx 未配置 → None", io.configured_num_ctx("other-model") is None)
+
+    # ── 0.4.31 懒加载语义（旧语义上方已用 ctx_lazy_enabled=False 钉住）──
+    # 完整覆盖见 test_ctx_lazy.py；此处只守 A2 注入口径的分叉点。
+    setcfg({"qwen3.8": {"num_ctx": 65536}}, "ollama", ctx_lazy_enabled=True)
+    check("L-1 懒加载开启 + ceiling(65536) > 起始档 → 注入当前档 12288 而非上限",
+          io.model_options("qwen3.8") == {"options": {"num_ctx": 12288}},
+          str(io.model_options("qwen3.8")))
+    check("L-2 configured_num_ctx 仍报上限（懒加载不改变配置口径）",
+          io.configured_num_ctx("qwen3.8") == 65536)
+    setcfg({"qwen3.8": {"num_ctx": 8192}}, "ollama", ctx_lazy_enabled=True)
+    check("L-3 ceiling(8192) < 起始档 → 直接全量，注入值与旧行为一致",
+          io.model_options("qwen3.8") == {"options": {"num_ctx": 8192}},
+          str(io.model_options("qwen3.8")))
 
     # 非法值丢弃（宁可回落默认，不注入坏值）
     setcfg({"m1": {"temperature": 99, "num_ctx": -5, "top_p": "abc", "seed": True,

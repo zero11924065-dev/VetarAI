@@ -51,6 +51,13 @@ def _host_of(base_url: str) -> str:
 class OpenAICompatConnector:
     """OpenAI 兼容后端连接器（/v1/chat/completions、/v1/models）。"""
 
+    # 0.4.31（P2，D5）：推理参数映射的**显式后端**——修掉此前 model_options(model)
+    # 不传 backend、按全局 config inference_backend 映射的语义漂移（全局是 ollama 时，
+    # 本连接器的 payload 会被错误包上 {"options": ...} 并注入 num_ctx）。
+    # ModelPackageConnector 子类覆盖为 "model_package"（映射行与 openai 兼容相同，
+    # 但 num_ctx 上限走驱动 -c 而非 payload，见 infer_options._OPENAI_COMPAT_MAP 注释）。
+    _INFER_BACKEND = "openai_compatible"
+
     def __init__(self) -> None:
         self._clients: dict[tuple, httpx.AsyncClient] = {}
         self._state: tuple | None = None
@@ -182,7 +189,9 @@ class OpenAICompatConnector:
         # A2/A4（0.4.15）：注入推理参数。⚠️ OpenAI 兼容端参数是**顶层字段**（非嵌套 options），
         # 且 num_ctx / top_k 不被支持 → model_options() 内部已按后端映射并静默丢弃，
         # 直接透传会导致 400 或参数被忽略。
-        payload.update(_infer.model_options(model))
+        # 0.4.31（P2）：显式传后端（类属性，子类 ModelPackageConnector 覆盖为 model_package），
+        # 不再按全局 config 映射（语义漂移修复，见 _INFER_BACKEND 注释）。
+        payload.update(_infer.model_options(model, backend=self._INFER_BACKEND))
         dropped_images = 0
         if images:
             parsed = []
@@ -243,8 +252,8 @@ class OpenAICompatConnector:
         """
         payload: dict[str, Any] = {"model": model, "messages": list(messages), "stream": True,
                                    "stream_options": {"include_usage": True}}
-        # A2/A4（0.4.15）：同上，流式路径同样注入
-        payload.update(_infer.model_options(model))
+        # A2/A4（0.4.15）：同上，流式路径同样注入（显式后端，语义漂移修复同 chat）
+        payload.update(_infer.model_options(model, backend=self._INFER_BACKEND))
         if tools:
             payload["tools"] = tools
         if images:

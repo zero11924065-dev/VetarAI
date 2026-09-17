@@ -205,6 +205,37 @@ describe('ModelOptionsEditor 单元', () => {
     expect(screen.getByText(/num_ctx 与 top_k 不支持/)).toBeTruthy();
   });
 
+  // ── 0.4.31（P2 懒加载，D8）─────────────────────────────────────────────
+  it('num_ctx 文案为「上限 + 懒加载」语义（Ollama 后端）', () => {
+    render(<ModelOptionsEditor cfg={{ model_options: { 'qwen3.8': {} } }}
+      busy={false} onSave={async () => {}} isOllama focus="qwen3.8" />);
+    expect(screen.getByText('上下文上限 num_ctx')).toBeTruthy();
+    expect(screen.getByText(/懒加载开启时先以起始档（默认 12288）运行/)).toBeTruthy();
+  });
+
+  it('model_package 后端 → num_ctx 解锁（上限语义）+ 专属文案，top_k 仍置灰', async () => {
+    // ⛔ 必须声明参数类型：否则 vi.fn 的 mock.calls 元素被推断为空元组 []，
+    // 取 calls[i][0] 会报 TS2493（本文件曾因此漏过 typecheck）。
+    const onSave = vi.fn(async (_patch: Record<string, any>) => {});
+    render(<ModelOptionsEditor cfg={{ model_options: { 'chat-pack': {} } }}
+      busy={false} onSave={onSave} isOllama={false} isModelPackage focus="chat-pack" />);
+    // num_ctx 可编辑（上限语义：懒加载档位表的 ceiling，驱动按档 -c 重启）
+    const input = screen.getByPlaceholderText('如 8192') as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    // top_k 模型包依旧不支持（映射行与 OpenAI 兼容相同）→ 置灰
+    expect((screen.getByPlaceholderText('如 40') as HTMLInputElement).disabled).toBe(true);
+    // 专属说明文案（不再是「当前为 OpenAI 兼容后端」）
+    expect(screen.getByText(/当前为模型包后端/)).toBeTruthy();
+    expect(screen.getByText(/num_ctx 是上下文上限/)).toBeTruthy();
+    expect(screen.queryByText(/num_ctx 与 top_k 不支持/)).toBeNull();
+    // 解锁不是摆设：编辑 → blur 提交落库
+    fireEvent.change(input, { target: { value: '65536' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const patch = onSave.mock.calls[onSave.mock.calls.length - 1][0];
+    expect(patch.model_options['chat-pack'].num_ctx).toBe(65536);
+  });
+
   it('未配置任何模型 → 显示引导文案，不崩溃', () => {
     render(<ModelOptionsEditor cfg={{ model_options: {} }} busy={false}
       onSave={async () => {}} isOllama />);

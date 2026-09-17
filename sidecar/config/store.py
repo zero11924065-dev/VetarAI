@@ -109,6 +109,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     #    OpenAI 兼容端用 frequency_penalty/max_tokens 且**无 num_ctx**（注入时自动丢弃）。
     # ⚠️ num_ctx 越大 prefill 越慢（B7 联动），故**不设默认值**——不传即沿用模型自身默认。
     "model_options": {},
+    # ── 0.4.31（P0 模型缓存懒加载，REQ-INFER-010）─────────────────────────
+    # 语义（D1）：model_options 里配的 num_ctx = **上限**；懒加载仅在其已配置时生效
+    # （未配置 = 模型默认，「未配置逐字节不注入」铁律不破）。首次加载用起始档
+    # （ctx_lazy_start），上下文膨胀触档自动翻倍升档，达上限后行为与旧版完全一致。
+    # 档位表是 infer_options 层的模块级运行时状态：每模型一槽、只升不降、不持久化。
+    "ctx_lazy_enabled": True,        # 懒加载总开关；False = 配置 num_ctx 即全量（旧行为）
+    "ctx_lazy_start": 12288,         # 起始档（合法 2048~1048576）；上限 < 起始档时直接全量
     # M7（TS-113）：体验与契约增强
     "default_export_dir": "",            # 默认导出目录（空=项目工作目录）；圆桌导出/交卷报告/会话导出统一走此配置
     "vision_parse_attachments": False,   # 圆桌图片附件是否走视觉模型识别（默认关）
@@ -340,6 +347,14 @@ def _validate(cur: dict[str, Any]) -> None:
     _err = _io.validate_model_options(cur.get("model_options"))
     if _err:
         raise ValueError(_err)
+    # 0.4.31（P0 懒加载）：总开关 bool + 起始档范围校验（与上方各键同一内联范式）
+    cle = cur.get("ctx_lazy_enabled")
+    if cle is not None and not isinstance(cle, bool):
+        raise ValueError("ctx_lazy_enabled 必须是 bool")
+    cls = cur.get("ctx_lazy_start")
+    if cls is not None and (not isinstance(cls, int) or isinstance(cls, bool)
+                            or not (2048 <= cls <= 1048576)):
+        raise ValueError("ctx_lazy_start 必须是 2048-1048576 的整数")
     # M7（TS-113）：导出目录与附件视觉解析校验
     ded = cur.get("default_export_dir")
     if ded is not None and not isinstance(ded, str):

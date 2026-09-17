@@ -872,6 +872,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const [tokenUsed, setTokenUsed] = useState<number>(0);
   const [contextLimit, setContextLimit] = useState<number>(0);
   const [contextSource, setContextSource] = useState<string>('');
+  // 0.4.31（P2 懒加载，D4）：/context/limit 追加的 ceiling（= 用户配置的 num_ctx 上限）。
+  // lazy=true 且有 ceiling 时顶栏显示「≈用量 / 当前档（上限 N）」；否则保持单值现状。
+  const [contextCeiling, setContextCeiling] = useState<number>(0);
   // B3（0.4.8）：后端每轮经 state 事件回传的【真实】上下文字数（含 system prompt、
   // 工具结果、tools 声明）。此前前端只按 user/assistant 消息估算，漏算工具读入的大段
   // 内容（如 read_file 读 90KB PDF），顶栏显示"≈17"而实际已数万 token。
@@ -938,6 +941,9 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         const d = await r.json();
         setContextLimit(d.context_limit || d.context_length || 0);
         setContextSource(d.source || '');
+        // 0.4.31（P2，D4）：懒加载生效时后端追加 ceiling/lazy——指示器改显上限；
+        // 无追加字段（懒加载关闭/未配置/其他后端）→ 0 = 保持单值显示
+        setContextCeiling(d.lazy && typeof d.ceiling === 'number' && d.ceiling > 0 ? d.ceiling : 0);
       }
     } catch { /* 不阻塞 */ }
   }, [agentInfo?.model_name]);
@@ -2552,9 +2558,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           <span className="chat-topbar-model" style={{fontFamily:fonts.mono,fontSize:11.5,color:colors.textTertiary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',maxWidth:140}}>{modelList.find(m=>m.name===modelUsed)?.name || modelUsed}</span>
           {contextLimit > 0 && (
             <div
-              title={`当前会话上下文估算：约 ${tokenUsed} / 上限 ${contextLimit}（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）`}
+              title={contextCeiling > 0
+                ? `当前会话上下文估算：约 ${tokenUsed} / 当前档 ${contextLimit}（懒加载：上下文膨胀自动升档，上限 ${contextCeiling}；按未移入仓库的对话实时估算，非模型精确计费口径）`
+                : `当前会话上下文估算：约 ${tokenUsed} / 上限 ${contextLimit}（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）`}
               style={{display:'flex',alignItems:'center',gap:6,fontSize:11, cursor:'help'}}>
-              <span className="chat-topbar-ctx-text" style={{color:colors.textTertiary, whiteSpace:'nowrap'}}>上下文 ≈{tokenUsed} / {contextLimit}</span>
+              <span className="chat-topbar-ctx-text" style={{color:colors.textTertiary, whiteSpace:'nowrap'}}>
+                上下文 ≈{tokenUsed} / {contextLimit}{contextCeiling > 0 ? `（上限 ${contextCeiling}）` : ''}
+              </span>
               <div style={{width:64,height:4,background:colors.borderSubtle,borderRadius:2,overflow:'hidden'}}>
                 <div style={{
                   width: Math.min(100, tokenRatio * 100) + '%',

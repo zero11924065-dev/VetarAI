@@ -249,17 +249,15 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
             "type": "function",
             "function": {
                 "name": "create_document",
-                "description": "生成 Word(.docx) / Excel(.xlsx) / PowerPoint(.pptx) / Markdown(.md) 文档文件。"
-                               "当用户要求输出报告、表格、幻灯片等正式文档时使用本工具（而非 write_file 纯文本）。"
-                               "docx 默认 A4 竖版、宋体、页脚自动页码「第X页 共Y页」（page_number 默认开启）。"
+                "description": "生成 Word/Excel/PowerPoint/Markdown（docx/xlsx/pptx/md）文档。"
+                               "用户要求报告、表格、幻灯片等正式文档时用本工具（而非 write_file 纯文本）。"
+                               "docx 默认 A4 竖版、宋体、页脚自动页码「第X页 共Y页」。"
                                "content 必须是结构化 JSON："
                                "docx/md 用 {title, blocks:[{type:'heading',level,text}|{type:'paragraph',text}|{type:'bullets',items:[..]}|{type:'table',rows:[[..],..]}|{type:'page_break'}|{type:'image',layout:'single'|'grid',paths:[..],width_cm,height_cm,caption}]}；"
-                               "image 块：layout='single' 单图/多张原文居中（身份证/合同等），"
-                               "layout='grid' 一行3列网格（聊天截图等并排）；"
-                               "尺寸：width_cm / height_cm 均为厘米，⛔ **只传其中一个**则另一维按原图比例自动推算"
-                               "（推荐做法，如只给 width_cm=13）；两者都传会强制拉伸变形，仅在确需指定精确尺寸时使用；"
-                               "都不传默认 width_cm=13（A4 正文宽）；"
-                               "page_break 表示分页（证据文档每份证据独立起页时用）；"
+                               "image 块：layout='single' 单图/多张原文居中，layout='grid' 一行3列网格；"
+                               "width_cm / height_cm 单位厘米：⛔ **只传其中一个**，另一维按原图比例自动推算（推荐）；"
+                               "两者都传会强制拉伸变形，仅在确需精确尺寸时用；都不传默认 width_cm=13（A4 正文宽）；"
+                               "page_break 分页（每份证据独立起页时用）；"
                                "xlsx 用 {sheets:[{name, rows:[[单元格,..],..]}]}；"
                                "pptx 用 {slides:[{title, bullets:[..], notes}]}.",
                 "parameters": {
@@ -360,10 +358,10 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
             "type": "function",
             "function": {
                 "name": "delegate_task",
-                "description": "把一个子任务委派给项目内的另一个 Agent 独立完成。只在你判断任务需要分工时使用。"
-                               "子 Agent 看不到当前对话历史，任务书必须自包含（目标+必要输入+预期产出）。"
-                               "你本条消息附着的图片会自动随委派传给子 Agent，无需自己读取或描述图片内容；"
-                               "任务书直接写“识别附图”即可。若图片在文件夹中，用 image_paths 传入路径列表。",
+                "description": "把子任务委派给项目内另一个 Agent 独立完成，仅在需要分工时使用。"
+                               "子 Agent 看不到当前对话历史，任务书必须自包含。"
+                               "消息附图自动随委派传给子 Agent（任务书写“识别附图”即可）；"
+                               "文件夹中的图片用 image_paths 传入。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -423,10 +421,9 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
             "type": "function",
             "function": {
                 "name": "search_knowledge",
-                "description": "检索本地知识仓库（拉模式）。仅当用户明确要求你检索知识库，"
-                               "或当前任务必须引用此前沉淀的知识/对话时才调用。"
-                               "支持关键词与语义（理解近义/换述）混合检索。"
-                               "检索结果仅本轮可见，不会持久写入对话上下文。",
+                "description": "检索本地知识仓库（拉模式）。仅当用户明确要求检索知识库，"
+                               "或任务必须引用此前沉淀的知识/对话时才调用。"
+                               "结果仅本轮可见，不写入对话上下文。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1177,6 +1174,20 @@ async def run_tool_loop(
             for _txt in _injected:
                 if str(_txt).strip():
                     msgs.append({"role": "user", "content": str(_txt)})
+        # 0.4.31（P1 懒加载升档，D3）：每轮 LLM 调用前判定是否升档。
+        #   est = ctx_chars×0.6（与 _measure_ctx_chars 同口径，轮首现算、含历史消息）；
+        #   est ≥ 当前档×0.85 且档 < 上限 → 升档。
+        # ⛔ 判定必须置于 90% 压缩预警【之前】，并在升档后把本轮起预警所用的
+        #   context_limit 更新为新档——确保只有到达【上限】后才触发压缩。
+        # 委派子会话 context_limit=0 → 跳过升档判定（D6：零特殊处理，
+        #   经共享 infer_options 档位表直接用主会话已升到的当前档）。
+        if context_limit:
+            from sidecar.ollama import infer_options as _lazy_io
+            _est_tokens = _measure_ctx_chars(msgs, tools_spec_list) * 0.6
+            if _lazy_io.maybe_bump_ctx(model, _est_tokens):
+                _new_tier = _lazy_io.current_ctx_for(model)
+                if _new_tier:
+                    context_limit = int(_new_tier)
         # M2 溢出预警（每轮开始前判定）
         if prompt_eval_history:
             last_pe = prompt_eval_history[-1]

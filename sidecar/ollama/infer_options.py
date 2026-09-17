@@ -40,6 +40,7 @@
 """
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 # ── A1：超时的原硬编码值（作为 config 未配置时的兜底，保证向后兼容）──
@@ -158,6 +159,17 @@ def model_options(model: str, backend: str | None = None) -> dict[str, Any]:
     if not raw:
         return {}
     be = (backend or str(_cfg().get("inference_backend", "ollama"))).strip().lower()
+    # 0.4.31（P0 懒加载，D1）：Ollama 后端、懒加载开启、且该模型配了 num_ctx 时，
+    # options.num_ctx 注入**当前档**而非上限（上限 = 用户配置值）。
+    # 未配置 num_ctx / 懒加载关闭 / 非 Ollama 后端 → current_ctx_for 返回 None，
+    # raw 原样走旧逻辑（「未配置逐字节不注入」铁律不破）。
+    # 0.4.31（P2，D5）：model_package 的 num_ctx **不进 payload**（llama-server 不靠
+    # 请求级参数调上下文，由驱动启动时以 -c 传档位）——映射表 num_ctx:None 原样丢弃，
+    # 此处无需也不许为它注入档位；其余参数映射照常。
+    if be == "ollama" and "num_ctx" in raw:
+        _tier = current_ctx_for(model, backend=be)
+        if _tier is not None:
+            raw["num_ctx"] = _tier
     mapping = _PARAM_MAP.get(be) or _PARAM_MAP["ollama"]
 
     out: dict[str, Any] = {}
@@ -192,6 +204,111 @@ def configured_num_ctx(model: str) -> int | None:
     if f is None or f <= 0:
         return None
     return int(f)
+
+
+# ── 0.4.31（P0/P1）模型缓存懒加载：num_ctx 档位表（REQ-INFER-010，D1~D3）──────
+# 语义（D1）：用户配置的 num_ctx = **上限**；首次加载用起始档，上下文膨胀触档
+# 自动翻倍升档，达上限后行为与旧版完全一致。仅在该模型已配置 num_ctx 时生效。
+#
+# 档位表是**模块级运行时状态**（D2）：
+#   - 每模型一槽，**只升不降**（多会话同模型并发天然取 max，不会互相降档，R4）
+#   - 不持久化，进程重启回起始档
+#   - 线程安全用一把简单锁（run_tool_loop 单会话串行，并发度极低，无需复杂方案）
+# 档位阶梯（D2）：起始档 = min(ctx_lazy_start, ceiling)；升档 next = min(current×2, ceiling)；
+#   ceiling < 起始档时起始档即 ceiling（直接全量，与旧行为一致）。
+# 触发阈值（D3/R5）：est = ctx_chars×0.6 ≥ 当前档×0.85 且档 < 上限 → 升档。
+#   0.85 留余量是因为 ctx_chars×0.6 本身是估算——误判后果仅为提前/滞后一档，均可接受。
+CTX_LAZY_START_DEFAULT = 12288
+CTX_LAZY_START_RANGE = (2048, 1_048_576)
+CTX_LAZY_BUMP_THRESHOLD = 0.85
+
+_CTX_LAZY_LOCK = threading.Lock()
+_CTX_LAZY_STATE: dict[str, int] = {}   # model → 当前档（只升不降）
+
+
+def lazy_enabled() -> bool:
+    """懒加载总开关（config `ctx_lazy_enabled`，默认 true；非法值按默认开处理）。"""
+    v = _cfg().get("ctx_lazy_enabled", True)
+    return v if isinstance(v, bool) else True
+
+
+def lazy_start() -> int:
+    """起始档配置值（config `ctx_lazy_start`，默认 12288；非法/越界夹到合法范围）。"""
+    raw = _cfg().get("ctx_lazy_start", CTX_LAZY_START_DEFAULT)
+    f = _to_float(raw)
+    if f is None:
+        return CTX_LAZY_START_DEFAULT
+    lo, hi = CTX_LAZY_START_RANGE
+    return int(min(max(f, lo), hi))
+
+
+def lazy_ceiling(model: str, backend: str | None = None) -> int | None:
+    """懒加载上限 = 用户为该模型配置的 num_ctx。
+
+    返回 None 表示**懒加载不生效**（走旧逻辑）：总开关关闭 / 未配置 num_ctx /
+    后端不支持懒加载。0.4.31（P2）起生效后端 = ollama 与 model_package
+    （模型包的 num_ctx 上限经驱动 -c 档位重启生效，与 Ollama 同语义，D5）；
+    openai_compatible 的上下文由服务端自行管理，懒加载不介入。
+    """
+    if not lazy_enabled():
+        return None
+    be = (backend or str(_cfg().get("inference_backend", "ollama"))).strip().lower()
+    if be not in ("ollama", "model_package"):
+        return None
+    return configured_num_ctx(model)
+
+
+def _tier_locked(model: str, ceiling: int) -> int:
+    """取当前档（调用方须已持锁）。首次访问初始化起始档；配置调低时钳到上限。"""
+    cur = _CTX_LAZY_STATE.get(model)
+    if cur is None:
+        cur = min(lazy_start(), ceiling)   # ceiling < 起始档 → 直接全量（D2）
+        _CTX_LAZY_STATE[model] = cur
+    elif cur > ceiling:
+        # 用户运行中调低了配置上限：读侧钳制（不写回，保持「只升不降」的单向语义）
+        cur = ceiling
+    return cur
+
+
+def current_ctx_for(model: str, backend: str | None = None) -> int | None:
+    """该模型当前应使用的 num_ctx 档；懒加载不生效 → None（调用方走旧逻辑）。
+
+    首次访问有副作用：初始化该模型的起始档。/api/context/limit 与 chat 端点
+    据此报「当前档」，与下一次请求实际注入的值同口径（D4）。
+    """
+    ceiling = lazy_ceiling(model, backend)
+    if ceiling is None:
+        return None
+    with _CTX_LAZY_LOCK:
+        return _tier_locked(model, ceiling)
+
+
+def maybe_bump_ctx(model: str, est_tokens: float, backend: str | None = None) -> bool:
+    """用量估算触档则升一档（D3）。返回 True = 本轮发生了升档。
+
+    触发条件：est_tokens ≥ 当前档 × 0.85 且当前档 < 上限。
+    est 口径与 loop 一致：ctx_chars × 0.6（含历史消息，每轮现算）。
+    """
+    ceiling = lazy_ceiling(model, backend)
+    if ceiling is None:
+        return False
+    with _CTX_LAZY_LOCK:
+        cur = _tier_locked(model, ceiling)
+        if cur >= ceiling:
+            return False
+        if est_tokens < cur * CTX_LAZY_BUMP_THRESHOLD:
+            return False
+        nxt = min(cur * 2, ceiling)
+        if nxt <= cur:
+            return False
+        _CTX_LAZY_STATE[model] = nxt
+        return True
+
+
+def _reset_ctx_lazy_state() -> None:
+    """测试专用：清空档位表（生产代码不得调用——档位只升不降是并发语义的一部分）。"""
+    with _CTX_LAZY_LOCK:
+        _CTX_LAZY_STATE.clear()
 
 
 def _raw_model_options(model: str) -> dict[str, Any]:

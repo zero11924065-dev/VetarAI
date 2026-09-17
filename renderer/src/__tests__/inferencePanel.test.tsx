@@ -18,7 +18,7 @@
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { InferencePanel } from '../panels/InferencePanel';
 import { ProjectPanel } from '../panels/ProjectPanel';
@@ -114,6 +114,49 @@ describe('TS-112 M6 推理面板', () => {
     expect(screen.getByText(/模型包的安装、启用与卸载请在「模型包」面板进行/)).toBeTruthy();
     // 不渲染 OpenAI 兼容的地址/API Key 表单
     expect(screen.queryByPlaceholderText(/http:\/\/localhost:1234\/v1/)).toBeFalsy();
+    unmount();
+  });
+
+  it('0.4.31（P2）：懒加载设置项渲染（开关默认开 / 起始档默认 12288），改动走 PUT 保存', async () => {
+    const puts: any[] = [];
+    const impl: typeof fetch = async (url, opts) => {
+      const u = String(url);
+      if (opts?.method === 'PUT') {
+        puts.push(JSON.parse(String(opts.body ?? '{}')));
+        return jsonRes({ ok: true });
+      }
+      if (u.includes('/inference/status')) {
+        return jsonRes({ backend: 'ollama', base_url: 'http://localhost:11434', online: true,
+          detail: '', capabilities: { tools: true, vision: true, pull: true, delete: true } });
+      }
+      if (u.includes('/inference/models')) return jsonRes([]);
+      if (u.includes('/config')) return jsonRes({ inference_backend: 'ollama' });
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
+    const { unmount } = render(<InferencePanel />);
+    // 渲染：开关默认开（config 未配置 = 默认 true），起始档默认 12288
+    await waitFor(() => {
+      expect(screen.getByText(/启用懒加载（上下文先以低档运行/)).toBeTruthy();
+    }, { timeout: 3000 });
+    const label = screen.getByText(/启用懒加载（上下文先以低档运行/);
+    const checkbox = label.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox).toBeTruthy();
+    expect(checkbox.checked).toBe(true);
+    const startInput = screen.getByDisplayValue('12288') as HTMLInputElement;
+    expect(startInput).toBeTruthy();
+    // 关掉开关 → PUT 带 ctx_lazy_enabled: false
+    await act(async () => { fireEvent.click(checkbox); });
+    await waitFor(() => {
+      expect(puts.some(p => p.ctx_lazy_enabled === false)).toBe(true);
+    }, { timeout: 3000 });
+    // 改起始档 → 点其后的「保存」→ PUT 带 ctx_lazy_start: 8192
+    await act(async () => { fireEvent.change(startInput, { target: { value: '8192' } }); });
+    const saveBtn = startInput.parentElement!.querySelector('button')!;
+    await act(async () => { fireEvent.click(saveBtn); });
+    await waitFor(() => {
+      expect(puts.some(p => p.ctx_lazy_start === 8192)).toBe(true);
+    }, { timeout: 3000 });
     unmount();
   });
 

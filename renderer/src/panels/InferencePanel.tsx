@@ -333,11 +333,39 @@ export function InferencePanel() {
           流式（聊天）默认 1800s，覆盖思考间隙。
         </div>
 
+        {/* 0.4.31（P2 懒加载，D2/D8）：模型缓存懒加载设置（Ollama 与模型包生效；
+            OpenAI 兼容后端的上下文由服务端管理，此项不介入） */}
+        <div style={{ fontSize: 13, color: colors.textPrimary, margin: '16px 0 8px' }}>模型缓存懒加载</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13,
+          color: colors.textPrimary, cursor: 'pointer' }}>
+          <input type="checkbox" checked={cfg.ctx_lazy_enabled !== false} disabled={busy}
+            onChange={e => saveBackend({ ctx_lazy_enabled: e.target.checked })} />
+          启用懒加载（上下文先以低档运行，膨胀时自动升档至 num_ctx 上限）
+        </label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+          <div style={{ flex: '1 1 150px', minWidth: 150 }}>
+            <div style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 4 }}>起始档（首次加载的上下文档位）</div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input className="ui-input" type="number" min={2048} max={1048576}
+                style={{ ...input, flex: 1, fontFamily: fonts.mono }}
+                value={String(cfg.ctx_lazy_start ?? 12288)}
+                onChange={e => setCfg({ ...cfg, ctx_lazy_start: e.target.value === '' ? 12288 : Number(e.target.value) })} />
+              <button className="ui-btn ui-btn-secondary" style={smallSecondary} disabled={busy}
+                onClick={() => saveBackend({ ctx_lazy_start: Number(cfg.ctx_lazy_start ?? 12288) })}>保存</button>
+            </div>
+            <div style={{ fontSize: 11, color: colors.textTertiary, marginTop: 2 }}>默认 12288（2048~1048576）</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: colors.textTertiary, lineHeight: 1.6, marginTop: 4 }}>
+          上限 = 下方按模型配置的 num_ctx；未配 num_ctx 的模型不受影响。仅 Ollama 与模型包生效。
+        </div>
+
         {/* A2/A4：每模型推理参数 */}
         <div style={{ ...typo.sectionTitle, color: colors.textPrimary, margin: '20px 0 8px' }}>
           模型推理参数（按模型单独配置）
         </div>
-        <ModelOptionsEditor cfg={cfg} busy={busy} onSave={saveBackend} isOllama={isOllama} focus={focusModel} />
+        <ModelOptionsEditor cfg={cfg} busy={busy} onSave={saveBackend} isOllama={isOllama}
+          isModelPackage={isMP} focus={focusModel} />
       </div>
 
       {/* 模型管理区 - 分区卡 */}

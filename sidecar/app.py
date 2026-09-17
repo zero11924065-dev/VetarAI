@@ -449,6 +449,7 @@ async def api_context_limit(model: str = "qwen3.8"):
       1. `config`  —— 用户在设置页为该模型显式配的 num_ctx。**最高优先**：
                       那是用户明确要求模型使用的上下文窗口，Ollama 实际也会按它执行，
                       指示器必须与之对齐，否则用量占比全错。
+                      （0.4.31 懒加载：开启时报**当前档**并追加 ceiling/lazy 字段，D4）
       2. `ps`      —— 模型已加载时 Ollama 报告的**实际生效值**（最准，但需模型在内存）
       3. `show`    —— 模型未加载时读 /api/show 的 model_info["<架构>.context_length"]
                       （模型**自身**上限，实测 qwen3.8=262144、deepseek-r1:14b=131072）
@@ -457,13 +458,23 @@ async def api_context_limit(model: str = "qwen3.8"):
     - Ollama 不可达 → {"context_length": 0, "source": "error"}
     - openai_compatible → {"context_length": 0, "source": "unsupported"}（M6）
     - model_package（0.4.29 P2）→ 包 manifest 可选键 context_length（与驱动 -c 启动参数
-      同源）；未声明 → unsupported（前端隐藏指示器，不瞎兜底）
+      同源）；未声明 → unsupported（前端隐藏指示器，不瞎兜底）。
+      （0.4.31 P2 懒加载：该包配了 num_ctx 上限且懒加载开启时报**当前档** +
+      ceiling/lazy，与 Ollama 分支同口径，D4/D5）
     整体超时 5s，失败不阻塞前端。
     """
     # M6（TS-112）：仅 Ollama 后端可查 /api/ps；openai_compatible 返回 unsupported（前端隐藏指示器，不报错）
     cfg = get_config()
     backend = str(cfg.get("inference_backend", "ollama"))
     if backend == "model_package":
+        # 0.4.31（P2 懒加载，D4/D5）：与 Ollama 同口径——该包配了 num_ctx 上限且
+        # 懒加载开启 → 报**当前档**并追加 ceiling/lazy（纯追加，旧字段不动）；
+        # 未配置/关闭 → 原逻辑（包 manifest 可选键 context_length，与驱动 -c 同源）。
+        from sidecar.ollama import infer_options as _infer
+        _tier = _infer.current_ctx_for(model, "model_package")
+        if _tier is not None:
+            return {"context_length": int(_tier), "source": "config", "model": model,
+                    "ceiling": int(_infer.configured_num_ctx(model)), "lazy": True}
         # 0.4.29（P2）：上下文上限以包 manifest 可选键 context_length 为准
         from sidecar.model_packs import store as _mps
         cl = (_mps.read_manifest(model) or {}).get("context_length")
@@ -477,6 +488,13 @@ async def api_context_limit(model: str = "qwen3.8"):
     from sidecar.ollama import infer_options as _infer
     _nc = _infer.configured_num_ctx(model)
     if _nc:
+        # 0.4.31（P1 懒加载，D4）：懒加载生效时 limit 报**当前档**而非上限，
+        # 响应**追加** ceiling（= 上限）与 lazy 字段（纯追加，旧字段不动）；
+        # 懒加载关闭 → 原逻辑（报配置值全量）。
+        _tier = _infer.current_ctx_for(model)
+        if _tier is not None:
+            return {"context_length": int(_tier), "source": "config", "model": model,
+                    "ceiling": int(_nc), "lazy": True}
         return {"context_length": int(_nc), "source": "config", "model": model}
 
     import httpx
@@ -1177,16 +1195,24 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         _ctx_limit = 0
         try:
             _cfg = get_config()
-            _base = _cfg.get("ollama_base_url", "").rstrip("/")
-            async with _httpx.AsyncClient(timeout=_httpx.Timeout(5.0, connect=5.0), trust_env=False) as _c:
-                _r = await _c.get(f"{_base}/api/ps")
-                for _m in _r.json().get("models", []):
-                    _n = _m.get("name", "")
-                    if _n == req.model or _n.startswith(req.model + ":") or _n.startswith(req.model):
-                        _ctx_limit = int(_m.get("context_length") or _m.get("details", {}).get("context_length") or 0)
-                        break
-            if not _ctx_limit:
-                _ctx_limit = 262144  # 协议常量：qwen 系默认上限
+            # 0.4.31（P1 懒加载，D4）：懒加载生效且该模型已配 num_ctx → 读**当前档**
+            # （与 /api/context/limit 同口径，修掉此前只查 ps + 兜底、未读配置的口径缺口）；
+            # 未配置/关闭 → 原逻辑（ps + 兜底 262144）。
+            from sidecar.ollama import infer_options as _infer
+            _tier = _infer.current_ctx_for(req.model)
+            if _tier is not None:
+                _ctx_limit = int(_tier)
+            else:
+                _base = _cfg.get("ollama_base_url", "").rstrip("/")
+                async with _httpx.AsyncClient(timeout=_httpx.Timeout(5.0, connect=5.0), trust_env=False) as _c:
+                    _r = await _c.get(f"{_base}/api/ps")
+                    for _m in _r.json().get("models", []):
+                        _n = _m.get("name", "")
+                        if _n == req.model or _n.startswith(req.model + ":") or _n.startswith(req.model):
+                            _ctx_limit = int(_m.get("context_length") or _m.get("details", {}).get("context_length") or 0)
+                            break
+                if not _ctx_limit:
+                    _ctx_limit = 262144  # 协议常量：qwen 系默认上限
         except Exception:
             _ctx_limit = 0
         aiter = run_tool_loop(req.model, msgs,

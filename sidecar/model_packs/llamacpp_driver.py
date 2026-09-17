@@ -76,9 +76,12 @@ _PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
 
 _DEFAULT_BOOT_TIMEOUT_S = 600.0  # 兜底；实际以 config model_pack_boot_timeout_s 为准
 
-# 活动服务状态（进程级单例：{pack_id, proc, port, log_fp}）。
+# 活动服务状态（进程级单例：{pack_id, proc, port, log_fp, ctx}）。
 # 同一时刻至多一个对话包在跑——Ollama 换装语义，见模块 docstring。
-_STATE: dict[str, Any] = {"pack_id": None, "proc": None, "port": None, "log_fp": None}
+# ctx（0.4.31 P2 懒加载，D5）：当前进程启动时的 -c 档位；None = 未显式指定
+# （llama-server 自身默认）。ensure_server 据此判定「同包异档 → 停旧启新」。
+_STATE: dict[str, Any] = {"pack_id": None, "proc": None, "port": None, "log_fp": None,
+                          "ctx": None}
 
 # 换装/停止串行锁：按事件循环惰性创建（测试会 asyncio.run 多次，
 # 锁绑定旧循环后再 acquire 会炸，故按 loop 分桶）
@@ -289,7 +292,8 @@ async def _stop_locked() -> bool:
     """
     proc: subprocess.Popen | None = _STATE["proc"]
     log_fp = _STATE.get("log_fp")
-    _STATE.update({"pack_id": None, "proc": None, "port": None, "log_fp": None})
+    _STATE.update({"pack_id": None, "proc": None, "port": None, "log_fp": None,
+                   "ctx": None})
     if log_fp is not None:
         try:
             log_fp.close()
@@ -339,16 +343,24 @@ def active_base_url() -> str | None:
     return f"http://127.0.0.1:{_STATE['port']}/v1"
 
 
-async def ensure_server(pack_id: str) -> str:
+async def ensure_server(pack_id: str, context_length: int | None = None) -> str:
     """确保 pack_id 的 llama-server 在跑，返回 base_url（含 /v1）。
 
     * 注册表门禁先行：包被禁用/卸载 → LlamaServerError 中文明细；若失效包正是
       当前活动服务对象，先回收它的子进程再抛（0.4.29 缺陷修复 A，语义见模块
       docstring「禁用/卸载语义」）；
-    * 同包已在跑 → 直接复用（不起第二个进程）；
+    * 同包**同档**已在跑 → 直接复用（不起第二个进程）；
     * 异包在跑 → 换装：停旧启新（Ollama 换装语义）；
+    * 同包**异档**（0.4.31 P2 懒加载升档，D5）→ 与换装同路径、同一把锁：
+      停旧启新换 `-c`（llama.cpp 的上下文长度仅启动时生效，扩容只能重启）；
     * 启动失败 → 回收子进程现场再抛 LlamaServerError（不留半截状态
       让下次 ensure 误判"已在跑"）。
+
+    context_length（0.4.31 P2）：显式期望档（mp_connector 取自 infer_options
+    懒加载档位表）。解析优先级：**显式传入 > manifest context_length > 驱动默认**
+    （默认 = 不带 -c，llama-server 用自身默认，保持现状）。档位比对全部在本函数
+    的锁内依据 _STATE 完成——调用方（routing 换装编排/mp_connector）不得在锁外
+    读 _STATE 自行判定，否则与 stop_server 之间必出竞态。
     """
     async with _lock():
         # 门禁必须在热路径短路之前：否则"同包且进程存活"会在禁用/卸载后照样
@@ -361,18 +373,23 @@ async def ensure_server(pack_id: str) -> str:
             if _STATE["pack_id"] == pack_id:
                 await _stop_locked()
             raise
+        # 0.4.31（P2，D5）：期望档解析（显式 > manifest > 默认）。
+        # falsy（None/0/负）一律回落 manifest——显式档由档位表产出，必为正整数，
+        # 非法值按"未显式传入"处理，与 `_context_length_of` 的防御口径一致。
+        want_ctx = context_length if context_length else _context_length_of(pack_id)
         proc: subprocess.Popen | None = _STATE["proc"]
-        if _STATE["pack_id"] == pack_id and proc is not None and proc.poll() is None:
+        if (_STATE["pack_id"] == pack_id and proc is not None and proc.poll() is None
+                and _STATE.get("ctx") == want_ctx):
             return f"http://127.0.0.1:{_STATE['port']}/v1"
         if proc is not None:
             # 换装语义（Ollama 同款）：同一时刻只跑一个对话包——先停旧、再启新。
             await _stop_locked()
         binary = resolve_server_binary()
         gguf = _gguf_path(pack_id)
-        context_length = _context_length_of(pack_id)
         port = _free_port()
-        proc, log_fp, log_path = _spawn(pack_id, binary, gguf, port, context_length)
-        _STATE.update({"pack_id": pack_id, "proc": proc, "port": port, "log_fp": log_fp})
+        proc, log_fp, log_path = _spawn(pack_id, binary, gguf, port, want_ctx)
+        _STATE.update({"pack_id": pack_id, "proc": proc, "port": port,
+                       "log_fp": log_fp, "ctx": want_ctx})
         try:
             await _wait_ready(proc, port, log_path, _boot_timeout())
         except Exception:

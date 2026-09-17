@@ -42,6 +42,10 @@ from sidecar.ollama.openai_compat import OpenAICompatConnector
 class ModelPackageConnector(OpenAICompatConnector):
     """模型包后端连接器（inference_backend="model_package" 时由工厂分发）。"""
 
+    # 0.4.31（P2，D5）：推理参数按 model_package 映射行注入（与 openai 兼容同表，
+    # num_ctx 不进 payload——上限语义经下方 _ensure_running 的驱动档位生效）。
+    _INFER_BACKEND = "model_package"
+
     # ── ① 连接基础：地址来自驱动（动态端口），不读 config inference_base_url ──
     def _base(self) -> str:
         url = _driver.active_base_url()
@@ -58,8 +62,15 @@ class ModelPackageConnector(OpenAICompatConnector):
 
     # ── ② 生命周期：对话前确保目标包在跑 ──
     async def _ensure_running(self, model: str) -> None:
+        # 0.4.31（P2 懒加载，D5）：期望档 = infer_options 档位表当前档（懒加载生效
+        # 且该模型配了 num_ctx 上限）；不生效 → None（驱动回退 manifest/默认）。
+        # 期望档与运行档的比对、异档停旧启新全部在驱动 ensure_server 的换装锁内
+        # 完成——本层只传期望值，不在锁外读驱动 _STATE 自行判定（竞态防线，
+        # 与 routing.py 换装编排同一纪律）。
+        from sidecar.ollama import infer_options as _infer
+        tier = _infer.current_ctx_for(model, "model_package")
         try:
-            await _driver.ensure_server(model)
+            await _driver.ensure_server(model, context_length=tier)
         except _driver.LlamaServerError as e:
             # 统一到后端业务错误语义（app.py 映射 400，中文明细直达用户）
             raise OllamaAPIError(str(e), 400, "") from e

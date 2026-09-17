@@ -31,7 +31,9 @@
  *
  * ⚠️ 两个后端支持的参数不同：OpenAI 兼容端**没有 num_ctx / top_k**，
  * 且 repeat_penalty→frequency_penalty、num_predict→max_tokens（映射在后端做）。
- * 故非 Ollama 后端时这两项显示为不可用并说明原因，而不是让用户填了再被静默丢弃。
+ * 故 OpenAI 兼容后端时这两项显示为不可用并说明原因，而不是让用户填了再被静默丢弃。
+ * 0.4.31（P2 懒加载）例外：num_ctx 对**模型包**解锁——语义为「上限」，
+ * 懒加载档位表以此为 ceiling，驱动按当前档 -c 重启 llama-server（D5）。
  *
  * REQ-INFER-009（0.4.28）草稿模式：每个字段是**本地草稿**受控——onChange 只写草稿，
  * 不校验不保存；blur / Enter 才走 coerce 校验并提交。旧实现 onChange 直接校验保存：
@@ -58,8 +60,8 @@ interface ParamDef {
 
 // 范围逐条对照后端 _PARAM_RANGE，勿单边修改
 const PARAMS: ParamDef[] = [
-  { key: 'num_ctx', label: '上下文窗口 num_ctx', ollamaOnly: true, kind: 'int', min: 256, max: 1048576,
-    hint: '模型一次能处理的 token 上限。⚠️ 调大会显著拖慢首字（prefill），30B/35B 本地模型尤其明显；留空=用模型默认',
+  { key: 'num_ctx', label: '上下文上限 num_ctx', ollamaOnly: true, kind: 'int', min: 256, max: 1048576,
+    hint: '上限。懒加载开启时先以起始档（默认 12288）运行，上下文膨胀自动升档至此值；⚠️ 调大会显著拖慢首字（prefill），30B/35B 本地模型尤其明显；留空=用模型默认',
     placeholder: '如 8192' },
   { key: 'temperature', label: '随机性 temperature', kind: 'float', min: 0, max: 2, step: 0.1,
     hint: '越高越发散、越低越确定。留空=用模型默认', placeholder: '0.0 ~ 2.0' },
@@ -88,6 +90,13 @@ interface Props {
   onSave: (patch: Record<string, any>) => Promise<void>;
   isOllama: boolean;
   /**
+   * 0.4.31（P2 懒加载）：模型包后端（内置 llama.cpp）。num_ctx 对模型包解锁——
+   * 它不作为请求级参数注入（llama-server 无此协议参数），而是**上限**语义：
+   * 懒加载档位表的上限，驱动按当前档以 -c 重启 llama-server（D5）。
+   * top_k 依旧不支持（映射行与 OpenAI 兼容相同，注入时静默丢弃）。
+   */
+  isModelPackage?: boolean;
+  /**
    * 不接收 models 列表：曾设计成"在本组件里放一个模型下拉来新增配置"，
    * 但那会把每个模型名**再渲染一遍**，导致 InferencePanel 的模型列表与下拉里
    * 出现两处同名文本 —— 既有测试 `getByText('qwen3.8')` 因此报
@@ -98,7 +107,7 @@ interface Props {
   focus?: string | null;
 }
 
-export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props) {
+export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, isModelPackage, focus }: Props) {
   const mo: Record<string, Record<string, any>> = cfg.model_options || {};
   const configured = Object.keys(mo);
   const [expanded, setExpanded] = useState<string | null>(configured[0] ?? null);
@@ -192,11 +201,21 @@ export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props
 
   return (
     <div>
-      {!isOllama && (
+      {!isOllama && !isModelPackage && (
         <div style={{ ...calloutStyle('info'), marginBottom: 10 }}>
           <Icon name="info" size={15} style={{ flexShrink: 0 }} />
           <span>当前为 OpenAI 兼容后端：<b>num_ctx 与 top_k 不支持</b>（已置灰），
             repeat_penalty 会自动映射为 frequency_penalty、num_predict 映射为 max_tokens。</span>
+        </div>
+      )}
+
+      {/* 0.4.31（P2 懒加载）：模型包后端——num_ctx 解锁为「上限」语义（驱动按档 -c 重启），
+          top_k 依旧不支持（与 OpenAI 兼容同一映射行） */}
+      {!isOllama && isModelPackage && (
+        <div style={{ ...calloutStyle('info'), marginBottom: 10 }}>
+          <Icon name="info" size={15} style={{ flexShrink: 0 }} />
+          <span>当前为模型包后端：<b>num_ctx 是上下文上限</b>——懒加载开启时先以低档启动，
+            上下文膨胀自动升档至此值；<b>top_k 不支持</b>（已置灰）。</span>
         </div>
       )}
 
@@ -235,7 +254,10 @@ export function ModelOptionsEditor({ cfg, busy, onSave, isOllama, focus }: Props
             {open && (
               <div style={{ padding: '10px 12px', borderTop: `1px solid ${colors.borderSubtle}` }}>
                 {PARAMS.map(def => {
-                  const disabled = !isOllama && !!def.ollamaOnly;
+                  // 0.4.31（P2）：num_ctx 对模型包解锁（上限语义，见 isModelPackage 注释）；
+                  // top_k 等其余 ollamaOnly 项对非 Ollama 后端仍置灰
+                  const disabled = !isOllama && !!def.ollamaOnly
+                    && !(isModelPackage && def.key === 'num_ctx');
                   const k = fieldKey(name, def.key);
                   const savedStr = valueToString(def, params[def.key]);
                   // 草稿模式：受控值 = 草稿（未初始化时回落已存值）；onChange 只写草稿
