@@ -85,6 +85,10 @@ RESOURCE_SESSION = "session"
 # 生命周期/进度动作名见 model_packs/downloader.py（download_start/progress/done/
 # error/cancelled）；端点写操作（删/toggle）仍用 ACTION_* 常量。
 RESOURCE_MODEL_PACK = "model_pack"
+# 0.4.32（CU 三期 P2，REQ-FUT-006）：CU 任务宏——录制落盘/删除推 create/delete；
+# 回放每步推 action="replay_step"（extra 带 run_id/macro_id/seq/action/method/ok），
+# 供前端宏面板展示回放进度（E6/P3 前端消费）。
+RESOURCE_CU_MACRO = "cu_macro"
 
 # ── 动作类型常量 ──
 ACTION_CREATE = "create"

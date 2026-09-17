@@ -90,11 +90,12 @@ def test_a_tools_spec_gating():
     import sidecar.config as cfg
     isolate_all("cu_a_")
 
-    CU_TOOLS = {"screen_view", "mouse_click", "keyboard_type", "keyboard_hotkey"}
+    CU_TOOLS = {"screen_view", "mouse_click", "keyboard_type", "keyboard_hotkey",
+                "element_locate"}   # 0.4.32：二期新增只读元素定位（同组可见性规则）
     off = {t["function"]["name"] for t in tools_spec(with_computer_use=False)}
     on = {t["function"]["name"] for t in tools_spec(with_computer_use=True)}
-    check("A1 防线2 总开关关→四个工具全不暴露（零开销）", not (off & CU_TOOLS), str(off & CU_TOOLS))
-    check("A2 防线2 总开关开→四个工具全暴露", CU_TOOLS <= on, str(CU_TOOLS - on))
+    check("A1 防线2 总开关关→五个工具全不暴露（零开销）", not (off & CU_TOOLS), str(off & CU_TOOLS))
+    check("A2 防线2 总开关开→五个工具全暴露", CU_TOOLS <= on, str(CU_TOOLS - on))
 
     # 子 Agent 不得有电脑操作权（with_install=False 场景同样应剔除；规格层由调用方控制）
     sub = {t["function"]["name"] for t in
@@ -125,6 +126,16 @@ def test_a_tools_spec_gating():
               if t["function"]["name"] == "keyboard_type")
     check("A10 keyboard_type 必填 text",
           kt["function"]["parameters"].get("required") == ["text"], "")
+
+    # 0.4.32：element_locate 只读工具规格（与现有 CU 工具同条件组、同子 Agent 规则）
+    el = next((t for t in tools_spec(with_computer_use=True)
+               if t["function"]["name"] == "element_locate"), None)
+    check("A12 element_locate 在 CU 条件组内暴露", el is not None, "")
+    check("A13 element_locate 必填 x/y 且描述标明只读",
+          el is not None
+          and set(el["function"]["parameters"].get("required", [])) == {"x", "y"}
+          and "只读" in el["function"]["description"],
+          str((el or {}).get("function", {}).get("parameters", {}).get("required")))
 
     # 配置校验：白名单非字符串数组应被拒
     try:
@@ -299,7 +310,7 @@ class _StubExec:
         import sidecar.computer_use as cu
         self._orig = {n: getattr(cu, n) for n in
                       ("take_screenshot", "mouse_click", "keyboard_type", "keyboard_hotkey",
-                       "check_whitelist", "check_permission_for")}
+                       "check_whitelist", "check_permission_for", "element_locate")}
         cu.take_screenshot = lambda: {"ok": True, "_kind": "image", "image_base64": "x" * 20,
                                       "mime": "image/jpeg", "coord_factor": 1.1, "content": "截屏桩"}
         cu.mouse_click = lambda x, y, button="left", clicks=1: (
@@ -309,6 +320,10 @@ class _StubExec:
             self.calls.append(("type", text)) or {"ok": True, "action": "type", "content": "桩：已输入"})
         cu.keyboard_hotkey = lambda keys: (
             self.calls.append(("hotkey", keys)) or {"ok": True, "action": "hotkey", "content": "桩：已按键"})
+        # 0.4.32：element_locate 只读桩（记录坐标，绝不触碰真实 AX）
+        cu.element_locate = lambda x, y: (
+            self.calls.append(("locate", x, y)) or
+            {"ok": True, "hit": False, "content": "桩：未命中"})
         cu.check_permission_for = self._perm_probe
         return self
 
@@ -442,6 +457,17 @@ def test_d_routing_defenses():
                    cfg_patch={"computer_use_confirm_each": True})
         check("D18 键盘输入需确认（副作用）", len(asked) == 1, str(len(asked)))
         check("D19 输入文本正确传给执行器", stub.calls == [("type", "你好")], str(stub.calls))
+
+        # D20：0.4.32 element_locate 只读 → 不弹确认（同截屏），坐标正确传给执行器
+        stub.calls.clear()
+        asked.clear()
+        trs = _run([{"name": "element_locate", "args": {"x": 12.5, "y": 30}}],
+                   ctx={"authorizer": authz_yes}, authorizer=authz_yes,
+                   cfg_patch={"computer_use_confirm_each": True})
+        check("D20 element_locate 只读→不弹确认（避免每步骚扰）", len(asked) == 0, str(len(asked)))
+        check("D21 element_locate 执行成功且坐标传对",
+              (trs[0]["data"] if trs else {}).get("ok") is True
+              and stub.calls == [("locate", 12.5, 30)], f"{str(trs)[:150]} calls={stub.calls}")
     finally:
         stub.restore()
         cfg.reload_config({"computer_use_confirm_each": True, "computer_use_app_whitelist": []})

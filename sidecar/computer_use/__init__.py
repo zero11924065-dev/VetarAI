@@ -24,8 +24,9 @@
 from sidecar.computer_use.executor import (
     take_screenshot, mouse_click, keyboard_type, keyboard_hotkey,
     check_capabilities, frontmost_app, check_whitelist, check_permission_for,
+    element_locate,
 )
 
 __all__ = ["take_screenshot", "mouse_click", "keyboard_type", "keyboard_hotkey",
            "check_capabilities", "frontmost_app", "check_whitelist",
-           "check_permission_for"]
+           "check_permission_for", "element_locate"]

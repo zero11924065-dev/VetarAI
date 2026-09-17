@@ -152,6 +152,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "computer_use_enabled": False,       # 总开关，默认关（Agent 直接操作真实电脑，风险高）。
     "computer_use_confirm_each": True,   # 每步点击/输入前弹确认；熟练后可关。
     "computer_use_app_whitelist": [],    # 允许操作的应用白名单（空=不限制，仍受每步确认约束）。
+    # 0.4.32（CU 二期 E2 点击校正链）：点击前对目标坐标做 AX 命中测试，命中则改点元素
+    # frame 中心；未命中/无权限/异常一律回落原像素坐标（不阻断点击，审计如实记录命中方式）。
+    "cu_element_locate_enabled": True,   # 元素定位校正开关，默认开；关闭=一期纯像素点击行为。
     # 0.4.12（B2）：权限确认弹窗的等待超时（秒）。此前硬编码 120s（app.py _AUTH_TIMEOUT），
     # 用户离开一会儿回来点确认就被记为"拒绝"（真机反馈）。0=无限等待（不超时，只能手动关闭）。
     "auth_confirm_timeout": 600,         # 默认提到 10 分钟；0=不超时
@@ -381,7 +384,7 @@ def _validate(cur: dict[str, Any]) -> None:
     # 0.4.9 新增配置校验
     for k in ("confirm_network_install", "delegation_model_swap",
               "app_control_enabled", "computer_use_enabled", "computer_use_confirm_each",
-              "confirm_model_pack_download"):
+              "confirm_model_pack_download", "cu_element_locate_enabled"):
         v = cur.get(k)
         if v is not None and not isinstance(v, bool):
             raise ValueError(f"{k} 必须是 bool")

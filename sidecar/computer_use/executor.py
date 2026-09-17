@@ -307,11 +307,12 @@ def check_permission_for(tool_name: str) -> dict[str, Any]:
                 "不要再重试截屏，请如实告知用户需先完成授权。")}
         return {"ok": True, "error": ""}
 
-    # 点击/输入/按键：需辅助功能权限（缺它时 CGEventPost 被系统静默丢弃）
+    # 点击/输入/按键：需辅助功能权限（缺它时 CGEventPost 被系统静默丢弃）；
+    # element_locate 只读 AX 树，同属该授权（0.4.32 CU 二期）。
     if _ax_trusted() is False:
         return _ax_denied(tool_name, {
             "mouse_click": "点击", "keyboard_type": "输入",
-            "keyboard_hotkey": "按键"}.get(tool_name, "操作"))
+            "keyboard_hotkey": "按键", "element_locate": "查询元素"}.get(tool_name, "操作"))
     return {"ok": True, "error": ""}
 
 
@@ -632,6 +633,51 @@ def _post(cg, ev) -> None:
             pass
 
 
+def _correct_xy_by_element(px: float, py: float, lw: int, lh: int) -> tuple[float, float, dict]:
+    """0.4.32（CU 二期 E2，REQ-FUT-005 路径①）点击校正链：
+    视觉模型给的近似坐标 → AX 命中测试取精确 frame → 命中则改点 frame 中心。
+
+    回落规则（任一条不满足都保持原坐标，绝不阻断点击）：
+      开关 cu_element_locate_enabled 关闭 / 无 AX 权限 / 未命中 /
+      frame 缺失或宽高 ≤0 / frame 中心越屏 → 原像素坐标。
+    ⛔ 本函数绝不抛异常：校正是增强，像素点击才是主流程
+      （⛔ 真实占用键鼠是需求不是缺陷，本层只校正坐标、不改变事件投递机制）。
+    返回 (x, y, locate)；locate["method"] = "element" | "pixel_fallback"，
+    命中时附 role/title（截断）供审计做命中率统计（R2：Electron 命中率低属预期，
+    如实记录、不阻塞）。
+    """
+    locate: dict[str, Any] = {"method": "pixel_fallback"}
+    try:
+        from sidecar.config import get_config as _gc
+        if not bool((_gc() or {}).get("cu_element_locate_enabled", True)):
+            return px, py, locate
+        from sidecar.computer_use import ax_element as _axe
+        if not _axe.ax_available():
+            return px, py, locate
+        hit = _axe.hit_test(px, py)
+        frame = (hit or {}).get("frame")
+        if not frame:
+            return px, py, locate
+        fx, fy, fw, fh = frame
+        if not (fw > 0 and fh > 0):          # ⛔ MUTATE锚点：零尺寸 frame 无中心可点
+            return px, py, locate
+        cx, cy = fx + fw / 2.0, fy + fh / 2.0
+        # 中心点必须落在屏内（容差同坐标校验）：frame 异常时宁可信模型给的像素坐标
+        if lw and lh and (cx < -20 or cy < -20 or cx > lw + 20 or cy > lh + 20):
+            return px, py, locate
+        locate = {"method": "element",
+                  "role": str(hit.get("role") or "")[:40],
+                  "title": str(hit.get("title") or "")[:80],
+                  # 0.4.32（CU 三期 P2）：frame/app 随命中结果带出（本次 hit_test 的既有
+                  # 产出，零额外 AX 调用），供宏录制落语义化 step（回放按 app+role/title
+                  # 重定位，窗口挪位仍命中）。
+                  "frame": [round(v, 1) for v in frame],
+                  "app": str(hit.get("app") or "")[:80]}
+        return cx, cy, locate
+    except Exception:
+        return px, py, locate
+
+
 def mouse_click(x: float, y: float, button: str = "left", clicks: int = 1) -> dict[str, Any]:
     """在【逻辑点】坐标 (x,y) 真实点击。
 
@@ -671,6 +717,11 @@ def mouse_click(x: float, y: float, button: str = "left", clicks: int = 1) -> di
         return _ax_denied("click", "点击", {"x": round(px, 1), "y": round(py, 1),
                                             "button": btn, "clicks": n})
 
+    # 0.4.32（CU 二期 E2）：元素校正——近似坐标经 AX 命中取精确 frame 中心；
+    # 未命中/开关关闭/任何异常一律回落原像素坐标（校正绝不阻断点击，
+    # 见 _correct_xy_by_element 头注）。命中方式落审计供命中率统计。
+    px, py, _locate = _correct_xy_by_element(px, py, lw, lh)
+
     down_t = _K_CG_EVENT_LEFT_MOUSE_DOWN if btn == "left" else _K_CG_EVENT_RIGHT_MOUSE_DOWN
     up_t = _K_CG_EVENT_LEFT_MOUSE_UP if btn == "left" else _K_CG_EVENT_RIGHT_MOUSE_UP
     btn_num = 0 if btn == "left" else 1
@@ -687,6 +738,7 @@ def mouse_click(x: float, y: float, button: str = "left", clicks: int = 1) -> di
                 ev = cg.CGEventCreateMouseEvent(src, evt_type, pt, btn_num)
                 if not ev:
                     _audit("click", {"x": px, "y": py, "button": btn, "clicks": n,
+                                     **_locate,
                                      "ok": False, "err": "CGEventCreateMouseEvent 返回空"})
                     return {"ok": False, "error": (
                         "click_failed: 系统拒绝创建鼠标事件（CGEventCreateMouseEvent 返回空）。"
@@ -699,7 +751,7 @@ def mouse_click(x: float, y: float, button: str = "left", clicks: int = 1) -> di
             if i < n:
                 time.sleep(0.06)
     except Exception as e:
-        _audit("click", {"x": px, "y": py, "button": btn, "clicks": n,
+        _audit("click", {"x": px, "y": py, "button": btn, "clicks": n, **_locate,
                          "ok": False, "err": f"{type(e).__name__}: {e}"})
         return {"ok": False, "error": f"click_failed: {type(e).__name__}: {e}"}
     finally:
@@ -710,11 +762,60 @@ def mouse_click(x: float, y: float, button: str = "left", clicks: int = 1) -> di
                 pass
 
     _audit("click", {"x": round(px, 1), "y": round(py, 1), "button": btn,
-                     "clicks": n, "ok": True,
+                     "clicks": n, "ok": True, **_locate,
                      "screen_points": f"{lw}x{lh}"})
+    # 0.4.32（CU 三期 P2）：录制挂钩——动作成功后若录制中则追加语义化 step。
+    # element 取本次校正链 hit_test 的既有结果（_locate），⛔ 不重复 hit_test。
+    _maybe_record(_CLICK_ACTIONS.get((btn, n)) or ("right_click" if btn == "right" else "click"),
+                  x=round(px, 1), y=round(py, 1), locate=_locate,
+                  payload={"button": btn, "clicks": n})
     return {"ok": True, "action": "click", "x": px, "y": py, "button": btn, "clicks": n,
+            "locate": _locate,
             "content": f"已在逻辑点 ({px:.0f},{py:.0f}) {btn}键点击{n}次",
             "hint": "操作后界面可能已变化，继续下一步前请先 screen_view 重新截屏核对结果。"}
+
+
+def element_locate(x: float, y: float) -> dict[str, Any]:
+    """只读查询屏幕【逻辑点】(x,y) 处的界面元素语义（role/title/frame/center）。
+
+    0.4.32（CU 二期 E3）：供模型在点击前主动校准坐标；不点击、不输入、无副作用。
+    title 截断 80 字符（防大树文本爆炸）。未命中是正常答案（Electron 应用 AX 树
+    贫乏属预期，R2）：返回 ok=True + hit=False，模型应直接用原坐标点击。
+    """
+    px, py = _safe_num(x), _safe_num(y)
+    if px is None or py is None:
+        return {"ok": False, "error": f"bad_arg: 坐标必须是数字（收到 x={x!r}, y={y!r}）"}
+    if _ax_trusted() is False:
+        return _ax_denied("locate", "查询元素", {"x": round(px, 1), "y": round(py, 1)})
+    try:
+        from sidecar.computer_use import ax_element as _axe
+        hit = _axe.hit_test(px, py)
+    except Exception:
+        hit = None                                     # 查询失败按未命中处理，绝不抛给模型
+    if not hit:
+        _audit("locate", {"x": round(px, 1), "y": round(py, 1), "ok": True, "hit": False})
+        return {"ok": True, "hit": False,
+                "content": (f"坐标 ({px:.0f},{py:.0f}) 未命中任何界面元素"
+                            "（可能目标应用 AX 树贫乏，属预期）。点击时请直接使用原坐标。")}
+    frame = hit.get("frame")
+    center = None
+    if frame and frame[2] > 0 and frame[3] > 0:
+        center = [round(frame[0] + frame[2] / 2.0, 1), round(frame[1] + frame[3] / 2.0, 1)]
+    title = str(hit.get("title") or "")[:80]           # ⛔ MUTATE锚点：title 必须截断防爆
+    role = str(hit.get("role") or "")
+    _audit("locate", {"x": round(px, 1), "y": round(py, 1), "ok": True, "hit": True,
+                      "role": role[:40], "title": title})
+    desc = f"命中元素：role={role or '未知'}"
+    if title:
+        desc += f"，title={title!r}"
+    if frame:
+        desc += f"，frame={tuple(round(v, 1) for v in frame)}"
+    if center:
+        desc += f"。点击该中心：({center[0]:.0f},{center[1]:.0f})"
+    return {"ok": True, "hit": True, "role": role, "title": title,
+            "frame": [round(v, 1) for v in frame] if frame else None,
+            "center": center, "app": str(hit.get("app") or ""),
+            "content": desc}
 
 
 def keyboard_type(text: str) -> dict[str, Any]:
@@ -783,6 +884,10 @@ def keyboard_type(text: str) -> dict[str, Any]:
 
     _audit("type", {"chars": len(text), "units": typed_units,
                     "preview": text[:40], "ok": True})
+    # 0.4.32（CU 三期 P2）录制挂钩：type 步骤直接落 payload（回放按 payload 重放，
+    # 无需坐标语义）；app 取当前 frontmost app，element 留 null（按代码事实，见
+    # _maybe_record 头注）。
+    _maybe_record("type", payload={"text": text})
     return {"ok": True, "action": "type", "chars": len(text), "units": typed_units,
             "content": f"已输入 {len(text)} 个字符（{typed_units} 个 UTF-16 码元）",
             "hint": "操作后界面可能已变化，继续下一步前请先 screen_view 重新截屏核对结果。"}
@@ -918,9 +1023,48 @@ def keyboard_hotkey(keys: str) -> dict[str, Any]:
 
     _audit("hotkey", {"keys": keys, "code": code, "flag": flag, "mods": mods,
                       "ok": True})
+    # 0.4.32（CU 三期 P2）录制挂钩：key 步骤落 payload（回放按 keys 重放）。
+    _maybe_record("key", payload={"keys": keys})
     return {"ok": True, "action": "hotkey", "keys": keys,
             "content": f"已按下组合键 {keys}",
             "hint": "操作后界面可能已变化，继续下一步前请先 screen_view 重新截屏核对结果。"}
+
+
+# ── 0.4.32（CU 三期 P2，REQ-FUT-006）宏录制挂钩 ──────────────────────────
+# (button, clicks) → 宏 step 动作名（回放 _CLICK_MAP 的反向映射）
+_CLICK_ACTIONS = {("left", 1): "click", ("left", 2): "double_click",
+                  ("right", 1): "right_click", ("right", 2): "right_click"}
+
+
+def _maybe_record(action: str, *, x: float | None = None, y: float | None = None,
+                  locate: dict | None = None, payload: dict | None = None) -> None:
+    """动作执行成功后追加宏步骤（仅录制中生效）。⛔ 绝不抛异常：录制是旁路，
+    绝不能搞挂动作本身（与 _audit 同级防线语义）。
+
+    element 字段按代码事实取值为：
+      - click 类：本次校正链 hit_test 的【既有结果】（locate 参数），⛔ 不重复
+        hit_test（18~51ms 已在点击链发生，重复测是白开销）；命中时带 role/title/
+        frame/app，未命中（pixel_fallback）→ element=None；
+      - type/key 类：无命中链，element 一律 None，app 取当前 frontmost app
+        （回放时这两类直接重放 payload，app 仅作上下文记录，不参与重定位）。
+    """
+    try:
+        from sidecar.computer_use import cu_macro as _cm
+        if not _cm.is_recording():
+            return                                   # 未录制：零开销直接返回
+        element = None
+        app = ""
+        if locate and locate.get("method") == "element":
+            element = {"role": locate.get("role") or "",
+                       "title": locate.get("title") or "",
+                       "frame": locate.get("frame")}
+            app = str(locate.get("app") or "")
+        if not app:
+            app = frontmost_app()                    # best-effort（仅录制中才调）
+        _cm.record_step({"action": action, "x": x, "y": y, "app": app,
+                         "element": element, "payload": payload or {}})
+    except Exception:
+        pass
 
 
 # ── 前台应用（白名单校验用，防线4）──────────────────────────────────────

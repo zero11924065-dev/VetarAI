@@ -21,6 +21,7 @@ import { getApiBase, setApiBase, getInjected } from '../apiBase';
 import React, { useEffect, useState } from 'react';
 import { colors, fonts, radius, typo, cardL, btnPrimary, btnSecondary, input, select, calloutStyle } from '../theme';
 import { Icon } from '../Icon';
+import { CuMacroPanel } from './CuMacroPanel';
 
 interface Config {
   ollama_base_url: string;
@@ -67,6 +68,8 @@ interface Config {
   computer_use_enabled?: boolean;
   computer_use_confirm_each?: boolean;
   computer_use_app_whitelist?: string[];
+  // 0.4.32（CU 二期 E2）：元素定位校正开关（命中测试校正点击坐标，默认 true）
+  cu_element_locate_enabled?: boolean;
   // 0.4.12（B2）：权限确认弹窗等待超时秒数；0 = 无限等待
   auth_confirm_timeout?: number;
 }
@@ -117,6 +120,14 @@ function ComputerUseSection({ cfg, save }: { cfg: any; save: (patch: Record<stri
             <span style={{ fontSize: 13, color: colors.textPrimary }}>每步操作前都要我确认</span>
           </label>
           <div style={hintStyle}>强烈建议保持开启：每次点击/输入前弹窗告知"在哪个应用、做什么动作、参数是什么"，你同意才执行。关闭后 Agent 可连续自主操作，风险显著上升。</div>
+
+          {/* 0.4.32（CU 二期 E2）：元素定位开关——勾选即存（与本区其它开关同一风格） */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', margin: '10px 0 6px' }}>
+            <input type="checkbox" checked={cfg.cu_element_locate_enabled ?? true}
+              onChange={e => save({ cu_element_locate_enabled: e.target.checked })} />
+            <span style={{ fontSize: 13, color: colors.textPrimary }}>元素定位（命中测试校正点击坐标）</span>
+          </label>
+          <div style={hintStyle}>开启后（默认），点击前先用辅助功能命中测试取目标元素的精确位置再点——窗口挪动、界面缩放后仍能点准；未命中时自动回落原像素坐标（回落会如实记录）。关闭则回到一期纯像素点击。</div>
 
           <label style={formLabel}>允许操作的应用白名单</label>
           {wl.length === 0 && (
@@ -196,6 +207,10 @@ function ComputerUseSection({ cfg, save }: { cfg: any; save: (patch: Record<stri
               )}
             </div>
           )}
+
+          {/* 0.4.32（CU 三期 P3）：任务宏面板（录制/回放/命中率）——
+              挂在 CU 区内：宏的录制与回放本身就是 CU 动作，总开关关闭时无意义 */}
+          <CuMacroPanel />
         </>
       )}
     </div>

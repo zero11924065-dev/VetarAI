@@ -557,6 +557,23 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
                     },
                 },
             },
+            {
+                # 0.4.32（CU 二期 E3）：只读元素语义查询，与现有 CU 工具同可见性规则
+                "type": "function",
+                "function": {
+                    "name": "element_locate",
+                    "description": "只读查询屏幕坐标（逻辑点，同 mouse_click）处的界面元素语义："
+                                   "角色、标题与精确 frame，用于点击前校准坐标。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "description": "横坐标（逻辑点）"},
+                            "y": {"type": "number", "description": "纵坐标（逻辑点）"},
+                        },
+                        "required": ["x", "y"],
+                    },
+                },
+            },
         ])
     # 0.4.9 F2：子 Agent（with_install=False）剔除联网安装工具，杜绝擅自 git clone。
     # 默认 True 保持主 Agent 行为不变（现有测试断言主会话共 10 工具仍成立）。
@@ -1096,7 +1113,8 @@ async def run_tool_loop(
     启用 app_control 路由；None 时该工具调用直接报错（规格层本就不附加）。
     副作用动作（needs_confirm）经 authorizer 弹窗确认，用户拒绝则不执行。
     computer_use_ctx（0.4.9 3.48.1）：{"authorizer"}，启用 screen_view/mouse_click/
-    keyboard_type/keyboard_hotkey 路由；None 时这些工具调用直接报错（规格层本就不附加）。
+    keyboard_type/keyboard_hotkey 路由；0.4.32 增只读 element_locate（二期 E3）；
+    None 时这些工具调用直接报错（规格层本就不附加）。
     ⚠️ 这些工具直接操作用户真实电脑，路由层强制两道防线：应用白名单校验（越界拒绝）
     + 每步动作确认（computer_use_confirm_each，经 authorizer 弹窗，拒绝则不执行）。
     cancel_check（TS-114 3.25）：回调为真时，本轮开始前（未发起模型调用）yield cancelled 事件并返回。
@@ -1435,7 +1453,8 @@ async def run_tool_loop(
             #   防线4 应用白名单：白名单非空时，前台应用不在其中 → 拒绝（防跑到别的应用乱点）
             #   防线3 每步确认：点击/输入执行前经 authorizer 弹窗，用户拒绝 → 不执行
             # 截屏（screen_view）只读不操作，无需确认；但仍受总开关与白名单约束。
-            if tc["name"] in ("screen_view", "mouse_click", "keyboard_type", "keyboard_hotkey"):
+            if tc["name"] in ("screen_view", "mouse_click", "keyboard_type", "keyboard_hotkey",
+                              "element_locate"):
                 _args_u = tc["args"] or {}
                 if computer_use_ctx is None:
                     result = {"ok": False, "error": (
@@ -1460,7 +1479,8 @@ async def run_tool_loop(
                         try:
                             from sidecar.computer_use import (take_screenshot, mouse_click,
                                                               keyboard_type, keyboard_hotkey,
-                                                              check_whitelist, check_permission_for)
+                                                              check_whitelist, check_permission_for,
+                                                              element_locate)
                             import sidecar.config as _cfg_cu
                             _cfg_c = _cfg_cu.get_config()
                             _wl = _cfg_c.get("computer_use_app_whitelist") or []
@@ -1482,6 +1502,11 @@ async def run_tool_loop(
                                           "error": _cu_perm.get("error") or "权限未授予"}
                             elif tc["name"] == "screen_view":
                                 result = await asyncio.to_thread(take_screenshot)
+                            elif tc["name"] == "element_locate":
+                                # 0.4.32（CU 二期 E3）：只读查询，同截屏无需逐步确认；
+                                # 白名单与辅助功能权限已在上方校验。
+                                result = await asyncio.to_thread(
+                                    element_locate, _args_u.get("x"), _args_u.get("y"))
                             else:
                                 # 防线3：每步确认（副作用动作）
                                 _cu_authorizer = computer_use_ctx.get("authorizer")
@@ -1787,7 +1812,7 @@ async def run_tool_loop(
             if tc["name"] not in ("delegate_task", "read_skill", "search_knowledge",
                                   "archive_work_unit", "app_control",
                                   "screen_view", "mouse_click",
-                                  "keyboard_type", "keyboard_hotkey"):
+                                  "keyboard_type", "keyboard_hotkey", "element_locate"):
                 result = await _run_tool(tc["name"], tc["args"], sandbox_root, authorizer)
             ok = bool(result.get("ok"))
             if ok:

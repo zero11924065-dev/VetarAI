@@ -931,7 +931,7 @@ def _notify_change(resource: str, action: str,
 from sidecar.agent_engine.app_events import (
     RESOURCE_WORKFLOW, RESOURCE_PROJECT, RESOURCE_PLUGIN,
     RESOURCE_KNOWLEDGE, RESOURCE_INFERENCE, RESOURCE_AGENT,
-    RESOURCE_MODEL_PACK,
+    RESOURCE_MODEL_PACK, RESOURCE_CU_MACRO,
     ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE,
 )
 
@@ -2365,6 +2365,79 @@ async def api_computer_use_capabilities():
     except Exception:
         pass
     return cap
+
+
+# ── 0.4.32（CU 三期 P2，REQ-FUT-006）任务宏端点 ─────────────────────────
+# 口径（计划 E4）：录制=Agent 自己发起的 CU 动作序列（executor 挂钩语义化落盘），
+# 回放=逐步 element 语义重放、失败回落像素、app 未开中止报步骤号（R4 拍板）。
+# ⛔ 不是系统级用户操作录制（AXObserver/事件 tap），那是范围外另一量级需求。
+
+class CuMacroRecordStartReq(BaseModel):
+    name: str
+
+
+@app.get("/api/cu-macros")
+async def api_cu_macro_list():
+    """宏列表（摘要：id/name/created_at/steps 数）+ 当前是否录制中。"""
+    from sidecar.computer_use import cu_macro as _cm
+    return {"ok": True, "macros": await asyncio.to_thread(_cm.list_macros),
+            "recording": _cm.is_recording()}
+
+
+@app.post("/api/cu-macros/record/start")
+async def api_cu_macro_record_start(req: CuMacroRecordStartReq):
+    """开始录制（单例：已在录制 → 422）。此后 Agent 的 CU 动作逐步落入宏。"""
+    from sidecar.computer_use import cu_macro as _cm
+    r = _cm.start_recording(req.name)
+    if not r.get("ok"):
+        raise HTTPException(status_code=422, detail=r.get("error"))
+    return r
+
+
+@app.post("/api/cu-macros/record/stop")
+async def api_cu_macro_record_stop():
+    """停止录制并落盘（原子写），返回完整宏。未在录制 → 422。"""
+    from sidecar.computer_use import cu_macro as _cm
+    r = await asyncio.to_thread(_cm.stop_recording)
+    if not r.get("ok"):
+        raise HTTPException(status_code=422, detail=r.get("error"))
+    m = r["macro"]
+    _notify_change(RESOURCE_CU_MACRO, ACTION_CREATE, macro_id=m["id"])
+    return {"ok": True, "macro": m}
+
+
+@app.post("/api/cu-macros/{macro_id}/replay")
+async def api_cu_macro_replay(macro_id: str):
+    """异步回放：立即返回 run_id，后台线程逐步执行（真实键鼠，同一时刻只允许
+    一个回放；忙 → 422）。步骤事件经 app_events 推送，状态经 /replays/{run_id} 查询。"""
+    from sidecar.computer_use import cu_macro as _cm
+    r = _cm.start_replay(macro_id)
+    if not r.get("ok"):
+        if str(r.get("error")) == "not_found":
+            raise HTTPException(status_code=404, detail="宏不存在或已删除")
+        raise HTTPException(status_code=422, detail=r.get("error"))
+    return r
+
+
+@app.get("/api/cu-macros/replays/{run_id}")
+async def api_cu_macro_replay_status(run_id: str):
+    """回放状态查询：status(running/done/error)/completed/total/failed_seq/每步明细。"""
+    from sidecar.computer_use import cu_macro as _cm
+    run = _cm.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="回放记录不存在")
+    return {"ok": True, "run": run}
+
+
+@app.delete("/api/cu-macros/{macro_id}")
+async def api_cu_macro_delete(macro_id: str):
+    """删除宏。不存在 / 非法 id（路径穿越防御）→ 404。"""
+    from sidecar.computer_use import cu_macro as _cm
+    if not _cm.delete_macro(macro_id):
+        raise HTTPException(status_code=404, detail="宏不存在或已删除")
+    _notify_change(RESOURCE_CU_MACRO, ACTION_DELETE, macro_id=macro_id)
+    return {"deleted": True}
+
 
 
 @app.get("/api/knowledge/entries")
