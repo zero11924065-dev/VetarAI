@@ -25,13 +25,16 @@
 （127.0.0.1，实现 /v1/models 与 /v1/chat/completions 含 SSE），驱动对它做
 真实 spawn / 健康探测 / 换装 / terminate→kill。行为开关走 FAKE_LLAMA_* 环境变量。
 
-变异测试机制（MUTATE=1|2|3 python -m sidecar.model_packs.test_driver_llamacpp）：
+变异测试机制（MUTATE=1|2|3|4|5|6 python -m sidecar.model_packs.test_driver_llamacpp）：
 ⛔ 变异模式下必须出现 FAIL；0 FAIL = 断言空转，需加强（不是"通过"）。
 | 变异 | 撤掉的修复 | 应失败的断言 |
 |---|---|---|
 | 1 | 工厂第三分支缺失（model_package 不再分发 ModelPackageConnector） | E8a |
 | 2 | 换装作废（ensure_server 不再停旧直接启新） | D3a |
 | 3 | manifest context_length 校验失效（非法值放行） | A2a/A2b/A2c |
+| 4 | ensure_server 注册表门禁失效（禁用/卸载照样短路复用） | H1b/H1c/H4a/H4b |
+| 5 | 卸载端点不回收运行时（llama-server 孤儿常驻） | H6b/H6c |
+| 6 | 禁用端点不回收运行时 | H5b/H5c |
 """
 import asyncio
 import hashlib
@@ -110,8 +113,29 @@ def _apply_mutation() -> None:
                      "    if cl is not None and not _is_pos_int(cl):",
                      "    if False and cl is not None and not _is_pos_int(cl):", "manifest")
         importlib.reload(mpm)
+    elif MUTATE == 4:
+        _mutate_file(Path(mpd.__file__),
+                     "            _enabled_entry(pack_id)",
+                     "            pass  # 变异4：注册表门禁失效", "driver")
+        importlib.reload(mpd)
+    elif MUTATE == 5:
+        from sidecar import app as _appmod
+        _mutate_file(Path(_appmod.__file__),
+                     "    await _release_pack_runtime(pack_id)\n"
+                     "    ok = _mp_store.remove_pack(pack_id)",
+                     "    ok = _mp_store.remove_pack(pack_id)  # 变异5：卸载不回收运行时",
+                     "app")
+        importlib.reload(_appmod)
+    elif MUTATE == 6:
+        from sidecar import app as _appmod
+        _mutate_file(Path(_appmod.__file__),
+                     "    if not new_state:\n"
+                     "        await _release_pack_runtime(pack_id)",
+                     "    if not new_state:\n"
+                     "        pass  # 变异6：禁用不回收运行时", "app")
+        importlib.reload(_appmod)
     else:
-        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3）")
+        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3|4|5|6）")
 
 
 def _restore() -> None:
@@ -132,6 +156,9 @@ def _restore() -> None:
             importlib.reload(mpd)
         if "manifest" in tags:
             importlib.reload(mpm)
+        if "app" in tags:
+            from sidecar import app as _appmod
+            importlib.reload(_appmod)
 
 
 # ══════════ 测试数据构造 ══════════
@@ -642,6 +669,109 @@ def test_endpoints():
         check("F4 models 端点聚合包列表", sorted(names) == ["chat-a", "chat-b"], r.text[:240])
 
 
+# ══════════ H. 禁用/卸载语义（0.4.29 缺陷修复 A/B：进程随状态失效即止）══════════
+
+async def test_disable_uninstall_semantics(fake: Path):
+    """驱动层：禁用/卸载正在服务的包 → ensure_server 先回收子进程再报中文错。"""
+    from sidecar.model_packs.mp_connector import ModelPackageConnector
+    from sidecar.ollama.connector import OllamaAPIError
+
+    os.environ["VETARAI_LLAMA_SERVER"] = str(fake)
+    _fresh_state()
+    _install_fake_pack("chat-h")
+
+    # H1 禁用热路径：服务中禁用 → ensure_server 先回收进程再报「已禁用」（缺陷 A 主修复）
+    await mpd.ensure_server("chat-h")
+    proc = mpd._STATE["proc"]
+    check("H1a 服务在跑（前置）", proc is not None and proc.poll() is None)
+    mps.set_enabled("chat-h", False)
+    try:
+        await mpd.ensure_server("chat-h")
+        check("H1b 禁用后 ensure → LlamaServerError", False, "未抛错")
+    except mpd.LlamaServerError as e:
+        check("H1b 禁用后 ensure → 报错含已禁用", "已禁用" in str(e), str(e)[:160])
+    check("H1c 禁用后进程被回收", proc.poll() is not None)
+    check("H1d 禁用后无活动包", mpd.active_pack() is None)
+
+    # H2 连接器层：禁用包对话 → OllamaAPIError(400)（端点 4xx 语义来源）
+    conn = ModelPackageConnector()
+    try:
+        await conn.chat("chat-h", [{"role": "user", "content": "hi"}])
+        check("H2 禁用包对话 → OllamaAPIError", False, "未抛错")
+    except OllamaAPIError as e:
+        check("H2 禁用包对话 → 400 含已禁用",
+              e.status_code == 400 and "已禁用" in str(e), str(e)[:160])
+
+    # H3 启用恢复：重新启用 → 对话恢复（重新拉起进程）
+    mps.set_enabled("chat-h", True)
+    reply = await conn.chat("chat-h", [{"role": "user", "content": "hi"}])
+    check("H3 启用后对话恢复", reply == "pong" and mpd.active_pack() == "chat-h", reply[:80])
+
+    # H4 卸载热路径兜底：绕过端点直接删注册表+文件 → ensure 先回收再报「未安装」
+    proc2 = mpd._STATE["proc"]
+    mps.remove_pack("chat-h")
+    try:
+        await mpd.ensure_server("chat-h")
+        check("H4a 卸载后 ensure → LlamaServerError", False, "未抛错")
+    except mpd.LlamaServerError as e:
+        check("H4a 卸载后 ensure → 报错含未安装", "未安装" in str(e), str(e)[:160])
+    check("H4b 卸载后进程被回收", proc2.poll() is not None)
+    check("H4c 卸载后无活动包", mpd.active_pack() is None)
+    _fresh_state()
+
+
+def test_disable_uninstall_endpoints(fake: Path):
+    """端点层：禁用/卸载正在服务的 chat 包 → 端点即停进程（缺陷 B 与禁用对齐语义）。"""
+    from sidecar import app as appmod
+    from fastapi.testclient import TestClient
+    from sidecar.model_packs.mp_connector import ModelPackageConnector
+    from sidecar.ollama.connector import OllamaAPIError
+
+    os.environ["VETARAI_LLAMA_SERVER"] = str(fake)
+    appmod.get_config = lambda: {
+        **_cs.DEFAULT_CONFIG,
+        "network_switch": "auto", "egress_proxy_required": [],
+    }
+    _install_fake_pack("chat-ep")
+    _fresh_state()
+
+    with TestClient(appmod.app) as client:
+        # H5 禁用端点：服务中禁用 → 200 且进程即停；重新启用 → 200
+        asyncio.run(mpd.ensure_server("chat-ep"))
+        proc = mpd._STATE["proc"]
+        r = client.post("/api/model-packs/chat-ep/toggle", json={"enabled": False})
+        check("H5a toggle 禁用 → 200 enabled=False",
+              r.status_code == 200 and r.json().get("enabled") is False, r.text[:160])
+        check("H5b 禁用端点即停进程", proc.poll() is not None)
+        check("H5c 禁用端点后无活动包", mpd.active_pack() is None)
+        r = client.post("/api/model-packs/chat-ep/toggle", json={"enabled": True})
+        check("H5d 重新启用 → 200 enabled=True",
+              r.status_code == 200 and r.json().get("enabled") is True, r.text[:160])
+
+        # H6 卸载端点：服务中卸载 → 200 且进程即停（不再孤儿常驻）
+        asyncio.run(mpd.ensure_server("chat-ep"))
+        proc2 = mpd._STATE["proc"]
+        r = client.delete("/api/model-packs/chat-ep")
+        check("H6a 卸载 → 200 deleted",
+              r.status_code == 200 and r.json().get("deleted") is True, r.text[:160])
+        check("H6b 卸载端点即停进程", proc2.poll() is not None)
+        check("H6c 卸载端点后无活动包", mpd.active_pack() is None)
+
+    # H6d 卸载后对话 → OllamaAPIError(400) 含未安装（端点 4xx 语义来源）
+    async def _chat_after_delete():
+        conn = ModelPackageConnector()
+        try:
+            await conn.chat("chat-ep", [{"role": "user", "content": "hi"}])
+            return None
+        except OllamaAPIError as e:
+            return e
+    err = asyncio.run(_chat_after_delete())
+    check("H6d 卸载后对话 → 400 含未安装",
+          err is not None and err.status_code == 400 and "未安装" in str(err),
+          str(err)[:160] if err else "未抛错")
+    _fresh_state()
+
+
 # ══════════ G. 真实 GGUF E2E（skip-if-absent，m31/m32 先例）══════════
 
 async def test_real_e2e():
@@ -707,6 +837,8 @@ def main():
     asyncio.run(test_lifecycle(fake))
     asyncio.run(test_connector())
     test_endpoints()
+    asyncio.run(test_disable_uninstall_semantics(fake))
+    test_disable_uninstall_endpoints(fake)
     asyncio.run(test_real_e2e())
 
     print(f"\n===== 0.4.29-P2 llama.cpp 驱动专项: PASS={PASS} FAIL={FAIL} =====")

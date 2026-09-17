@@ -2540,6 +2540,28 @@ class ModelPackToggleReq(BaseModel):
     enabled: bool
 
 
+async def _release_pack_runtime(pack_id: str) -> None:
+    """回收模型包占用的运行时资源（卸载/禁用共用，0.4.29 缺陷修复 B）。
+
+    chat 包：若它是 llama.cpp 驱动当前活动服务对象 → 停 llama-server 子进程
+    （驱动 stop_server 自带名字匹配防护：不匹配的包不动，不会误停正在跑的对话）；
+    ASR 包：释放 onnx session（D6：卸载/禁用＝释放；asr_driver.unload 同样按
+    pack_id 匹配防误卸）。回收异常不阻断卸载/禁用主流程——驱动层 ensure_server
+    的注册表门禁会在下次对话时兜底回收（llamacpp_driver 模块 docstring
+    「禁用/卸载语义」）。
+    """
+    try:
+        from sidecar.model_packs import llamacpp_driver as _drv
+        await _drv.stop_server(pack_id)
+    except Exception as e:
+        _log.warning("停止模型包 %s 的 llama-server 失败（不阻断流程）: %s", pack_id, e)
+    try:
+        from sidecar.model_packs import asr_driver as _asr
+        _asr.unload(pack_id)
+    except Exception as e:
+        _log.warning("释放模型包 %s 的 ASR session 失败（不阻断流程）: %s", pack_id, e)
+
+
 @app.get("/api/model-packs")
 async def api_model_packs_list():
     """已安装模型包列表（注册表 + 磁盘探测：缺文件/实际占用/半截下载残留）。"""
@@ -2628,9 +2650,16 @@ async def api_model_pack_cancel(req: ModelPackCancelReq):
 
 @app.delete("/api/model-packs/{pack_id}")
 async def api_model_pack_delete(pack_id: str):
-    """卸载：有下载进行中先取消，删目录（含 .partial）+ 注册表条目。"""
+    """卸载：有下载进行中先取消；回收运行时资源；删目录（含 .partial）+ 注册表条目。
+
+    运行时回收（0.4.29 缺陷修复 B）必须先于删文件：chat 包的 llama-server 子进程
+    不停会继续 mmap 已删除的权重服务（实测卸载后对话仍 200，进程孤儿常驻、白占
+    数 GB 内存直到侧车退出）；ASR 包的 onnx session 不释放同样占内存（D6：
+    卸载＝释放 session）。
+    """
     if _mp_downloads.is_active(pack_id):
         await _mp_downloads.cancel(pack_id)
+    await _release_pack_runtime(pack_id)
     ok = _mp_store.remove_pack(pack_id)
     if not ok:
         raise HTTPException(status_code=404, detail=f"模型包 {pack_id} 未安装")
@@ -2640,10 +2669,17 @@ async def api_model_pack_delete(pack_id: str):
 
 @app.post("/api/model-packs/{pack_id}/toggle")
 async def api_model_pack_toggle(pack_id: str, req: ModelPackToggleReq):
-    """启用/禁用（禁用保留文件不删，推理侧按 enabled 过滤）。"""
+    """启用/禁用（禁用保留文件不删，推理侧按 enabled 过滤）。
+
+    禁用语义与卸载对齐（0.4.29 缺陷修复 A/B 配套）：禁用立即回收运行时——
+    chat 包若正在服务先停 llama-server 子进程，ASR 包释放 session；之后对该包
+    的对话/转写被驱动层注册表门禁拒绝（中文明细），重新启用后即恢复。
+    """
     new_state = _mp_store.set_enabled(pack_id, bool(req.enabled))
     if new_state is None:
         raise HTTPException(status_code=404, detail=f"模型包 {pack_id} 未安装")
+    if not new_state:
+        await _release_pack_runtime(pack_id)
     _notify_change(RESOURCE_MODEL_PACK, ACTION_UPDATE, pack_id=pack_id, enabled=new_state)
     return {"ok": True, "pack_id": pack_id, "enabled": new_state}
 

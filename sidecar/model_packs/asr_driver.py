@@ -120,7 +120,8 @@ def resolve_asr_pack(pack_id: str | None = None) -> str:
 
     pack_id 缺省 → 取注册表中**首个启用中的 task=asr 包**（按 id 排序，确定性选择；
     「像 ollama 一样可更换」= 用户在模型包面板装/禁哪个，这里就用哪个，无需配置键）。
-    未装/全禁用/指定包非 asr → PackUnavailableError（中文明细，指引去模型包面板）。
+    未装/全禁用/指定包非 asr → PackUnavailableError（中文明细，指引去模型包面板；
+    0.4.29 风险 C：「一个都没装」与「装了但全被禁用」文案区分——指引动作不同）。
     """
     reg = _store.read_registry()
     if pack_id:
@@ -139,6 +140,9 @@ def resolve_asr_pack(pack_id: str | None = None) -> str:
     candidates = sorted(pid for pid, e in reg.items()
                         if e.get("task") == "asr" and e.get("status") == "installed")
     if not candidates:
+        if any(e.get("task") == "asr" for e in reg.values()):
+            raise PackUnavailableError(
+                "语音识别模型包已安装但全部被禁用。请到「模型包」面板启用后再转写。")
         raise PackUnavailableError(
             "尚未安装语音识别模型包。请到「模型包」面板安装一个 ASR 模型包"
             "（如 SenseVoiceSmall）后再试。")

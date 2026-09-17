@@ -29,6 +29,13 @@
   * 子进程 stdout/stderr 导流进日志目录（logging_setup 惯例：应用目录 logs/ 优先，
     打包回退 <data_root>/logs/）——"启动失败"的排查完全依赖这份日志。
 
+禁用/卸载语义（0.4.29 缺陷修复 A/B，与 app.py 卸载/禁用端点对齐）：
+  禁用或卸载一个正在服务的 chat 包，其 llama-server 子进程随状态失效即被回收
+  （端点侧主动停；本驱动 ensure_server 的注册表门禁是兜底——热路径短路前必查，
+  发现失效先停进程再报错），对该包的后续对话一律 LlamaServerError 中文明细。
+  门禁开销：注册表是小 JSON 整读（asr_driver.resolve_asr_pack 每次转写同款口径），
+  相对一次推理调用可忽略。
+
 二进制解析链（勿改优先级；embedder.py:_bundled_model_dir 范式）：
   env VETARAI_LLAMA_SERVER > data_root()/drivers/llama-server
   > 冻结包内 Contents/Resources/drivers/llama-server（parents[2] 定位）
@@ -132,8 +139,13 @@ def resolve_server_binary() -> Path:
         f"已查找: {tried}")
 
 
-def _gguf_path(pack_id: str) -> Path:
-    """从注册表条目取 GGUF 权重绝对路径（files[] 里首个以 .gguf 结尾的条目）。"""
+def _enabled_entry(pack_id: str) -> dict[str, Any]:
+    """注册表状态门禁：包须存在且启用中，否则 LlamaServerError（中文明细）。
+
+    ensure_server 热路径短路前必过（0.4.29 缺陷修复 A）：包被禁用/卸载后，
+    正在服务它的进程不得继续供血——只查进程存活不看注册表，禁用/卸载就会
+    形同虚设（实测禁用后对话仍成功）。开销见模块 docstring「禁用/卸载语义」。
+    """
     entry = _store.get_entry(pack_id)
     if entry is None:
         raise LlamaServerError(
@@ -141,6 +153,12 @@ def _gguf_path(pack_id: str) -> Path:
     if entry.get("status") != "installed":
         raise LlamaServerError(
             f"模型包 {pack_id!r} 已禁用。请到「模型包」面板启用后再对话。")
+    return entry
+
+
+def _gguf_path(pack_id: str) -> Path:
+    """从注册表条目取 GGUF 权重绝对路径（files[] 里首个以 .gguf 结尾的条目）。"""
+    entry = _enabled_entry(pack_id)
     gguf_rel = ""
     for f in entry.get("files", []):
         p = str(f.get("path", ""))
@@ -324,12 +342,25 @@ def active_base_url() -> str | None:
 async def ensure_server(pack_id: str) -> str:
     """确保 pack_id 的 llama-server 在跑，返回 base_url（含 /v1）。
 
+    * 注册表门禁先行：包被禁用/卸载 → LlamaServerError 中文明细；若失效包正是
+      当前活动服务对象，先回收它的子进程再抛（0.4.29 缺陷修复 A，语义见模块
+      docstring「禁用/卸载语义」）；
     * 同包已在跑 → 直接复用（不起第二个进程）；
     * 异包在跑 → 换装：停旧启新（Ollama 换装语义）；
     * 启动失败 → 回收子进程现场再抛 LlamaServerError（不留半截状态
       让下次 ensure 误判"已在跑"）。
     """
     async with _lock():
+        # 门禁必须在热路径短路之前：否则"同包且进程存活"会在禁用/卸载后照样
+        # 直接返回 base_url，禁用/卸载形同虚设（实测缺陷 A：禁用后对话仍 200）。
+        # 失效包正在服务时先停进程再报错——文件已删/已禁用的进程继续 mmap 权重
+        # 服务，等于禁用/卸载没生效，还白占数 GB 内存直到侧车退出（atexit）。
+        try:
+            _enabled_entry(pack_id)
+        except LlamaServerError:
+            if _STATE["pack_id"] == pack_id:
+                await _stop_locked()
+            raise
         proc: subprocess.Popen | None = _STATE["proc"]
         if _STATE["pack_id"] == pack_id and proc is not None and proc.poll() is None:
             return f"http://127.0.0.1:{_STATE['port']}/v1"

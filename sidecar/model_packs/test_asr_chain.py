@@ -29,13 +29,14 @@ VETARAI_ASR_TEST_WAV（真实语音 wav）才跑；本机/CI 常态跳过（打�
   fbank 对 kaldi-native-fbank 1.22.3：16123 采样随机波形，99 帧，max|Δ|=1.2e-4
   （float32 舍入级）；apply_lfr 对 funasr_onnx 0.4.3 WavFrontend.apply_lfr：逐元素全等。
 
-变异机制（MUTATE=1|2|3 python -m sidecar.model_packs.test_asr_chain）：
+变异机制（MUTATE=1|2|3|4 python -m sidecar.model_packs.test_asr_chain）：
 变异模式下必须出现 FAIL；0 FAIL = 断言空转，需加强（不是"通过"）。
 | 变异 | 撤掉的修复 | 应失败的断言 |
 |---|---|---|
 | 1 | parser.py 音频分支（audio 退回 binary） | A1a/A1b |
 | 2 | asr_driver resolve_asr_pack 的启用态过滤 | C1c/C1d |
 | 3 | app.py 端点的扩展名校验 | D1d |
+| 4 | resolve_asr_pack「已安装但全禁用」文案分支（退回「尚未安装」） | C1c/D8c |
 """
 import asyncio
 import json
@@ -114,6 +115,17 @@ def _apply_mutation() -> None:
         assert patched != s, "变异 3 未命中 app.py 源码，测试无效"
         Path(_appmod.__file__).write_text(patched, encoding="utf-8")
         importlib.reload(_appmod)
+    elif MUTATE == 4:
+        s = Path(asr.__file__).read_text(encoding="utf-8")
+        _BACKUP["asr"] = s
+        patched = s.replace(
+            '        if any(e.get("task") == "asr" for e in reg.values()):',
+            '        if False and any(e.get("task") == "asr" for e in reg.values()):  # MUTATED-4')
+        assert patched != s, "变异 4 未命中 asr_driver.py 源码，测试无效"
+        Path(asr.__file__).write_text(patched, encoding="utf-8")
+        importlib.reload(asr)
+    else:
+        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3|4）")
 
 
 def _restore() -> None:
@@ -132,7 +144,7 @@ def _restore() -> None:
         _BACKUP.clear()
         if MUTATE == 1:
             importlib.reload(att_parser)
-        if MUTATE == 2:
+        if MUTATE in (2, 4):
             importlib.reload(asr)
         if MUTATE == 3:
             from sidecar import app as _appmod
@@ -245,21 +257,23 @@ def test_driver_resolve():
         check("C1a 空注册表 → PackUnavailableError", False, "未抛错")
     except asr.PackUnavailableError as e:
         check("C1a 空注册表 → PackUnavailableError", "模型包" in str(e), str(e))
-    # 只有 chat 包
+    # 只有 chat 包（风险 C 分支①：一个 ASR 包都没装 → 「尚未安装」文案）
     mps.register_pack("chat-only", {"version": "1", "task": "chat", "format": "gguf",
                                     "driver": "llamacpp", "files": []})
     try:
         asr.resolve_asr_pack()
         check("C1b 只有 chat 包 → 拒", False, "未抛错")
-    except asr.PackUnavailableError:
-        check("C1b 只有 chat 包 → 拒", True)
-    # 禁用中的 asr 包不得入选
+    except asr.PackUnavailableError as e:
+        check("C1b 只有 chat 包 → 拒，文案为「尚未安装」分支",
+              "尚未安装" in str(e) and "禁用" not in str(e), str(e))
+    # 禁用中的 asr 包不得入选（风险 C 分支②：装了但全禁用 → 「全部被禁用」文案）
     _register_asr_pack("sv-disabled", enabled=False)
     try:
         asr.resolve_asr_pack()
         check("C1c 禁用的 asr 包 → 拒（启用态过滤在）", False, "未抛错")
     except asr.PackUnavailableError as e:
-        check("C1c 禁用的 asr 包 → 拒（启用态过滤在）", "禁用" not in str(e), str(e))
+        check("C1c 禁用的 asr 包 → 拒，文案为「全部被禁用」分支",
+              "全部被禁用" in str(e) and "尚未安装" not in str(e), str(e))
     _register_asr_pack("sv-enabled")
     check("C1d 启用中的 asr 包被自动选中", asr.resolve_asr_pack() == "sv-enabled")
     check("C1e 显式指定启用包", asr.resolve_asr_pack("sv-enabled") == "sv-enabled")
@@ -273,6 +287,23 @@ def test_driver_resolve():
         check("C1g 指定禁用包 → 拒", False, "未抛错")
     except asr.PackUnavailableError as e:
         check("C1g 指定禁用包 → 拒", "禁用" in str(e), str(e))
+
+
+def test_driver_unload():
+    """D6 卸载＝释放 session：按 pack_id 匹配释放，防误卸正在用的包（缺陷修复 B 依赖此入口）。"""
+    asr.unload()  # 清场，防前序用例残留单例
+    asr._state.update({"pack_id": "sv-enabled", "session": object(),
+                       "tokens": ["x"], "cmvn": None, "sample_rate": 16000})
+    check("U1 名字不匹配 → 不动（防误卸）",
+          asr.unload("other-pack") is False and asr._state["session"] is not None)
+    check("U2 匹配 → 释放并清空单例",
+          asr.unload("sv-enabled") is True and asr._state["session"] is None
+          and asr._state["pack_id"] is None)
+    check("U3 空态卸载 → False", asr.unload("sv-enabled") is False)
+    asr._state.update({"pack_id": "sv-enabled", "session": object(),
+                       "tokens": ["x"], "cmvn": None, "sample_rate": 16000})
+    check("U4 不带 pack_id → 无条件清空",
+          asr.unload() is True and asr._state["session"] is None)
 
 
 def test_driver_pack_files():
@@ -584,12 +615,61 @@ def _run_endpoint_checks(client, appmod):
         asr.transcribe = orig_transcribe
 
 
+def test_endpoint_pack_lifecycle_releases():
+    """0.4.29 缺陷修复 B / 风险 C 端点级：禁用/卸载 ASR 包释放 session + 文案分支。"""
+    from sidecar import app as appmod
+    from fastapi.testclient import TestClient
+
+    appmod.get_config = lambda: {
+        **_cs.DEFAULT_CONFIG,
+        "network_switch": "auto", "egress_proxy_required": [],
+    }
+    # 从干净注册表开始（前序用例装过 chat-only/sv-* 等包）
+    for p in mps.list_installed():
+        mps.remove_pack(p["pack_id"])
+    asr.unload()
+    wav = _write_wav(TMP / "lifecycle.wav", seconds=0.3)
+
+    # D8 禁用端点：释放 session；此后转写 409 且文案为「全部被禁用」分支
+    _register_asr_pack("sv-tog")
+    asr._state.update({"pack_id": "sv-tog", "session": object(),
+                       "tokens": ["x"], "cmvn": None, "sample_rate": 16000})
+    with TestClient(appmod.app) as client:
+        r = client.post("/api/model-packs/sv-tog/toggle", json={"enabled": False})
+        check("D8a 禁用 ASR 包 → 200 enabled=False",
+              r.status_code == 200 and r.json().get("enabled") is False, r.text[:160])
+        check("D8b 禁用端点即释放 session",
+              asr._state["session"] is None and asr._state["pack_id"] is None)
+        r = client.post("/api/asr/transcribe", json={"path": str(wav)})
+        check("D8c 全禁用后转写 → 409 文案为「全部被禁用」分支",
+              r.status_code == 409 and "全部被禁用" in r.text and "尚未安装" not in r.text,
+              f"{r.status_code} {r.text[:200]}")
+
+        # D9 卸载端点：释放 session；此后转写 409 且文案为「尚未安装」分支
+        mps.remove_pack("sv-tog")
+        _register_asr_pack("sv-del")
+        asr._state.update({"pack_id": "sv-del", "session": object(),
+                           "tokens": ["x"], "cmvn": None, "sample_rate": 16000})
+        r = client.delete("/api/model-packs/sv-del")
+        check("D9a 卸载 ASR 包 → 200 deleted",
+              r.status_code == 200 and r.json().get("deleted") is True, r.text[:160])
+        check("D9b 卸载端点即释放 session",
+              asr._state["session"] is None and asr._state["pack_id"] is None)
+        check("D9c 卸载后注册表已清", not mps.is_installed("sv-del"))
+        r = client.post("/api/asr/transcribe", json={"path": str(wav)})
+        check("D9d 卸载后转写 → 409 文案为「尚未安装」分支",
+              r.status_code == 409 and "尚未安装" in r.text and "禁用" not in r.text,
+              f"{r.status_code} {r.text[:200]}")
+    asr.unload()
+
+
 # ══════════ main ══════════
 
 def main():
     test_parser_branch()
     test_manifest_sample_rate()
     test_driver_resolve()
+    test_driver_unload()
     test_driver_pack_files()
     test_driver_features()
     test_driver_decode_and_postprocess()
@@ -597,6 +677,7 @@ def main():
     test_driver_audio_decode()
     test_real_model_skip_if_absent()
     test_endpoints()
+    test_endpoint_pack_lifecycle_releases()
 
     print(f"\n===== 0.4.29-P3 ASR 链路专项: PASS={PASS} FAIL={FAIL} =====")
     if MUTATE:
