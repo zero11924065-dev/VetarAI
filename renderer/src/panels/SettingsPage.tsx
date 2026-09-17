@@ -22,6 +22,7 @@ import { SettingsPanel } from './SettingsPanel';
 import { PluginPanel } from './PluginPanel';
 import { KnowledgePanel } from './KnowledgePanel';
 import { InferencePanel } from './InferencePanel';
+import { ModelPacksPanel } from './ModelPacksPanel';
 import { colors, fonts, radius } from '../theme';
 import { Icon, type IconName } from '../Icon';
 
@@ -32,12 +33,13 @@ import { Icon, type IconName } from '../Icon';
  * "打开日志文件夹"合并在"基础设置"顶部。
  * checkpoint-053：关于VetarAI 移至原生菜单栏（macOS 应用菜单 → 关于），不再占设置页。
  */
-type SectionKey = 'general' | 'knowledge' | 'inference' | 'plugins';
+type SectionKey = 'general' | 'knowledge' | 'inference' | 'model-packs' | 'plugins';
 
 const SECTIONS: { key: SectionKey; icon: IconName; label: string; needProject?: boolean }[] = [
   { key: 'general', icon: 'sliders', label: '基础设置' },
   { key: 'knowledge', icon: 'book', label: '知识记忆', needProject: true },
   { key: 'inference', icon: 'cpu', label: '推理后端' },
+  { key: 'model-packs', icon: 'layers', label: '模型包' },
   { key: 'plugins', icon: 'plug', label: '插件管理' },
 ];
 
@@ -117,6 +119,7 @@ export function SettingsPage({ projectId, onExit, onOpenLogs, onOpenDataDir }: {
           <KnowledgePanel projectId={projectId} />
         )}
         {section === 'inference' && <InferencePanel />}
+        {section === 'model-packs' && <ModelPacksPanel />}
         {section === 'plugins' && <PluginPanel />}
       </div>
     </div>

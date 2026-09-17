@@ -453,6 +453,8 @@ class OllamaConnector:
 _SINGLETON: OllamaConnector | None = None
 # M6（TS-112）：OpenAI 兼容后端单例（与 Ollama 各自一个实例，按配置分发）
 _OPENAI_SINGLETON: Any = None
+# 0.4.29（P2）：模型包后端单例（llama.cpp 驱动；第三分支，与前两个各自一个实例）
+_MP_SINGLETON: Any = None
 
 
 def get_inference_connector() -> Any:
@@ -461,8 +463,15 @@ def get_inference_connector() -> Any:
     返回对象事件协议一致（content_delta/thinking_delta/tool_calls/done/stream_error），
     调用方（loop/委派/圆桌/压缩）零改动自动跟随当前后端。
     """
-    global _SINGLETON, _OPENAI_SINGLETON
+    global _SINGLETON, _OPENAI_SINGLETON, _MP_SINGLETON
     backend = str(get_config().get("inference_backend", "ollama")).strip()
+    if backend == "model_package":
+        if _MP_SINGLETON is None:
+            # 延迟导入防循环依赖：model_packs.mp_connector → ollama.openai_compat →
+            # 本模块（ollama.connector）；模块级 import 会成环
+            from sidecar.model_packs.mp_connector import ModelPackageConnector
+            _MP_SINGLETON = ModelPackageConnector()
+        return _MP_SINGLETON
     if backend == "openai_compatible":
         if _OPENAI_SINGLETON is None:
             from sidecar.ollama.openai_compat import OpenAICompatConnector

@@ -59,6 +59,21 @@ _TIMEOUT_KEYS: dict[str, tuple[float, tuple[float, float]]] = {
 # ── A2/A4：推理参数的规范名 → 各后端实际参数名 ──
 # 规范名用 Ollama 风格（用户主要用 Ollama，且 num_ctx 是本项目最关心的项）。
 # 值为 None 表示"该后端不支持此参数"→ 注入时静默丢弃（不报错、不透传）。
+# OpenAI 兼容端参数行独立成具名对象：0.4.29（P2）起 model_package（内置 llama-server，
+# 走的正是 OpenAI 兼容协议）与 openai_compatible 共用同一份映射——两处各写一遍必然漂移。
+# 模型包的上下文长度不在请求级注入：由驱动在启动时以 -c 传给 llama-server
+# （manifest 可选键 context_length），请求级 num_ctx 依旧丢弃。
+_OPENAI_COMPAT_MAP: dict[str, str | None] = {
+    "num_ctx": None,                      # OpenAI 兼容端无此参数
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "top_k": None,                        # 非 OpenAI 标准参数
+    "repeat_penalty": "frequency_penalty",  # ⚠️ 参数名不同
+    "num_predict": "max_tokens",            # ⚠️ 参数名不同
+    "seed": "seed",
+    "stop": "stop",
+}
+
 _PARAM_MAP: dict[str, dict[str, str | None]] = {
     "ollama": {
         "num_ctx": "num_ctx",
@@ -70,16 +85,8 @@ _PARAM_MAP: dict[str, dict[str, str | None]] = {
         "seed": "seed",
         "stop": "stop",
     },
-    "openai_compatible": {
-        "num_ctx": None,                      # OpenAI 兼容端无此参数
-        "temperature": "temperature",
-        "top_p": "top_p",
-        "top_k": None,                        # 非 OpenAI 标准参数
-        "repeat_penalty": "frequency_penalty",  # ⚠️ 参数名不同
-        "num_predict": "max_tokens",            # ⚠️ 参数名不同
-        "seed": "seed",
-        "stop": "stop",
-    },
+    "openai_compatible": _OPENAI_COMPAT_MAP,
+    "model_package": _OPENAI_COMPAT_MAP,   # 0.4.29（P2）：复用 openai_compatible 行
 }
 
 # 各规范参数的合法范围（校验用；None 表示不校验数值范围）

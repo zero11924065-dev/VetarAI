@@ -456,6 +456,53 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/chatPanelSessionEvents.test.tsx",
         "expect_fail": ["E1"],
     },
+    # ── 0.4.29 批 P1：模型包管理器面板 ─────────────────────────────────────
+    {
+        "id": 30,
+        "name": "0.4.29 撤掉 download_progress 的字节进度更新（进度条恒 0%）",
+        "why": "进度条的全部意义是让用户看到下载在走。若 received_bytes 不落进状态，"
+               "进度条恒 0%、百分比恒 0——用户会以为下载卡死而反复取消重试。"
+               "「驱动进度条」用例的 50% 宽度断言必须红。",
+        "file": PANELS / "ModelPacksPanel.tsx",
+        "anchor": """            [pid]: {
+              received: Number(ev.received_bytes) || 0,
+              total: Number(ev.total_bytes) || prev[pid]?.total || 0,
+              file: ev.file ? String(ev.file) : prev[pid]?.file,
+            },""",
+        "mutant": """            [pid]: {
+              received: 0, /* MUTATE-30：进度不更新，进度条恒 0% */
+              total: Number(ev.total_bytes) || prev[pid]?.total || 0,
+              file: ev.file ? String(ev.file) : prev[pid]?.file,
+            },""",
+        "test": "src/__tests__/modelPacksPanel.test.tsx",
+        "expect_fail": ["驱动进度条"],
+    },
+    {
+        "id": 31,
+        "name": "0.4.29 撤掉安装前确认弹窗（不询问直接联网下载）",
+        "why": "confirm_model_pack_download（默认开）是联网下载的告知闸：撤掉后点安装"
+               "即静默联网，用户看不到包名/来源/大小，也失去境外来源切全量联网的入口——"
+               "与 0.4.9 联网安装确认（任务152）同一事故哲学。三个确认流用例必须红。",
+        "file": PANELS / "ModelPacksPanel.tsx",
+        "anchor": "    const needConfirm = cfg?.confirm_model_pack_download !== false;   // 缺省视为开启",
+        "mutant": "    const needConfirm = false; /* MUTATE-31：撤掉安装前确认（不弹窗直接装） */",
+        "test": "src/__tests__/modelPacksPanel.test.tsx",
+        "expect_fail": ["境外来源", "不发 install", "境内来源"],
+    },
+    # ── 0.4.29 批 P2：推理面板第三卡「模型包」─────────────────────────────
+    {
+        "id": 32,
+        "name": "0.4.29 撤掉模型包后端第三卡（isMP 恒 false）",
+        "why": "isMP 是模型包后端的全部 UI 分流依据：第三卡选中态、状态区标题、"
+               "openai 地址表单的隐藏、「模型包面板管理」提示全挂在它上面。恒 false 后"
+               "选了模型包的用户看到的是 OpenAI 兼容表单——后端已切换、前端却引导填地址，"
+               "两头对不上。第三卡用例必须红。",
+        "file": PANELS / "InferencePanel.tsx",
+        "anchor": "  const isMP = backend === 'model_package';",
+        "mutant": "  const isMP = false; /* MUTATE-32：撤掉模型包卡分流 */",
+        "test": "src/__tests__/inferencePanel.test.tsx",
+        "expect_fail": ["第三卡"],
+    },
 ]
 
 

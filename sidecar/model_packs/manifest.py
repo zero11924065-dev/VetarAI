@@ -23,6 +23,8 @@
   PACK = {
     pack_id, name, task, format, driver, version, description, size_bytes,
     min_app_version, homepage, license,
+    context_length（可选，P2 新增：正整数；llama.cpp 驱动启动时以 -c 注入，
+                   /api/context/limit 也据此回答；缺省=不写，服务端用模型自身默认）,
     files: [{path, size_bytes, sha256, sources: [URL, ...]}, ...]
   }
 
@@ -168,6 +170,12 @@ def validate_pack(pack: Any) -> list[str]:
             errors.append(f"{opt} 必须是字符串（可空），得到 {type(v).__name__}")
     if not _is_pos_int(pack.get("size_bytes")):
         errors.append(f"size_bytes 必须是正整数（包总字节数），得到 {pack.get('size_bytes')!r}")
+    # context_length：可选键（P2）。写了就必须是正整数——它会被驱动拼进 llama-server
+    # 的 -c 启动参数并被 /api/context/limit 采用，非法值（0/负数/字符串/布尔）
+    # 要么让 llama-server 拒启动，要么让上下文指示器按错误上限算占比，入口拒掉最省事。
+    cl = pack.get("context_length")
+    if cl is not None and not _is_pos_int(cl):
+        errors.append(f"context_length 必须是正整数（可选键，不需要请整键省略），得到 {cl!r}")
     files = pack.get("files")
     if not (isinstance(files, list) and files):
         errors.append("files 必须是非空数组（多文件是硬需求：模型本体+tokenizer 等）")

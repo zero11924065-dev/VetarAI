@@ -84,7 +84,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "heartbeat_interval": 15.0,    # SSE 心跳基础间隔秒（5-60；实际取动态值，见 app.py）
     # M6（TS-112）：推理后端抽象层
     "inference_backend": "ollama",       # ollama / openai_compatible（LM Studio、llama.cpp server、vLLM 等）
-    "inference_base_url": "",            # openai_compatible 时必填（如 http://localhost:1234/v1）；ollama 用 ollama_base_url
+                                         # / model_package（0.4.29 P2：模型包，内置 llama.cpp 驱动）
+    "inference_base_url": "",            # openai_compatible 时必填（如 http://localhost:1234/v1）；ollama 用 ollama_base_url；
+                                         # model_package 不需要（地址=驱动启动的 127.0.0.1 动态端口）
     "inference_api_key": "",             # 可选（远程中转服务才需要）
     "openai_compat_supports_tools": True,  # OpenAI 兼容后端是否支持工具调用（部分本地服务器不支持）
 
@@ -154,6 +156,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
                                          # 逐源拉取合并，单源失败不拖死整列；列表键先例=egress_proxy_required）
     "confirm_model_pack_download": True, # 下载模型包前弹窗确认（confirm_network_install :129 先例；
                                          # 确认弹窗在前端做，后端只暴露本开关供前端读取）
+
+    # ── 0.4.29（P2 llama.cpp 驱动）───────────────────────────────────────
+    "model_pack_boot_timeout_s": 600,    # llama-server 启动健康探测超时（秒）。
+                                         # 大模型 GGUF 加载慢（数十 GB 权重 mmap+预热），
+                                         # 默认给 10 分钟；超时按启动失败处理并回收子进程。
 }
 
 _MEM: dict[str, Any] = {}
@@ -313,8 +320,10 @@ def _validate(cur: dict[str, Any]) -> None:
         raise ValueError("heartbeat_interval 必须是 5-60 的秒数")
     # M6（TS-112）：推理后端配置校验
     ib = cur.get("inference_backend")
-    if ib is not None and ib not in ("ollama", "openai_compatible"):
-        raise ValueError("inference_backend 必须是 ollama 或 openai_compatible")
+    if ib is not None and ib not in ("ollama", "openai_compatible", "model_package"):
+        raise ValueError("inference_backend 必须是 ollama、openai_compatible 或 model_package")
+    # model_package 不要求 inference_base_url（地址由 llama.cpp 驱动动态分配端口），
+    # 仅 openai_compatible 强制必填
     if cur.get("inference_backend") == "openai_compatible" and not str(cur.get("inference_base_url") or "").strip():
         raise ValueError("openai_compatible 后端必须填写 inference_base_url（如 http://localhost:1234/v1）")
     ocs = cur.get("openai_compat_supports_tools")
@@ -395,6 +404,12 @@ def _validate(cur: dict[str, Any]) -> None:
             if not u.startswith(("http://", "https://", "file://")):
                 raise ValueError(
                     f"model_pack_catalog_urls 含非法源: {u!r}（须 http(s):// 或 file://）")
+    # 0.4.29（P2）：llama-server 启动超时。下限 10s（健康探测循环本身有粒度），
+    # 上限 7200s（超大 GGUF 机械硬盘冷启动的极端余量；再大基本等于无超时）
+    bt = cur.get("model_pack_boot_timeout_s")
+    if bt is not None and (not isinstance(bt, (int, float)) or isinstance(bt, bool)
+                           or not (10 <= float(bt) <= 7200)):
+        raise ValueError("model_pack_boot_timeout_s 必须是 10-7200 的秒数")
 
 
 def get_config() -> dict[str, Any]:

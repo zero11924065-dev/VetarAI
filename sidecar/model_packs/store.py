@@ -182,6 +182,13 @@ def _manifest_copy(pack_id: str) -> dict[str, Any]:
     return {}
 
 
+def read_manifest(pack_id: str) -> dict[str, Any]:
+    """_manifest_copy 的公开版（P2）：llama.cpp 驱动与 /api/context/limit
+    据此取 context_length 等清单字段。读不到返回 {}（缺 manifest 不致命，
+    调用方按"无该字段"降级处理）。"""
+    return _manifest_copy(pack_id)
+
+
 def list_installed() -> list[dict[str, Any]]:
     """已安装列表：注册表条目 + 磁盘探测（缺文件/实际占用/半截下载残留）。
 
@@ -209,6 +216,10 @@ def list_installed() -> list[dict[str, Any]]:
         except Exception:
             pass
         man = _manifest_copy(pack_id)
+        # P2：可选键，chat 包的上下文上限（驱动 -c 启动参数与 /api/context/limit 同源）；
+        # 未声明/非法（manifest 校验已在安装入口拦过，这里仅防御）一律归 0
+        cl = man.get("context_length")
+        context_length = cl if isinstance(cl, int) and not isinstance(cl, bool) and cl > 0 else 0
         out.append({
             "pack_id": pack_id,
             "name": str(man.get("name") or pack_id),
@@ -217,6 +228,7 @@ def list_installed() -> list[dict[str, Any]]:
             "task": entry.get("task", ""),
             "format": entry.get("format", ""),
             "driver": entry.get("driver", ""),
+            "context_length": context_length,
             "status": entry.get("status", "installed"),
             "enabled": entry.get("status") == "installed",
             "installed_at": entry.get("installed_at", ""),

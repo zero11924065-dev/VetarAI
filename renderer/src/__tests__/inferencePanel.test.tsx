@@ -93,6 +93,30 @@ describe('TS-112 M6 推理面板', () => {
     unmount();
   });
 
+  // 0.4.29（P2）：模型包后端（内置 llama.cpp 驱动）第三卡
+  it('model_package 后端：第三卡选中、模型列表正常渲染、无拉取/删除入口', async () => {
+    mockFetch({
+      '/inference/status': { backend: 'model_package', base_url: 'http://127.0.0.1:52111/v1', online: true, detail: '', capabilities: { tools: true, vision: false, pull: false, delete: false } },
+      '/inference/models': [{ name: 'chatlaw-gguf', size: 8_000_000_000, context_length: 4096, source: 'model_pack' }],
+      '/config': { inference_backend: 'model_package', inference_base_url: '' },
+    });
+    const { unmount } = render(<InferencePanel />);
+    await waitFor(() => {
+      expect(screen.getByText(/模型包 · 在线/)).toBeTruthy();
+      expect(screen.getByText('chatlaw-gguf')).toBeTruthy();
+      expect(screen.getByText(/ctx 4096/)).toBeTruthy();
+      // 行内「参数」按钮可用（每模型推理参数对模型包同样生效，映射复用 openai_compatible 行）
+      expect(screen.getByText('参数')).toBeTruthy();
+    }, { timeout: 3000 });
+    // 拉取输入/删除按钮保持仅 ollama；模型包走「模型包」面板的提示文案
+    expect(screen.queryByPlaceholderText(/拉取模型/)).toBeFalsy();
+    expect(screen.queryByText('删除')).toBeFalsy();
+    expect(screen.getByText(/模型包的安装、启用与卸载请在「模型包」面板进行/)).toBeTruthy();
+    // 不渲染 OpenAI 兼容的地址/API Key 表单
+    expect(screen.queryByPlaceholderText(/http:\/\/localhost:1234\/v1/)).toBeFalsy();
+    unmount();
+  });
+
   it('视觉引导卡片：消息含多模态降级文案 → 卡片出现（切换下拉 + 一键拉取 + 知道了）', async () => {
     mockFetch({
       '/agents/': [{ id: 'a1', name: '测试Agent', role: '工程师' }],

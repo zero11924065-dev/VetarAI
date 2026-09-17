@@ -57,6 +57,7 @@ interface Config {
   // 0.4.9：报错分析 / 联网安装确认 / 委派模型自选与换装
   error_analysis_model?: string;          // 任务161：报错分析用的默认模型（空=用 default_model）
   confirm_network_install?: boolean;      // 任务152：联网安装前必须询问
+  confirm_model_pack_download?: boolean;  // 0.4.29：下载模型包前必须询问（默认 true）
   model_strengths?: Record<string,string>; // 3.47.2：模型特长画像
   delegation_model_swap?: boolean;        // 3.47.3：委派模型换装
   // 0.4.9（3.48.2）应用内模块控制
@@ -727,6 +728,14 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
               <span style={{ fontSize: 13, color: colors.textPrimary }}>联网安装插件/技能前必须询问我</span>
             </label>
             <div style={hintStyle}>开启后，Agent 要从外部仓库（如 GitHub）下载安装插件或技能时，会先弹窗告知下载来源与类型，你同意才联网；当前为标准联网模式时还会一并询问是否切换到全量联网。强烈建议保持开启——曾发生子 Agent 擅自联网拉取、弹出账号密码窗并装入两个无关插件的事故。</div>
+
+            {/* 0.4.29：模型包下载确认（与联网安装开关同款；消费方是设置页的模型包面板） */}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 10 }}>
+              <input type="checkbox" checked={cfg.confirm_model_pack_download ?? true}
+                onChange={e => save({ confirm_model_pack_download: e.target.checked })} />
+              <span style={{ fontSize: 13, color: colors.textPrimary }}>下载模型包前必须询问我</span>
+            </label>
+            <div style={hintStyle}>开启后（默认），在「模型包」页从目录安装模型包前会弹窗告知包名、版本、大小、SHA256 与下载来源，你同意才联网下载；来源为境外站点且当前是标准联网模式时，还会一并询问是否切换到全量联网。</div>
 
             <label style={formLabel}>需代理名单（仅标准模式生效，支持 *.xxx 通配）</label>
             {(cfg.egress_proxy_required || []).map((a, i) => (

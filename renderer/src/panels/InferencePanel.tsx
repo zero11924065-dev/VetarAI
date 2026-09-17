@@ -122,7 +122,10 @@ export function InferencePanel() {
     finally { setBusy(false); setTimeout(() => setMsg(null), 3000); }
   };
 
-  const isOllama = (cfg.inference_backend || 'ollama') === 'ollama';
+  const backend = cfg.inference_backend || 'ollama';
+  const isOllama = backend === 'ollama';
+  // 0.4.29（P2）：模型包后端（内置 llama.cpp 驱动；模型在「模型包」面板安装与管理）
+  const isMP = backend === 'model_package';
 
   // 小按钮样式覆盖
   const smallSecondary: React.CSSProperties = {
@@ -148,7 +151,7 @@ export function InferencePanel() {
             background: status ? (status.online ? colors.ok : colors.danger) : colors.borderStrong,
           }} />
           <span style={{ fontSize: 14, fontWeight: 600, color: colors.textPrimary }}>
-            {isOllama ? 'Ollama' : 'OpenAI 兼容后端'}
+            {isOllama ? 'Ollama' : isMP ? '模型包' : 'OpenAI 兼容后端'}
             {status ? (status.online ? ' · 在线' : ' · 离线') : ''}
           </span>
           <button className="ui-btn ui-btn-secondary" style={smallSecondary}
@@ -195,16 +198,32 @@ export function InferencePanel() {
           <label style={{
             flex: 1, display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12,
             background: colors.bgCard, cursor: 'pointer',
-            border: !isOllama ? `2px solid ${colors.accent}` : `1px solid ${colors.borderDefault}`,
+            border: backend === 'openai_compatible' ? `2px solid ${colors.accent}` : `1px solid ${colors.borderDefault}`,
             borderRadius: radius.m,
-            ...(!isOllama ? { background: colors.accentBg } : {}),
+            ...(backend === 'openai_compatible' ? { background: colors.accentBg } : {}),
           }}>
-            <input type="radio" checked={!isOllama}
+            <input type="radio" checked={backend === 'openai_compatible'}
               onChange={() => setCfg({ ...cfg, inference_backend: 'openai_compatible' })}
               style={{ marginTop: 2 }} />
             <div>
               <div style={{ fontSize: 13, fontWeight: 500, color: colors.textPrimary }}>OpenAI 兼容</div>
               <div style={{ fontSize: 12, color: colors.textTertiary, marginTop: 2 }}>第三方 API 或本地中转</div>
+            </div>
+          </label>
+          {/* 模型包选择卡（0.4.29 P2）：无额外字段，选中即保存切换 */}
+          <label style={{
+            flex: 1, display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12,
+            background: colors.bgCard, cursor: 'pointer',
+            border: isMP ? `2px solid ${colors.accent}` : `1px solid ${colors.borderDefault}`,
+            borderRadius: radius.m,
+            ...(isMP ? { background: colors.accentBg } : {}),
+          }}>
+            <input type="radio" checked={isMP}
+              onChange={() => saveBackend({ inference_backend: 'model_package', inference_base_url: '' })}
+              style={{ marginTop: 2 }} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 500, color: colors.textPrimary }}>模型包</div>
+              <div style={{ fontSize: 12, color: colors.textTertiary, marginTop: 2 }}>内置 llama.cpp 驱动；模型在「模型包」面板安装与管理</div>
             </div>
           </label>
         </div>
@@ -230,7 +249,16 @@ export function InferencePanel() {
           </div>
         )}
 
-        {!isOllama && (
+        {/* openai_compatible 才需要地址/Key 表单；模型包无配置项，给指引即可 */}
+        {isMP && (
+          <div style={calloutStyle('info')}>
+            <Icon name="info" size={16} style={{ flexShrink: 0 }} />
+            <span>模型包由内置 llama.cpp 驱动加载，对话时自动启动（同一时刻只跑一个对话包，换模型即换装）。
+              模型包在「模型包」面板安装与管理；已启用的对话模型包会出现在下方模型列表。</span>
+          </div>
+        )}
+
+        {!isOllama && !isMP && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 4 }}>
             {/* 问题7（0.3.2实测）：第三方启动器接入引导——LM Studio 等走 OpenAI 兼容 */}
             <div style={{ fontSize: 12, color: colors.textTertiary, lineHeight: 1.6 }}>
@@ -364,6 +392,11 @@ export function InferencePanel() {
               {busy ? <Spinner size={12} /> : null}
               拉取
             </button>
+          </div>
+        ) : isMP ? (
+          <div style={calloutStyle('info')}>
+            <Icon name="info" size={16} style={{ flexShrink: 0 }} />
+            <span>拉取/删除模型仅 Ollama 后端支持；模型包的安装、启用与卸载请在「模型包」面板进行。</span>
           </div>
         ) : (
           <div style={calloutStyle('info')}>

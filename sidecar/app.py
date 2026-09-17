@@ -400,8 +400,14 @@ async def api_inference_status():
     except Exception as e:
         online = False
         detail = str(e)[:200]
-    base_url = (cfg.get("ollama_base_url") if backend == "ollama"
-                else cfg.get("inference_base_url")) or ""
+    if backend == "ollama":
+        base_url = cfg.get("ollama_base_url") or ""
+    elif backend == "model_package":
+        # 0.4.29（P2）：模型包地址 = 驱动活动服务的动态端口；未启动时为空串（不影响 online 判定）
+        from sidecar.model_packs import llamacpp_driver as _drv
+        base_url = _drv.active_base_url() or ""
+    else:
+        base_url = cfg.get("inference_base_url") or ""
     return {"backend": backend, "base_url": base_url, "online": online,
             "detail": detail, "capabilities": caps}
 
@@ -445,12 +451,22 @@ async def api_context_limit(model: str = "qwen3.8"):
       4. `default` —— 上述全不可得时兜底 262144（协议常量：qwen 系默认上限）
 
     - Ollama 不可达 → {"context_length": 0, "source": "error"}
-    - 非 Ollama 后端 → {"context_length": 0, "source": "unsupported"}（M6）
+    - openai_compatible → {"context_length": 0, "source": "unsupported"}（M6）
+    - model_package（0.4.29 P2）→ 包 manifest 可选键 context_length（与驱动 -c 启动参数
+      同源）；未声明 → unsupported（前端隐藏指示器，不瞎兜底）
     整体超时 5s，失败不阻塞前端。
     """
-    # M6（TS-112）：仅 Ollama 后端可查 /api/ps；其余后端返回 unsupported（前端隐藏指示器，不报错）
+    # M6（TS-112）：仅 Ollama 后端可查 /api/ps；openai_compatible 返回 unsupported（前端隐藏指示器，不报错）
     cfg = get_config()
-    if str(cfg.get("inference_backend", "ollama")) != "ollama":
+    backend = str(cfg.get("inference_backend", "ollama"))
+    if backend == "model_package":
+        # 0.4.29（P2）：上下文上限以包 manifest 可选键 context_length 为准
+        from sidecar.model_packs import store as _mps
+        cl = (_mps.read_manifest(model) or {}).get("context_length")
+        if isinstance(cl, int) and not isinstance(cl, bool) and cl > 0:
+            return {"context_length": int(cl), "source": "manifest", "model": model}
+        return {"context_length": 0, "source": "unsupported", "model": model}
+    if backend != "ollama":
         return {"context_length": 0, "source": "unsupported", "model": model}
 
     # A3 第 1 级：用户显式配置的 num_ctx 优先（延迟导入避免模块级循环）
