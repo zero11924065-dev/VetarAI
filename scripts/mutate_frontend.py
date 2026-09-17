@@ -543,6 +543,73 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/chatPanelAudio.test.tsx",
         "expect_fail": ["A1"],
     },
+    # ── 0.4.30 批 W1/W3：麦克风权限链 + 静音检测 + ASR 守卫 ─────────────
+    {
+        "id": 36,
+        "name": "0.4.30-W1 撤掉静音检测（全 0 PCM 直送转写）",
+        "why": "静音检测是防「权限链断裂录出零流 → 模型幻听文本（0.4.29 实测\"그.\"）」"
+               "的唯一闸门。撤掉后全 0 录音照常进转写链，用户再次收到幻听文稿且界面无提示。"
+               "M1 的「标红 + 不发 transcribe」断言必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": "      if (await wavPcm16Rms(wav) < SILENCE_RMS_THRESHOLD) item.silentAudio = true;",
+        "mutant": "      /* MUTATE-36：撤掉静音检测（全 0 PCM 也进转写链） */",
+        "test": "src/__tests__/chatPanelMicGuard.test.tsx",
+        "expect_fail": ["M1"],
+    },
+    {
+        "id": 37,
+        "name": "0.4.30-W3 撤掉 ASR 可用性守卫（未安装也放行录音/上传）",
+        "why": "未装 ASR 包时录音/上传音频必然转写失败，守卫的职责是事前弹窗引导安装/启用，"
+               "而不是让用户白录一段再在暂存区撞失败。恒真后 S1（弹窗文案）与"
+               "S4（上传拦截、不发 transcribe）必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """async function ensureAsrReady(): Promise<boolean> {
+  const st = await fetchAsrStatus();
+  if (!st || st.available !== false) return true;""",
+        "mutant": """async function ensureAsrReady(): Promise<boolean> {
+  return true; /* MUTATE-37：撤掉 ASR 可用性守卫（未安装也放行） */""",
+        "test": "src/__tests__/chatPanelMicGuard.test.tsx",
+        "expect_fail": ["S1", "S4"],
+    },
+    {
+        "id": 38,
+        "name": "0.4.30-W1 撤掉系统麦克风权限链（denied 也直接 getUserMedia）",
+        "why": "macOS TCC 拒绝时直接 getUserMedia 拿到的是全零静音流——用户录完才发现没声。"
+               "权限链的职责是 denied 给系统设置指引、not-determined 先触发系统弹窗。"
+               "恒真后 P2（denied 指引弹窗、不调 getUserMedia）与 P4（拒绝后拦截）必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """async function ensureMicPermission(): Promise<boolean> {
+  const bridge = (window as any).subagent;
+  if (!bridge || typeof bridge.getMicPermissionStatus !== 'function') return true;""",
+        "mutant": """async function ensureMicPermission(): Promise<boolean> {
+  return true; /* MUTATE-38：撤掉系统麦克风权限链（denied 也直接 getUserMedia） */""",
+        "test": "src/__tests__/chatPanelMicGuard.test.tsx",
+        "expect_fail": ["P2", "P4"],
+    },
+    # ── 0.4.30 批 W2：推理面板并行化 ────────────────────────────────────
+    {
+        "id": 39,
+        "name": "0.4.30-W2 选模型包连带切 inference_backend（排他语义回潮）",
+        "why": "并行化的全部意义是选模型包只存 default_model=pack_id、不动 inference_backend"
+               "（后端按 model 名自动路由）。连带切后端就退回 0.4.29 的排他语义——"
+               "选个包就把用户的 Ollama/OpenAI 配置顶掉。L2 的「inference_backend 保持 ollama」必须红。",
+        "file": PANELS / "InferencePanel.tsx",
+        "anchor": "    await saveBackend({ default_model: m.name });",
+        "mutant": "    await saveBackend({ default_model: m.name, inference_backend: m.source === 'model_pack' ? 'model_package' : cfg.inference_backend }); /* MUTATE-39：选包连带切后端（排他语义回潮） */",
+        "test": "src/__tests__/inferencePanelParallel.test.tsx",
+        "expect_fail": ["L2"],
+    },
+    {
+        "id": 40,
+        "name": "0.4.30-W2 撤掉模型包来源徽标（统一列表不可辨）",
+        "why": "统一列表里模型包与后端模型同名共存，徽标是用户分辨「这个模型走模型包引擎"
+               "（会换装）」的唯一视觉线索。撤掉后 L1 的「包行有徽标、普通行无徽标」必须红。",
+        "file": PANELS / "InferencePanel.tsx",
+        "anchor": "              {m.source === 'model_pack' && (",
+        "mutant": "              {false && m.source === 'model_pack' && ( /* MUTATE-40：撤掉模型包来源徽标 */",
+        "test": "src/__tests__/inferencePanelParallel.test.tsx",
+        "expect_fail": ["L1"],
+    },
 ]
 
 

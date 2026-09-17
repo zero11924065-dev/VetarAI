@@ -30,7 +30,12 @@ import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
 // M6（TS-112）：推理面板
 // - 状态区：当前后端 + 在线状态 + 测试连接
 // - 后端配置区：后端单选 / 地址 / API Key / 工具开关（与设置面板同源）
-// - 模型管理区：ollama=列表+拉取+删除；openai_compatible=列表+提示
+// - 模型管理区：统一模型列表（活动后端模型 + 已启用模型包并存，按 model 名自动路由）+ 拉取/删除
+//
+// 0.4.30（W2）并行化：模型包不再是排他的「第三后端」。inference_backend 保持
+// ollama/openai_compatible 时，对话按 model 名自动路由——model=模型包 pack_id
+// 走模型包引擎（内置 llama.cpp），其它走活动后端。旧配置 inference_backend=
+// model_package 的用户面板兼容显示（状态区仍可辨识，可点任一端卡切回）。
 
 const API = getApiBase();
 
@@ -38,7 +43,9 @@ interface InferenceStatus {
   backend: string; base_url: string; online: boolean;
   detail: string; capabilities: { tools: boolean; vision: boolean; pull: boolean; delete: boolean };
 }
-interface ModelEntry { name: string; size?: number; context_length?: number; }
+interface ModelEntry { name: string; size?: number; context_length?: number;
+  /** 0.4.30（W2）：来源标记——'model_pack' = 模型包（pack_id），其余/缺省 = 活动后端模型 */
+  source?: string; }
 
 export function InferencePanel() {
   const [status, setStatus] = useState<InferenceStatus | null>(null);
@@ -124,8 +131,18 @@ export function InferencePanel() {
 
   const backend = cfg.inference_backend || 'ollama';
   const isOllama = backend === 'ollama';
-  // 0.4.29（P2）：模型包后端（内置 llama.cpp 驱动；模型在「模型包」面板安装与管理）
+  // 0.4.29（P2）引入的模型包后端标记；0.4.30（W2）起仅作**旧配置兼容显示**：
+  // 模型包已并入统一列表按 model 名并行路由，不再要求把后端切到 model_package。
   const isMP = backend === 'model_package';
+
+  // 0.4.30（W2）：选中模型 → 只存 default_model（模型包即 pack_id），不动 inference_backend。
+  // 模型包附带「换装编排」提示：对话时会暂停其它本地模型（同一时刻只跑一个本地大模型）。
+  const selectDefaultModel = async (m: ModelEntry) => {
+    await saveBackend({ default_model: m.name });
+    setMsg(m.source === 'model_pack'
+      ? `已选为默认模型：${m.name}（模型包对话时会暂停其它本地模型——换装编排）`
+      : `已选为默认模型：${m.name}`);
+  };
 
   // 小按钮样式覆盖
   const smallSecondary: React.CSSProperties = {
@@ -210,23 +227,17 @@ export function InferencePanel() {
               <div style={{ fontSize: 12, color: colors.textTertiary, marginTop: 2 }}>第三方 API 或本地中转</div>
             </div>
           </label>
-          {/* 模型包选择卡（0.4.29 P2）：无额外字段，选中即保存切换 */}
-          <label style={{
-            flex: 1, display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12,
-            background: colors.bgCard, cursor: 'pointer',
-            border: isMP ? `2px solid ${colors.accent}` : `1px solid ${colors.borderDefault}`,
-            borderRadius: radius.m,
-            ...(isMP ? { background: colors.accentBg } : {}),
-          }}>
-            <input type="radio" checked={isMP}
-              onChange={() => saveBackend({ inference_backend: 'model_package', inference_base_url: '' })}
-              style={{ marginTop: 2 }} />
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, color: colors.textPrimary }}>模型包</div>
-              <div style={{ fontSize: 12, color: colors.textTertiary, marginTop: 2 }}>内置 llama.cpp 驱动；模型在「模型包」面板安装与管理</div>
-            </div>
-          </label>
         </div>
+
+        {/* 0.4.30（W2）旧配置兼容：inference_backend=model_package 的用户不炸——
+            模型包已并入统一模型列表并行路由，提示其点任一端卡即可切回正常配置。 */}
+        {isMP && (
+          <div style={{ ...calloutStyle('info'), marginBottom: 12 }}>
+            <Icon name="info" size={16} style={{ flexShrink: 0 }} />
+            <span>当前为旧版「模型包后端」配置。模型包现已与后端模型并行可用（按模型名自动路由，
+              对话时自动换装），点击上方 Ollama 或 OpenAI 兼容即可切回常规配置；模型包仍在「模型包」面板安装与管理。</span>
+          </div>
+        )}
 
         {/* 问题6修复（0.3.2实测）：Ollama 地址从"基础设置"挪到推理后端面板 */}
         {isOllama && (
@@ -249,14 +260,7 @@ export function InferencePanel() {
           </div>
         )}
 
-        {/* openai_compatible 才需要地址/Key 表单；模型包无配置项，给指引即可 */}
-        {isMP && (
-          <div style={calloutStyle('info')}>
-            <Icon name="info" size={16} style={{ flexShrink: 0 }} />
-            <span>模型包由内置 llama.cpp 驱动加载，对话时自动启动（同一时刻只跑一个对话包，换模型即换装）。
-              模型包在「模型包」面板安装与管理；已启用的对话模型包会出现在下方模型列表。</span>
-          </div>
-        )}
+        {/* openai_compatible 才需要地址/Key 表单；isMP（旧配置）无配置项——兼容提示已在上方略 */}
 
         {!isOllama && !isMP && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 4 }}>
@@ -345,7 +349,9 @@ export function InferencePanel() {
           {models.length === 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '20px 0' }}>
               <Icon name="cpu" size={36} style={{ color: colors.borderStrong }} />
-              <span style={{ fontSize: 13, color: colors.textTertiary }}>无模型或后端离线</span>
+              {/* 0.4.30（W2）：空态覆盖「后端离线/无模型/无已启用模型包」三种情况 */}
+              <span style={{ fontSize: 13, color: colors.textTertiary }}>暂无可用模型（后端离线或未安装模型）</span>
+              <span style={{ fontSize: 12, color: colors.textTertiary }}>模型包安装并启用后也会出现在此列表（在「模型包」面板管理）</span>
             </div>
           )}
           {models.map(m => (
@@ -353,11 +359,34 @@ export function InferencePanel() {
               display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0',
               borderBottom: `1px solid ${colors.borderSubtle}`,
             }}>
-              <span style={{ flex: 1, fontFamily: fonts.mono, fontSize: 13, color: colors.textPrimary }}>{m.name}</span>
+              <span style={{ fontFamily: fonts.mono, fontSize: 13, color: colors.textPrimary }}>{m.name}</span>
+              {/* 0.4.30（W2）：来源徽标——模型包与后端模型在统一列表中可辨 */}
+              {m.source === 'model_pack' && (
+                <span style={{
+                  fontSize: 11, color: colors.accentText, background: colors.accentBg,
+                  border: `1px solid ${colors.accent}`, borderRadius: radius.s, padding: '0 6px', flexShrink: 0,
+                }}>模型包</span>
+              )}
+              <span style={{ flex: 1 }} />
               {typeof m.size === 'number' && m.size > 0 && (
                 <span style={{ fontSize: 12, color: colors.textTertiary }}>{(m.size / 1e9).toFixed(1)}GB</span>
               )}
               {m.context_length && <span style={{ fontSize: 12, color: colors.textTertiary }}>ctx {m.context_length}</span>}
+              {/* 0.4.30（W2）：选为默认模型——只存 default_model（模型包即 pack_id），
+                  不动 inference_backend；对话按 model 名自动路由到模型包引擎或活动后端 */}
+              {cfg.default_model === m.name ? (
+                <span style={{ fontSize: 11, color: colors.ok, flexShrink: 0 }}>当前默认</span>
+              ) : (
+                <button className="ui-btn ui-btn-ghost"
+                  data-tip={m.source === 'model_pack'
+                    ? '选为默认模型（模型包对话时会暂停其它本地模型——换装编排）'
+                    : '选为默认模型'}
+                  style={{ ...btnSecondary, height: 22, padding: '0 8px', fontSize: 12, background: 'transparent', border: 'none', color: colors.textTertiary }}
+                  onClick={() => void selectDefaultModel(m)}>
+                  <Icon name="check" size={14} />
+                  设为默认
+                </button>
+              )}
               {/* A2/A4（0.4.15）：就地配置该模型的推理参数。
                   按钮文案不含模型名，避免与行内模型名重复渲染（保 getByText 唯一性） */}
               <button className="ui-btn ui-btn-ghost"
@@ -372,7 +401,7 @@ export function InferencePanel() {
                 <Icon name="sliders" size={14} />
                 参数
               </button>
-              {isOllama && status?.capabilities?.delete && (
+              {isOllama && m.source !== 'model_pack' && status?.capabilities?.delete && (
                 <button className="ui-btn ui-btn-ghost ui-ico-danger"
                   style={{ ...btnSecondary, height: 22, padding: '0 8px', fontSize: 12, background: 'transparent', border: 'none', color: colors.dangerText }}
                   onClick={() => doDelete(m.name)}>
@@ -393,15 +422,11 @@ export function InferencePanel() {
               拉取
             </button>
           </div>
-        ) : isMP ? (
-          <div style={calloutStyle('info')}>
-            <Icon name="info" size={16} style={{ flexShrink: 0 }} />
-            <span>拉取/删除模型仅 Ollama 后端支持；模型包的安装、启用与卸载请在「模型包」面板进行。</span>
-          </div>
         ) : (
           <div style={calloutStyle('info')}>
             <Icon name="info" size={16} style={{ flexShrink: 0 }} />
-            <span>拉取/删除模型仅 Ollama 后端支持；OpenAI 兼容后端的模型请在其服务端管理。</span>
+            <span>拉取/删除模型仅 Ollama 后端支持；OpenAI 兼容后端的模型请在其服务端管理，
+              模型包的安装、启用与卸载请在「模型包」面板进行。</span>
           </div>
         )}
       </div>

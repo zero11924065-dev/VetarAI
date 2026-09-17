@@ -36,6 +36,11 @@ import { startResilientStream } from './lib/sseStream';
 /** 广播事件名：各面板用 `on(APP_RESOURCE_CHANGED, fn)` 订阅。 */
 export const APP_RESOURCE_CHANGED = 'app:resource-changed';
 
+/** 0.4.30（W3）：请求打开整页设置页并定位到某分区。
+ *  载荷 { section: SectionKey }——目前由 ChatPanel 的「ASR 未安装/已禁用」提醒层
+ *  「去模型包面板」按钮发出；App 顶层订阅后切到设置页对应分区。 */
+export const APP_OPEN_SETTINGS = 'app:open-settings';
+
 /** 广播给面板的变更事件载荷。 */
 export interface AppResourceEvent {
   /** 资源类型：workflow/project/plugin/knowledge/inference/agent/session；`'*'` = gap 对账（全部重拉）。

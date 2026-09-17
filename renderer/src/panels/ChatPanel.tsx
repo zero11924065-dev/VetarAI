@@ -27,9 +27,9 @@ import { purgeSessionLocal, syncSessionLocal, Message, ToolStep } from '../hooks
 import { consumeSSE } from '../lib/sseStream';
 import { colors, fonts, radius, shadow, btnPrimary, btnSecondary, btnGhost, btnDangerSoft, select as selectStyle, calloutStyle, iconBtn, menuCard } from '../theme';
 import { Icon, Spinner, IconName } from '../Icon';
-import { confirmDialog, promptDialog } from '../Dialog';
-import { on } from '../events';
-import { APP_RESOURCE_CHANGED, AppResourceEvent } from '../appEvents';
+import { confirmDialog, promptDialog, choiceDialog, alertDialog } from '../Dialog';
+import { on, emit } from '../events';
+import { APP_RESOURCE_CHANGED, APP_OPEN_SETTINGS, AppResourceEvent } from '../appEvents';
 import { WarehousePanel } from './WarehousePanel';
 import { reportBusy } from '../busyState';
 
@@ -40,6 +40,8 @@ interface PendingItem { name: string; dataUri: string; isImage: boolean; size: n
   savedPath?: string;
   /** 0.4.29（P3）音频附件：两段式——先入暂存区占位（转写中），/api/asr/transcribe 完成后填 transcript */
   isAudio?: boolean; transcribing?: boolean; transcribeFailed?: boolean; transcript?: string; audioError?: string;
+  /** 0.4.30（W1）：录音转换后判定为全静音——标红提示且不进转写链（防静音流被模型幻听成文本） */
+  silentAudio?: boolean;
   /** 音频首次转写拿到的本地绝对路径（File 句柄是一次性的，重试只能靠它） */
   originPath?: string; }
 
@@ -310,6 +312,102 @@ export async function recordingBlobToWav16k(blob: Blob): Promise<Blob> {
   src.start(0);
   const rendered: AudioBuffer = await off.startRendering();
   return encodeWavPcm16(rendered.getChannelData(0), targetRate);
+}
+
+// ── 0.4.30（W1）静音检测：拦下「录了但没声」的音频，不进转写链 ──
+// 背景：0.4.29 实测 macOS 权限链缺失时录出的 PCM 全为静音字节，
+// 直送转写被模型幻听成无意义文本（"그."）发给用户，且界面无任何提示。
+/** 全静音判定阈值（16bit PCM 均方根，单位 LSB）。
+ *  依据：被 TCC/权限链拦截的采集流是**严格全零**；真实麦克风即使在安静房间
+ *  也有自噪与环境底噪（典型 RMS 数十 LSB 量级），轻声语音更在数百以上。
+ *  8 LSB ≈ -72 dBFS：远高于模数转换底噪、远低于任何可闻语音，
+ *  足以把「权限被禁的零流」与「安静但真实的录音」分开。 */
+export const SILENCE_RMS_THRESHOLD = 8;
+
+/** 16bit PCM WAV Blob（本模块 encodeWavPcm16 的 44 字节头产物）→ 数据段 RMS（LSB）。
+ *  只认自家产物（固定 44 字节头），不做通用 RIFF chunk 遍历。 */
+export async function wavPcm16Rms(blob: Blob): Promise<number> {
+  const buf = await blob.arrayBuffer();
+  const v = new DataView(buf);
+  const n = Math.max(0, (buf.byteLength - 44) >> 1);
+  if (!n) return 0;
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const s = v.getInt16(44 + i * 2, true); sum += s * s; }
+  return Math.sqrt(sum / n);
+}
+
+// ── 0.4.30（W1）麦克风权限链 +（W3）ASR 可用性守卫 ──
+/** 权限被拒的统一指引（macOS 系统设置路径；UI 文案，不含禁用 emoji） */
+export const MIC_DENIED_HINT = '麦克风权限已被拒绝，请到 系统设置→隐私与安全性→麦克风 开启 VetarAI';
+
+/** GET /api/asr/status 的响应契约（后端 0.4.30 新增；无包也 200）。 */
+export interface AsrStatus {
+  available?: boolean;
+  state?: 'none' | 'disabled' | 'ready' | string;
+  pack_id?: string | null;
+  message?: string | null;
+}
+
+/** 查询 ASR 可用性。端点不存在/不可达/载荷非对象 → null（调用方 fail-open 放行，
+ *  转写失败会在暂存区以失败态可见可重试，不因此误拦老后端）。 */
+async function fetchAsrStatus(): Promise<AsrStatus | null> {
+  try {
+    const r = await fetch(`${API}/asr/status`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return (d && typeof d === 'object' && !Array.isArray(d)) ? d as AsrStatus : null;
+  } catch { return null; }
+}
+
+/** W3：录音/上传音频前的 ASR 守卫。返回 true = 可继续；
+ *  后端明确 available=false → 弹提醒层（未安装→引导安装；已禁用→引导启用），返回 false。 */
+async function ensureAsrReady(): Promise<boolean> {
+  const st = await fetchAsrStatus();
+  if (!st || st.available !== false) return true;
+  const fallback = st.state === 'disabled'
+    ? '语音转写模型包已安装但被禁用，请到「模型包」面板启用后再试。'
+    : '未安装语音转写（ASR）模型包，无法使用语音功能。请到「模型包」面板安装后再试。';
+  const choice = await choiceDialog({
+    title: '语音转写不可用',
+    message: (st.message && String(st.message).trim()) || fallback,
+    options: [{ value: 'goto-packs', label: '去模型包面板' }],
+    cancelText: '知道了',
+  });
+  if (choice === 'goto-packs') emit(APP_OPEN_SETTINGS, { section: 'model-packs' });
+  return false;
+}
+
+/** W1：录音前的系统麦克风权限链（仅 Electron 桥存在时有意义；
+ *  纯浏览器环境无桥接 → 返回 true，交给 getUserMedia 自身权限弹窗）。 */
+async function ensureMicPermission(): Promise<boolean> {
+  const bridge = (window as any).subagent;
+  if (!bridge || typeof bridge.getMicPermissionStatus !== 'function') return true;
+  let status = '';
+  try { status = String(await bridge.getMicPermissionStatus() || ''); } catch { return true; }
+  if (status === 'granted') return true;
+  if (status !== 'denied' && status !== 'restricted') {
+    // not-determined（及未知态）：先触发系统授权弹窗，按结果决定
+    try {
+      if (typeof bridge.requestMicAccess === 'function' && await bridge.requestMicAccess()) return true;
+    } catch { /* 落入拒绝提示 */ }
+  }
+  void alertDialog({ title: '无法使用麦克风', message: MIC_DENIED_HINT });
+  return false;
+}
+
+/** getUserMedia 抛错 → 中文可读提示（按 DOMException.name 归并常见档）。 */
+function micErrorMessage(err: unknown): string {
+  const name = (err as { name?: string } | null)?.name || '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return '麦克风权限被拒绝，请允许 VetarAI 使用麦克风后重试（macOS：系统设置→隐私与安全性→麦克风）';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return '未检测到可用的麦克风设备，请检查输入设备连接后在系统设置中确认';
+  }
+  if (name === 'NotReadableError' || name === 'AbortError') {
+    return '麦克风正被其他应用占用或暂时无法读取，请关闭占用程序后重试';
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -1367,13 +1465,22 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       newItems.push({ name: file.name, dataUri, isImage: isImg, isAudio: isAud, size: file.size });
       newFiles.push(file);
     }
-    setPendingItems(prev => [...prev, ...newItems]);
+    // 0.4.30（W3）：含音频附件时先过 ASR 守卫——未安装/已禁用弹提醒层引导，
+    // 音频项不进暂存区（无转写能力的音频对 agent 无意义）；非音频附件照常走原链路。
+    let items = newItems;
+    let itemFiles = newFiles;
+    if (newItems.some(it => it.isAudio) && !(await ensureAsrReady())) {
+      items = newItems.filter(it => !it.isAudio);
+      itemFiles = newFiles.filter((_, i) => !newItems[i].isAudio);
+      if (!items.length) { e.target.value = ''; return; }
+    }
+    setPendingItems(prev => [...prev, ...items]);
     e.target.value = '';
 
     // 0.4.29（P3）：音频两段式——暂存区先占位（转写中…），转写完成后 transcript 填入。
     // 与文档解析分离循环：音频走 /api/asr/transcribe（路径模式），文档走 /attachments/parse。
-    for (let i = 0; i < newItems.length; i++) {
-      if (newItems[i].isAudio) void transcribePendingAudio(newItems[i], newFiles[i]);
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].isAudio) void transcribePendingAudio(items[i], itemFiles[i]);
     }
 
     // checkpoint-048：可解析的文档调后端解析端点提取文本
@@ -1381,7 +1488,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     //    已与后端 SUPPORTED_EXTS 漂移，导致 .pptx 等永远不被解析且界面无任何状态）。
     //    改为「非图片一律交后端裁决」：后端对不支持的格式返回 text=null，
     //    前端按既有三态显示「（仅文件名）」。图片仍单独走 dataUri 视觉链路，不调解析端点。
-    for (const item of newItems) {
+    for (const item of items) {
       if (item.isImage || item.isAudio) continue;   // 音频已在上面的专属循环走转写链
       const b64 = item.dataUri.split(',')[1] || '';
       setPendingItems(prev => prev.map(p => p.name === item.name && p.dataUri === item.dataUri ? { ...p, parsing: true } : p));
@@ -1496,6 +1603,10 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
         throw new Error('当前环境不支持录音（MediaRecorder 不可用）');
       }
+      // 0.4.30（W3）：先查 ASR 可用性——未安装/已禁用弹提醒层引导，不做无用录音
+      if (!(await ensureAsrReady())) return;
+      // 0.4.30（W1）：再查/请系统麦克风权限（macOS TCC；denied 给系统设置指引，不再空录）
+      if (!(await ensureMicPermission())) return;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mime = ['audio/webm;codecs=opus', 'audio/webm', '']
         .find(m => !m || MediaRecorder.isTypeSupported(m));
@@ -1513,7 +1624,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       recordTimerRef.current = setInterval(() => setRecordSeconds(s => s + 1), 1000);
       setRecording(true);
     } catch (err) {
-      flash(setToast, `无法开始录音：${err instanceof Error ? err.message : String(err)}`, 4000);
+      // 0.4.30（W1）：getUserMedia 的 DOMException 归并为中文可读提示
+      flash(setToast, `无法开始录音：${micErrorMessage(err)}`, 4000);
     }
   }
 
@@ -1531,7 +1643,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       const name = `录音-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.wav`;
       const item: PendingItem = { name, dataUri: `audio:${++pendingItemSeq}`,
         isImage: false, isAudio: true, size: wav.size };
+      // 0.4.30（W1）：全静音拦截——权限链断裂时录出的是零流，
+      // 转写只会得到模型幻听文本（0.4.29 实测"그."）。标红提示，不进转写链。
+      if (await wavPcm16Rms(wav) < SILENCE_RMS_THRESHOLD) item.silentAudio = true;
       setPendingItems(prev => [...prev, item]);
+      if (item.silentAudio) return;
       void transcribePendingAudio(item, undefined, wav);
     } catch (err) {
       flash(setToast, `录音处理失败：${err instanceof Error ? err.message : String(err)}`, 4000);
@@ -1628,6 +1744,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
       if (f.transcript) {
         return `[🎤 语音转写：${f.name}]${f.savedPath ? `（原件已保存：${f.savedPath}）` : ''}\n${f.transcript}`;
       }
+      // 0.4.30（W1）：全静音录音如实标注（未转写——静音流只会产出幻听文本）
+      if (f.silentAudio) return `[🎤 ${f.name}]（⚠️ 录音未检测到声音，未附文稿）`;
       // 转写失败/未完成也如实标注（不静默丢——用户能看到暂存区失败态，agent 也该知道有这段语音）
       return `[🎤 ${f.name}]（⚠️ 语音转写${f.transcribeFailed ? '失败' : '未完成'}，未附文稿`
            + `${f.savedPath ? `；原件已保存：${f.savedPath}` : ''}）`;
@@ -2901,6 +3019,14 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                     style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
                     <Icon name="rotate-cw" size={13} style={{color:colors.danger}} />
                   </button>
+                </span>
+              )}
+              {/* 0.4.30（W1）：全静音录音——标红提示，不进转写链（重试无意义故无重试钮） */}
+              {!item.transcribing && item.silentAudio && (
+                <span data-tip="未检测到声音，请检查麦克风权限或输入设备"
+                  style={{color:colors.danger,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}>
+                  <Icon name="alert-triangle" size={13} style={{color:colors.danger}} />
+                  未检测到声音，请检查麦克风权限或输入设备
                 </span>
               )}
               <button className="ui-ico-danger" data-tip="移除该附件" onClick={() => removePending(pendingItems.indexOf(item))} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>

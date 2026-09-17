@@ -64,4 +64,10 @@ contextBridge.exposeInMainWorld('subagent', {
   getPathForFile: (file) => {
     try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
   },
+  // 0.4.30（W1）：麦克风权限链桥接（与上方 getPathForFile 同款风格：
+  // 薄包装主进程 IPC，不暴露任意 invoke；非 Electron 环境无此桥，前端 ?. 兜底）。
+  // getMicPermissionStatus() → 'granted'|'denied'|'not-determined'|'restricted'
+  // requestMicAccess() → boolean（触发 macOS 系统授权弹窗；非 macOS 主进程兜底 true）
+  getMicPermissionStatus: () => ipcRenderer.invoke('get-mic-permission-status'),
+  requestMicAccess: () => ipcRenderer.invoke('request-mic-access'),
 });

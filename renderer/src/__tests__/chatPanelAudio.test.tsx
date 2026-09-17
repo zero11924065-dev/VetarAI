@@ -264,7 +264,8 @@ describe('0.4.29 P3 ASR 语音转写双场景', () => {
       destination = {};
       constructor(_ch: number, _frames: number, _rate: number) {}
       createBufferSource() { return { buffer: null, connect: vi.fn(), start: vi.fn() }; }
-      async startRendering() { return { getChannelData: () => new Float32Array(1600) }; }
+      // 0.4.30（W1）：录音链新增全静音拦截——桩必须给出有声 PCM（全 0 会被判静音、不进转写链）
+      async startRendering() { return { getChannelData: () => new Float32Array(1600).fill(0.01) }; }
     };
 
     const { unmount, container } = render(<ChatPanel projectId="p1" agentId="a1" />);

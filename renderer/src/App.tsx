@@ -31,7 +31,8 @@ import { ModuleNav, ModuleKey } from './panels/ModuleNav';
 import { TipPortal } from './TipPortal';
 import { Accordion } from './Accordion';
 import { getApiBase } from './apiBase';
-import { startAppEventStream } from './appEvents';
+import { startAppEventStream, APP_OPEN_SETTINGS } from './appEvents';
+import { on } from './events';
 import { colors, fonts, shadow } from './theme';
 import { Icon } from './Icon';
 import { alertDialog } from './Dialog';
@@ -49,6 +50,8 @@ export default function App() {
   const togglePanel = (p: PanelKey) => setOpenPanel(prev => (prev === p ? null : p));
   // checkpoint-045：整页设置视图（左栏底部齿轮入口）
   const [showSettingsPage, setShowSettingsPage] = useState(false);
+  // 0.4.30（W3）：设置页打开时定位的目标分区（如 ChatPanel「去模型包面板」→ model-packs）
+  const [settingsSection, setSettingsSection] = useState<string | null>(null);
   // checkpoint-051：手风琴头悬停态（内联样式写不了伪类）
   const [hoverPanel, setHoverPanel] = useState<string | null>(null);
 
@@ -75,6 +78,16 @@ export default function App() {
   useEffect(() => {
     const stop = startAppEventStream();
     return stop;
+  }, []);
+
+  // 0.4.30（W3）：订阅「打开设置页」广播（ChatPanel ASR 提醒层「去模型包面板」等）。
+  // 打开时切回智能中心模块并带上目标分区；SettingsPage 每次打开重新挂载，经 prop 取初始分区。
+  useEffect(() => {
+    return on(APP_OPEN_SETTINGS, (ev: any) => {
+      setActiveModule('intelligence');
+      setSettingsSection(ev && typeof ev.section === 'string' ? ev.section : null);
+      setShowSettingsPage(true);
+    });
   }, []);
 
   const openLogsFolder = async () => {
@@ -359,6 +372,7 @@ export default function App() {
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <SettingsPage
             projectId={selectedProjectId}
+            initialSection={settingsSection}
             onExit={() => setShowSettingsPage(false)}
             onOpenLogs={openLogsFolder}
             onOpenDataDir={openDataDir}

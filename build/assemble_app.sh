@@ -8,7 +8,7 @@ BASE="/Users/vetar/Desktop/beta/subagent"
 # 而不必覆盖正式产物（正式产物是已备份 DMG 的来源，覆盖后两者会分叉）。
 OUT="${OUT:-$BASE/build/VetarAI.app}"
 ELECTRON="$BASE/node_modules/electron/Electron.app"
-VERSION="${VERSION:-0.4.29}"
+VERSION="${VERSION:-0.4.30}"
 
 echo "[1/6] 清理旧产物..."
 rm -rf "$OUT"
@@ -109,6 +109,13 @@ PLIST="$OUT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile VetarAI" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string VetarAI" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable VetarAI" "$PLIST"
+
+# NSMicrophoneUsageDescription（0.4.30 新增，0.4.29 实测修复批）：
+# macOS TCC 要求——缺该键时系统**静默拒绝**麦克风访问，且应用永不出现於
+# 「系统设置→隐私与安全性→麦克风」列表（用户无任何授权入口），
+# 这是 0.4.29 实测录音无声的第二处根因（另一处见 entitlements-main.plist）。
+# Electron 外壳 plist 无此键，先 Add；已存在（重跑场景）则退回 Set，二者都不报错中断。
+/usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 需要麦克风权限以录制语音并转写为文字。" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription string 需要麦克风权限以录制语音并转写为文字。" "$PLIST"
 
 # ── [7/7] 签名（0.4.20 新增）──────────────────────────────────────
 # ⛔⛔ 为什么必须在**改完 Info.plist、写完所有资源之后**才签名：

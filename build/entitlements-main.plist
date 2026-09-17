@@ -41,5 +41,12 @@
          用户侧出问题时我们能远程指导排查（PyInstaller 产物常需 DYLD_LIBRARY_PATH）。 -->
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
+
+    <!-- 麦克风采集（0.4.30 新增，0.4.29 实测修复批）。
+         hardened runtime 默认禁止访问音频输入设备：0.4.29 缺此条时签名/公证全绿，
+         但会话内录音录出的 PCM 全为静音字节，转写结果被模型幻听成无意义文本（实测"그."）。
+         只放行音频输入，不引入沙盒（本项目走 Developer ID 分发，见文件头说明）。 -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

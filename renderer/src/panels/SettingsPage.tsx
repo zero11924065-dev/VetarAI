@@ -43,14 +43,17 @@ const SECTIONS: { key: SectionKey; icon: IconName; label: string; needProject?: 
   { key: 'plugins', icon: 'plug', label: '插件管理' },
 ];
 
-export function SettingsPage({ projectId, onExit, onOpenLogs, onOpenDataDir }: {
+export function SettingsPage({ projectId, initialSection, onExit, onOpenLogs, onOpenDataDir }: {
   projectId: string | null;
+  /** 0.4.30（W3）：打开时定位的目标分区（「去模型包面板」等深链入口）；非法值回退 general */
+  initialSection?: string | null;
   onExit: () => void;
   onOpenLogs: () => void;
   /** 问题5：打开数据缓存目录（与日志目录分开） */
   onOpenDataDir?: () => void;
 }) {
-  const [section, setSection] = useState<SectionKey>('general');
+  const validInitial = SECTIONS.some(s => s.key === initialSection) ? (initialSection as SectionKey) : 'general';
+  const [section, setSection] = useState<SectionKey>(validInitial);
   const [hoveredNav, setHoveredNav] = useState<SectionKey | null>(null);
 
   return (

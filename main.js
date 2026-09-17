@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeImage, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -28,7 +28,7 @@ let sidecarProcess = null;
 
 // checkpoint-053（用户需求：应用名全局改为 VetarAI + 关于信息放原生菜单栏）
 const APP_NAME = 'VetarAI';
-const APP_VERSION = '0.4.29';
+const APP_VERSION = '0.4.30';
 const APP_TAGLINE_CN = '一款零生态基础的Agent工具';
 const APP_TAGLINE_EN = 'An ecosystem-agnostic Agent tool.';
 
@@ -199,6 +199,16 @@ function createWindow() {
   // 0.4.6：任务执行中关闭弹确认
   installCloseGuard(mainWindow);
 
+  // 0.4.30（W1）：放行本应用的 media（麦克风/摄像头）权限请求。
+  // 不设处理器时 Chromium 层会直接拒绝 getUserMedia（即便 TCC 已授权）——
+  // 这是权限链的最后一环：entitlements（hardened runtime）→ Info.plist 用途文案
+  // （TCC 列表入口）→ 主进程 askForMediaAccess（系统弹窗）→ 本处理器（Chromium 放行）。
+  // 仅 media 显式放行；其余权限维持 Electron 默认（允许），不改变既有行为。
+  mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (permission === 'media') return callback(true);
+    callback(true);
+  });
+
   // checkpoint-063 封装：打包模式加载应用内静态前端产物（不依赖 Vite 开发服务器）；
   // 开发模式保持原逻辑（探测 Vite 端口）。
   if (app.isPackaged) {
@@ -295,6 +305,31 @@ function startSidecar() {
 }
 
 function stopSidecar() { if (sidecarProcess) { sidecarProcess.kill('SIGTERM'); sidecarProcess = null; } }
+
+// ── IPC: 0.4.30（W1）麦克风权限链 ────────────────────────────────
+// 0.4.29 实测：会话内录音全无声——macOS TCC 在无 NSMicrophoneUsageDescription
+// 时静默拒绝麦克风访问，渲染进程的 getUserMedia 拿到的是全零静音流。
+// 渲染进程经 preload 暴露的两条桥查询/请求系统权限（仅 macOS 有 TCC 语义，
+// 其他平台返回兜底值，由浏览器自身的权限模型接管）。
+ipcMain.handle('get-mic-permission-status', async () => {
+  if (process.platform !== 'darwin') return 'granted';   // 非 macOS：无 TCC，视为可用
+  try {
+    return systemPreferences.getMediaAccessStatus('microphone');
+  } catch (e) {
+    console.log('[ipc get-mic-permission-status]', e);
+    return 'not-determined';
+  }
+});
+
+ipcMain.handle('request-mic-access', async () => {
+  if (process.platform !== 'darwin') return true;        // 非 macOS：交给 getUserMedia 自身弹窗
+  try {
+    return await systemPreferences.askForMediaAccess('microphone');
+  } catch (e) {
+    console.log('[ipc request-mic-access]', e);
+    return false;
+  }
+});
 
 // ── IPC: choose working directory for a new project (B3) ──────────
 ipcMain.handle('choose-working-dir', async (_event, options = {}) => {
