@@ -430,6 +430,10 @@ async def api_inference_models():
         ctx = (m.get("details") or {}).get("context_length") or m.get("context_length")
         if ctx:
             entry["context_length"] = ctx
+        # 0.4.30：路由层并集列表带 source 标注（ollama/openai_compatible/model_pack），
+        # 透传给前端区分模型包与普通后端模型（附加字段，旧前端不读不受影响）
+        if m.get("source"):
+            entry["source"] = m["source"]
         out.append(entry)
     return out
 
@@ -2696,6 +2700,38 @@ async def api_model_pack_toggle(pack_id: str, req: ModelPackToggleReq):
 # 路径模式上限：防病态超大输入（读盘+解码+特征占内存），不防正常长录音
 # （50MB 验收案例约等于 45 分钟 m4a，余量充足）
 _ASR_MAX_BYTES = 500 * 1024 * 1024
+
+
+@app.get("/api/asr/status")
+async def api_asr_status():
+    """ASR 可用性状态（0.4.30）：{available, state, pack_id, message}。
+
+    state 三态：ready（有启用中的 ASR 包）/ disabled（装了但全禁用）/ none（未安装）。
+    判定与转写端点共用同一事实源——asr_driver.resolve_asr_pack 读注册表；
+    message 复用 0.4.29 已落地的两条中文文案（未安装/全禁用，即 resolve 抛出的原文）。
+    容错契约：无注册表/注册表损坏/任何意外一律 200 返回，不 5xx（前端据此渲染引导）。
+
+    留痕（0.4.30 实测核查结论）：ASR「安装即自动可用」本已成立——
+    store.register_pack 登记即 status=installed（默认启用），resolve_asr_pack 独立于
+    inference_backend 直接读注册表选包，不需要任何「启用后端」动作（与 bge-m3 同款）。
+    """
+    from sidecar.model_packs import asr_driver as _asr
+    try:
+        pid = _asr.resolve_asr_pack()
+        return {"available": True, "state": "ready", "pack_id": pid, "message": None}
+    except _asr.PackUnavailableError as e:
+        try:
+            has_asr = any(ent.get("task") == "asr"
+                          for ent in _mp_store.read_registry().values())
+        except Exception:
+            has_asr = False
+        return {"available": False,
+                "state": "disabled" if has_asr else "none",
+                "pack_id": None, "message": str(e)}
+    except Exception as e:
+        # 防御兜底：注册表目录不可解析等意外也不得 5xx，如实报 none + 原因
+        return {"available": False, "state": "none", "pack_id": None,
+                "message": f"ASR 状态检测失败: {e}"}
 
 
 class AsrTranscribeReq(BaseModel):

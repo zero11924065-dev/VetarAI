@@ -138,18 +138,22 @@ async def main():
         check("1e tools 开关非 bool 拒绝", True)
     reload_config({"openai_compat_supports_tools": True})
 
-    # ══ 2. 能力表 + 工厂分发 ══
+    # ══ 2. 能力表 + 工厂分发（0.4.30：工厂返回路由连接器，活动侧按后端动态解析）══
     import sidecar.ollama.connector as connmod
     from sidecar.ollama.connector import OllamaConnector
     from sidecar.ollama.openai_compat import OpenAICompatConnector
+    from sidecar.ollama.routing import RoutingConnector
 
     connmod._SINGLETON = None
     connmod._OPENAI_SINGLETON = None
     reload_config({"inference_backend": "ollama", "inference_base_url": ""})
     c_ollama = connmod.get_inference_connector()
-    check("2a ollama 后端 → OllamaConnector", isinstance(c_ollama, OllamaConnector))
+    check("2a ollama 后端 → 路由连接器（活动侧 OllamaConnector）",
+          isinstance(c_ollama, RoutingConnector)
+          and isinstance(c_ollama.active_connector(), OllamaConnector),
+          type(c_ollama).__name__)
     caps = c_ollama.capabilities()
-    check("2b ollama 能力表（tools/vision/pull/delete 全 True）",
+    check("2b ollama 能力表透传（tools/vision/pull/delete 全 True）",
           caps == {"backend": "ollama", "tools": True, "vision": True,
                    "pull": True, "delete": True}, str(caps))
 
@@ -157,9 +161,12 @@ async def main():
                    "inference_base_url": "http://localhost:1234/v1"})
     connmod._OPENAI_SINGLETON = None
     c_oai = connmod.get_inference_connector()
-    check("2c openai_compatible 后端 → OpenAICompatConnector", isinstance(c_oai, OpenAICompatConnector))
+    check("2c openai_compatible 后端 → 路由连接器（活动侧 OpenAICompatConnector）",
+          isinstance(c_oai, RoutingConnector)
+          and isinstance(c_oai.active_connector(), OpenAICompatConnector),
+          type(c_oai).__name__)
     caps2 = c_oai.capabilities()
-    check("2d openai 能力表（pull/delete False）",
+    check("2d openai 能力表透传（pull/delete False）",
           caps2["backend"] == "openai_compatible" and caps2["pull"] is False
           and caps2["delete"] is False and caps2["tools"] is True, str(caps2))
     check("2e 别名等价（get_ollama_connector 跟随工厂）",
@@ -169,6 +176,9 @@ async def main():
     check("2f tools 开关关闭 → 能力表 tools=False",
           connmod.get_inference_connector().capabilities()["tools"] is False)
     reload_config({"openai_compat_supports_tools": True})
+    # 0.4.30：解包路由层——后续流式解析/图片/错误用例桩的是 OpenAI 连接器本体的
+    # _client，路由层无 _client 可桩；能力表/路由归属已在 2a~2f 验过
+    c_oai = c_oai.active_connector()
 
     # ══ 3. OpenAI 兼容流式解析 ══
     # 3a content 增量 + [DONE] + usage 计数

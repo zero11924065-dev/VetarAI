@@ -455,31 +455,50 @@ _SINGLETON: OllamaConnector | None = None
 _OPENAI_SINGLETON: Any = None
 # 0.4.29（P2）：模型包后端单例（llama.cpp 驱动；第三分支，与前两个各自一个实例）
 _MP_SINGLETON: Any = None
+# 0.4.30：路由连接器单例（工厂唯一返回形态，包装上述活动后端 + MP 单例）
+_ROUTING_SINGLETON: Any = None
+
+
+def _ollama_singleton() -> OllamaConnector:
+    global _SINGLETON
+    if _SINGLETON is None:
+        _SINGLETON = OllamaConnector()
+    return _SINGLETON
+
+
+def _openai_singleton() -> Any:
+    global _OPENAI_SINGLETON
+    if _OPENAI_SINGLETON is None:
+        from sidecar.ollama.openai_compat import OpenAICompatConnector
+        _OPENAI_SINGLETON = OpenAICompatConnector()
+    return _OPENAI_SINGLETON
+
+
+def _mp_singleton() -> Any:
+    global _MP_SINGLETON
+    if _MP_SINGLETON is None:
+        # 延迟导入防循环依赖：model_packs.mp_connector → ollama.openai_compat →
+        # 本模块（ollama.connector）；模块级 import 会成环
+        from sidecar.model_packs.mp_connector import ModelPackageConnector
+        _MP_SINGLETON = ModelPackageConnector()
+    return _MP_SINGLETON
 
 
 def get_inference_connector() -> Any:
-    """M6（TS-112）：推理后端工厂——按配置 inference_backend 分发单例。
+    """M6（TS-112）：推理后端工厂。0.4.30 起返回值统一为 RoutingConnector 路由连接器
+    （包装活动后端连接器 + ModelPackageConnector 单例，按 model 名归边，模型包与
+    ollama/openai 并行可用；路由与跨引擎换装编排语义见 ollama/routing.py 模块 docstring）。
+    inference_backend=model_package 的旧配置继续可用——路由退化为全走模型包。
 
     返回对象事件协议一致（content_delta/thinking_delta/tool_calls/done/stream_error），
     调用方（loop/委派/圆桌/压缩）零改动自动跟随当前后端。
     """
-    global _SINGLETON, _OPENAI_SINGLETON, _MP_SINGLETON
-    backend = str(get_config().get("inference_backend", "ollama")).strip()
-    if backend == "model_package":
-        if _MP_SINGLETON is None:
-            # 延迟导入防循环依赖：model_packs.mp_connector → ollama.openai_compat →
-            # 本模块（ollama.connector）；模块级 import 会成环
-            from sidecar.model_packs.mp_connector import ModelPackageConnector
-            _MP_SINGLETON = ModelPackageConnector()
-        return _MP_SINGLETON
-    if backend == "openai_compatible":
-        if _OPENAI_SINGLETON is None:
-            from sidecar.ollama.openai_compat import OpenAICompatConnector
-            _OPENAI_SINGLETON = OpenAICompatConnector()
-        return _OPENAI_SINGLETON
-    if _SINGLETON is None:
-        _SINGLETON = OllamaConnector()
-    return _SINGLETON
+    global _ROUTING_SINGLETON
+    if _ROUTING_SINGLETON is None:
+        # 延迟导入防循环依赖：routing → agent_engine.loop（懒）→ 本模块
+        from sidecar.ollama.routing import RoutingConnector
+        _ROUTING_SINGLETON = RoutingConnector()
+    return _ROUTING_SINGLETON
 
 
 def get_ollama_connector() -> OllamaConnector:
@@ -487,5 +506,6 @@ def get_ollama_connector() -> OllamaConnector:
 
     M6（TS-112）：保留为工厂别名——既有全部调用点（loop/委派/圆桌/压缩/端点）
     零改动自动跟随当前推理后端。返回类型标注维持 OllamaConnector 兼容旧代码。
+    0.4.30：实际返回路由连接器（模型包并行编排对全部旧调用点透明）。
     """
     return get_inference_connector()  # type: ignore[return-value]

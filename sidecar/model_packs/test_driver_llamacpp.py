@@ -29,7 +29,7 @@
 ⛔ 变异模式下必须出现 FAIL；0 FAIL = 断言空转，需加强（不是"通过"）。
 | 变异 | 撤掉的修复 | 应失败的断言 |
 |---|---|---|
-| 1 | 工厂第三分支缺失（model_package 不再分发 ModelPackageConnector） | E8a |
+| 1 | 路由退化分支缺失（model_package 旧配置不再全走 MP；0.4.30 起分支在 routing._active） | E8a2/F3 |
 | 2 | 换装作废（ensure_server 不再停旧直接启新） | D3a |
 | 3 | manifest context_length 校验失效（非法值放行） | A2a/A2b/A2c |
 | 4 | ensure_server 注册表门禁失效（禁用/卸载照样短路复用） | H1b/H1c/H4a/H4b |
@@ -95,11 +95,15 @@ def _apply_mutation() -> None:
         return
     import importlib
     if MUTATE == 1:
+        # 0.4.30：工厂第三分支随路由层落地——model_package 退化分支在 routing._active；
+        # 变异后旧配置不再退化到 MP（E8a2/F3 应变红）
+        import sidecar.ollama.routing as routmod
+        _mutate_file(Path(routmod.__file__),
+                     '        if b == "model_package":',
+                     '        if b == "model_package__mutated":', "routing")
+        importlib.reload(routmod)
         import sidecar.ollama.connector as connmod
-        _mutate_file(Path(connmod.__file__),
-                     '    if backend == "model_package":',
-                     '    if backend == "model_package__mutated":', "connector")
-        importlib.reload(connmod)
+        connmod._ROUTING_SINGLETON = None
     elif MUTATE == 2:
         _mutate_file(Path(mpd.__file__),
                      "        if proc is not None:\n"
@@ -152,6 +156,11 @@ def _restore() -> None:
         if "connector" in tags:
             import sidecar.ollama.connector as connmod
             importlib.reload(connmod)
+        if "routing" in tags:
+            import sidecar.ollama.routing as routmod
+            importlib.reload(routmod)
+            import sidecar.ollama.connector as connmod
+            connmod._ROUTING_SINGLETON = None
         if "driver" in tags:
             importlib.reload(mpd)
         if "manifest" in tags:
@@ -617,12 +626,19 @@ async def test_connector():
           and mpd.active_pack() == "chat-b")
     await conn.unload_model("chat-b")
 
-    # E8 工厂第三分支（变异 1 的靶子）
+    # E8 工厂路由层（0.4.30：工厂返回路由连接器；model_package 旧配置退化为全走 MP。
+    # 变异 1 的靶子——routing._active 的 model_package 分支）
     reload_config({"inference_backend": "model_package"})
     connmod._MP_SINGLETON = None
+    connmod._ROUTING_SINGLETON = None
+    from sidecar.ollama.routing import RoutingConnector
     c = connmod.get_inference_connector()
-    check("E8a model_package 后端 → ModelPackageConnector", isinstance(c, ModelPackageConnector),
-          type(c).__name__)
+    check("E8a 工厂返回路由连接器", isinstance(c, RoutingConnector), type(c).__name__)
+    check("E8a2 model_package 旧配置退化：活动侧=ModelPackageConnector",
+          isinstance(c.active_connector(), ModelPackageConnector),
+          type(c.active_connector()).__name__)
+    check("E8a3 退化模式任意 model 归 MP 边", c._route_to_pack("qwen3.8") is True
+          and c._route_to_pack("chat-a") is True)
     check("E8b 工厂单例稳定", connmod.get_inference_connector() is c)
     check("E8c 别名 get_ollama_connector 跟随工厂", connmod.get_ollama_connector() is c)
 
