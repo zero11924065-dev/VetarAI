@@ -45,9 +45,17 @@ TEXT_EXTS = {".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".ini",
              ".log", ".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".htm",
              ".xml", ".toml", ".cfg", ".conf", ".sh", ".css", ".csv"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# 0.4.29（P3，计划 D5）：音频族。本解析器不转写（ASR 是模型包驱动的重活，
+# 与图片不识别同理），返回 (None, "audio") 两段式占位——调用方（app.py 链路/
+# 前端暂存区）随后走 POST /api/asr/transcribe 异步转写，完成后用文稿替换占位。
+# 收录口径：afconvert（macOS CoreAudio）可解码的 wav/mp3/m4a/aac/aiff/caf/flac
+# 全收；webm/ogg/opus 虽暂不可解码也收录——标成 "audio" 让转写端点给出明确中文
+# 报错（可见可重试），比落到 "binary" 只标文件名更可诊断。
+AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".aiff", ".aif", ".caf",
+              ".flac", ".ogg", ".opus", ".webm"}
 # C3（0.4.18）：老式 Word .doc 经 macOS 自带 textutil 支持（.ppt/.xls 不支持，见模块文档）
 LEGACY_WORD_EXTS = {".doc"}
-SUPPORTED_EXTS = (TEXT_EXTS | IMAGE_EXTS | LEGACY_WORD_EXTS
+SUPPORTED_EXTS = (TEXT_EXTS | IMAGE_EXTS | AUDIO_EXTS | LEGACY_WORD_EXTS
                   | {".pdf", ".docx", ".xlsx", ".xlsm", ".pptx"})
 
 # Excel/CSV 防爆炸：单 sheet 最多行数 / 单元格截断
@@ -237,10 +245,12 @@ def parse_attachment(name: str, raw: bytes) -> tuple[str | None, str]:
 
     返回 (text, kind)：
     - text: 解析出的文本；无法解析/失败 → None
-    - kind: "text"/"pdf"/"docx"/"doc"/"xlsx"/"csv"/"pptx"/"image"/"binary"（标注用）
+    - kind: "text"/"pdf"/"docx"/"doc"/"xlsx"/"csv"/"pptx"/"image"/"audio"/"binary"（标注用）
 
     图片：本函数不识别（返回 (None, "image")）；视觉识别由异步调用方
     （app.py，因连接器 chat 为异步）在配置开关开启时单独完成。
+    音频（0.4.29 P3）：本函数不转写（返回 (None, "audio")）；转写由调用方
+    走 /api/asr/transcribe（模型包 ASR 驱动）异步完成。
     """
     ext = _ext_of(name)
     if ext == ".pdf":
@@ -262,4 +272,8 @@ def parse_attachment(name: str, raw: bytes) -> tuple[str | None, str]:
         return _parse_text(raw), "text"
     if ext in IMAGE_EXTS:
         return None, "image"
+    # 0.4.29（P3）：音频两段式第一段——立即占位（kind="audio"），转写由调用方
+    # 走 /api/asr/transcribe 异步完成后替换（图片走 vision_parse 同款哲学）。
+    if ext in AUDIO_EXTS:
+        return None, "audio"
     return None, "binary"

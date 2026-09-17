@@ -37,7 +37,11 @@ interface AgentConfig { id: string; name: string; role?: string; model_name?: st
 interface Session { id: string; title: string; message_count: number; }
 interface PendingItem { name: string; dataUri: string; isImage: boolean; size: number; parsedText?: string; parsing?: boolean; parseFailed?: boolean;
   /** C7（0.4.18）：后端落盘后的**绝对路径**；写进消息正文使 agent 在后续会话仍可 read_file 原件 */
-  savedPath?: string; }
+  savedPath?: string;
+  /** 0.4.29（P3）音频附件：两段式——先入暂存区占位（转写中），/api/asr/transcribe 完成后填 transcript */
+  isAudio?: boolean; transcribing?: boolean; transcribeFailed?: boolean; transcript?: string; audioError?: string;
+  /** 音频首次转写拿到的本地绝对路径（File 句柄是一次性的，重试只能靠它） */
+  originPath?: string; }
 
 const API = getApiBase();
 
@@ -134,6 +138,10 @@ function formatTime(isoString: string): string {
 // TS-102 B14：流式/临时消息稳定 id 生成器（单调序号，同一毫秒内也不重复）
 let localMsgSeq = 0;
 function newLocalMsgId(): string { return `local_${Date.now()}_${++localMsgSeq}`; }
+
+// 0.4.29（P3）：音频暂存项的身份令牌序号（音频不读 base64，dataUri 退化为
+// `audio:<seq>` 唯一令牌——沿用既有「name+dataUri 双键定位暂存项」的匹配惯例）
+let pendingItemSeq = 0;
 
 // ── M1-4：Markdown 流式渲染（未闭合 ``` 先当纯文本，闭合后转代码块）──
 // F2（0.4.23 安全区）：包 `React.memo`。
@@ -250,6 +258,59 @@ function ToolStepBar({ step }: { step: ToolStep }) {
 //    B4 工具步骤折叠（ToolStepsGroup）**保留**：它折叠的是过程条目而非内容，
 //    且解决的正是用户报过的「工具调用步骤一直占着会话窗」痛点（用户 2026-09-10 拍板）。
 const ATTACH_MARK = '--- 附件内容 ---';
+
+// ── 0.4.29（P3）音频附件与录音（ASR 双场景：会话里发语音 + 上传录音文件转文稿）──
+// 与 parser.py AUDIO_EXTS 同族（前端仅按扩展名/MIME 粗分，裁决权在后端：
+// 扩展名校验、大小上限、格式可解码性全部由 /api/asr/transcribe 把关）。
+const AUDIO_EXT_RE = /\.(wav|mp3|m4a|aac|aiff?|caf|flac|ogg|opus|webm)$/i;
+
+/** 文件名/MIME → 是否音频附件（file input 的 type 在部分系统上为空，须扩展名兜底） */
+export function isAudioFile(name: string, mime: string): boolean {
+  return mime.startsWith('audio/') || AUDIO_EXT_RE.test(name);
+}
+
+/** Float32[-1,1] 单声道 → PCM16 WAV Blob（44 字节头，小端）。 */
+export function encodeWavPcm16(samples: Float32Array, sampleRate: number): Blob {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const writeStr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  writeStr(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+/** 录音 blob（MediaRecorder 的 webm/opus）→ 16kHz 单声道 WAV。
+ *  为什么在前端转：后端零依赖红线不能引 webm/opus 解码库，而 Chromium 的
+ *  decodeAudioData 原生吃 webm——在浏览器侧解码重采样，后端只认 PCM WAV。
+ *  OfflineAudioContext 做重采样（浏览器内置高质量 resampler），不是线性插值凑数。 */
+export async function recordingBlobToWav16k(blob: Blob): Promise<Blob> {
+  const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+  const OAC = (window as any).OfflineAudioContext;
+  if (!AC || !OAC) throw new Error('当前环境不支持 Web Audio（无法转换录音格式）');
+  const ctx = new AC();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+  } finally {
+    try { await (ctx as any).close?.(); } catch { /* 关闭失败无碍 */ }
+  }
+  const targetRate = 16000;   // SenseVoiceSmall 固定输入采样率
+  const frames = Math.max(1, Math.ceil(decoded.duration * targetRate));
+  const off = new OAC(1, frames, targetRate);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start(0);
+  const rendered: AudioBuffer = await off.startRendering();
+  return encodeWavPcm16(rendered.getChannelData(0), targetRate);
+}
 
 /**
  * B4（0.4.12）：工具步骤「完成后折叠」——整组收拢为一行摘要；运行中自动展开，
@@ -1290,17 +1351,30 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     const files = e.target.files;
     if (!files || !files.length) return;
     const newItems: PendingItem[] = [];
+    const newFiles: File[] = [];   // 与 newItems 同序对齐（音频路径模式要用原始 File 拿绝对路径）
     for (const file of Array.from(files)) {
-      const dataUri = await new Promise<string>((resolve, reject) => {
+      const isImg = file.type.startsWith('image/');
+      const isAud = !isImg && isAudioFile(file.name, file.type);
+      // 0.4.29（P3）：音频附件**不读 base64**——50MB 级录音读成 dataURI 白耗内存；
+      // 路径模式（Electron webUtils.getPathForFile）直传绝对路径，base64 仅作
+      // 浏览器兜底且在 transcribePendingAudio 里按需现读。dataUri 字段退化为身份令牌。
+      const dataUri = isAud ? `audio:${++pendingItemSeq}` : await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result as string);
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
-      newItems.push({ name: file.name, dataUri, isImage: file.type.startsWith('image/'), size: file.size });
+      newItems.push({ name: file.name, dataUri, isImage: isImg, isAudio: isAud, size: file.size });
+      newFiles.push(file);
     }
     setPendingItems(prev => [...prev, ...newItems]);
     e.target.value = '';
+
+    // 0.4.29（P3）：音频两段式——暂存区先占位（转写中…），转写完成后 transcript 填入。
+    // 与文档解析分离循环：音频走 /api/asr/transcribe（路径模式），文档走 /attachments/parse。
+    for (let i = 0; i < newItems.length; i++) {
+      if (newItems[i].isAudio) void transcribePendingAudio(newItems[i], newFiles[i]);
+    }
 
     // checkpoint-048：可解析的文档调后端解析端点提取文本
     // C3 局部去重（0.4.18）：不再用前端格式白名单预判（见文件顶部注释——那份清单
@@ -1308,7 +1382,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     //    改为「非图片一律交后端裁决」：后端对不支持的格式返回 text=null，
     //    前端按既有三态显示「（仅文件名）」。图片仍单独走 dataUri 视觉链路，不调解析端点。
     for (const item of newItems) {
-      if (item.isImage) continue;
+      if (item.isImage || item.isAudio) continue;   // 音频已在上面的专属循环走转写链
       const b64 = item.dataUri.split(',')[1] || '';
       setPendingItems(prev => prev.map(p => p.name === item.name && p.dataUri === item.dataUri ? { ...p, parsing: true } : p));
       try {
@@ -1338,6 +1412,138 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
   function removePending(idx: number) { setPendingItems(prev => prev.filter((_, i) => i !== idx)); }
 
+  // ── 0.4.29（P3）音频转写链与录音 ──
+  // 两段式第二段：音频暂存项占位（transcribing）→ /api/asr/transcribe → 填 transcript。
+  // 路径模式优先（knowledge/import-files 先例：客户端传本地绝对路径，不受 base64
+  // 10MB 限）；拿不到路径时退回 attachments/parse 的 base64 落盘通道（≤10MB）。
+  async function transcribePendingAudio(item: PendingItem, file?: File, blob?: Blob) {
+    const match = (p: PendingItem) => p.name === item.name && p.dataUri === item.dataUri;
+    setPendingItems(prev => prev.map(p => match(p)
+      ? { ...p, transcribing: true, transcribeFailed: false, audioError: undefined } : p));
+    try {
+      // Electron ≥32 移除 File.path，官方替代是 preload 侧 webUtils.getPathForFile
+      const bridge = (window as any).subagent;
+      let path = file ? String(bridge?.getPathForFile?.(file) || '') : '';
+      // 重试场景：File/blob 句柄是一次性的（离开 handleFileChange/onstop 即丢），
+      // 沿用首次记下的路径（originPath=getPathForFile 结果，savedPath=parse 落盘结果）
+      if (!path) path = item.originPath || item.savedPath || '';
+      if (path && path !== item.originPath) {
+        setPendingItems(prev => prev.map(p => match(p) ? { ...p, originPath: path } : p));
+      }
+      let savedFromParse = '';
+      if (!path) {
+        // 兜底：base64 落盘通道（录音 blob / 纯浏览器环境走这里；受 10MB 上限约束）
+        const src: Blob | undefined = blob || file;
+        if (!src) throw new Error('音频内容缺失（无文件也无录音数据）');
+        if (src.size > 10 * 1024 * 1024) {
+          throw new Error('音频超过 10MB 且拿不到本地路径（非 Electron 环境），无法转写');
+        }
+        const dataUri = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(src);
+        });
+        const res = await fetch(`${API}/attachments/parse`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: item.name, content_base64: dataUri.split(',')[1] || '',
+            project_id: projectId, session_id: currentSessionIdRef.current || '' }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+        path = d.saved_path || '';
+        savedFromParse = path;
+        if (!path) throw new Error('附件未能落盘（会话尚未创建？），请稍后重试转写');
+        // 落盘路径即刻记下：即便随后 transcribe 失败，重试也能绕开已丢的 blob 直用路径
+        setPendingItems(prev => prev.map(p => match(p)
+          ? { ...p, originPath: path, savedPath: p.savedPath || path } : p));
+      }
+      const res2 = await fetch(`${API}/asr/transcribe`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        // parse 通道已落盘的不再重复复制（savedFromParse 非空即已在附件目录）
+        body: JSON.stringify({ path, language: 'auto',
+          project_id: savedFromParse ? '' : projectId,
+          session_id: savedFromParse ? '' : (currentSessionIdRef.current || '') }),
+      });
+      const d2 = await res2.json();
+      if (!res2.ok) throw new Error(d2.detail || `HTTP ${res2.status}`);
+      setPendingItems(prev => prev.map(p => match(p)
+        ? { ...p, transcribing: false, transcript: d2.text || '',
+            savedPath: savedFromParse || d2.saved_path || p.savedPath } : p));
+    } catch (err) {
+      // 转写失败必须可见可重试（暂存区 chip 显示失败态 + 重试按钮），绝不静默吞
+      setPendingItems(prev => prev.map(p => match(p)
+        ? { ...p, transcribing: false, transcribeFailed: true,
+            audioError: err instanceof Error ? err.message : String(err) } : p));
+    }
+  }
+
+  // 录音（MediaRecorder 原生 API，零第三方库）：点击开始、再点停止，
+  // 停止后 webm→16k WAV（Web Audio）→ 入暂存区 → 同一条音频转写链。
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const mediaRecRef = useRef<MediaRecorder | null>(null);
+  const recordChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function toggleRecording() {
+    if (recording) {
+      // 停止会触发 MediaRecorder.onstop → finishRecording（异步转换+暂存）
+      try { mediaRecRef.current?.stop(); } catch { /* 已停止时 stop 抛错无妨 */ }
+      return;
+    }
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        throw new Error('当前环境不支持录音（MediaRecorder 不可用）');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = ['audio/webm;codecs=opus', 'audio/webm', '']
+        .find(m => !m || MediaRecorder.isTypeSupported(m));
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      recordChunksRef.current = [];
+      rec.ondataavailable = (e: BlobEvent) => { if (e.data && e.data.size) recordChunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        void finishRecording();
+      };
+      mediaRecRef.current = rec;
+      rec.start();
+      setRecordSeconds(0);
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+      recordTimerRef.current = setInterval(() => setRecordSeconds(s => s + 1), 1000);
+      setRecording(true);
+    } catch (err) {
+      flash(setToast, `无法开始录音：${err instanceof Error ? err.message : String(err)}`, 4000);
+    }
+  }
+
+  async function finishRecording() {
+    setRecording(false);
+    if (recordTimerRef.current) { clearInterval(recordTimerRef.current); recordTimerRef.current = null; }
+    mediaRecRef.current = null;
+    try {
+      const blob = new Blob(recordChunksRef.current, { type: 'audio/webm' });
+      recordChunksRef.current = [];
+      if (!blob.size) throw new Error('录音为空');
+      const wav = await recordingBlobToWav16k(blob);
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const name = `录音-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.wav`;
+      const item: PendingItem = { name, dataUri: `audio:${++pendingItemSeq}`,
+        isImage: false, isAudio: true, size: wav.size };
+      setPendingItems(prev => [...prev, item]);
+      void transcribePendingAudio(item, undefined, wav);
+    } catch (err) {
+      flash(setToast, `录音处理失败：${err instanceof Error ? err.message : String(err)}`, 4000);
+    }
+  }
+
+  // 卸载清理：录音计时器不得成幽灵（B12 同款纪律）；录音中卸载则停掉采集
+  useEffect(() => () => {
+    if (recordTimerRef.current) { clearInterval(recordTimerRef.current); recordTimerRef.current = null; }
+    try { mediaRecRef.current?.stop(); } catch { /* 忽略 */ }
+  }, []);
+
   // ── 发送 ──
   // M2：警告条未处理前禁止发送
   const inputDisabled = !!compactWarning;
@@ -1359,7 +1565,8 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
     const hasText = hasSendableText(src);
     const contentText = normalizeInputText(src).trim();
     const hasImages = pendingItems.some(p => p.isImage);
-    if (!hasText && !hasImages) return;
+    const hasAudio = pendingItems.some(p => p.isAudio);
+    if (!hasText && !hasImages && !hasAudio) return;
 
     if (!currentSessionId) {
       await handleNewSession();
@@ -1368,12 +1575,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
 
     setSending(true);
     const imageItems = pendingItems.filter(p => p.isImage);
-    const textFileItems = pendingItems.filter(p => !p.isImage);
+    const audioItems = pendingItems.filter(p => p.isAudio);
+    const textFileItems = pendingItems.filter(p => !p.isImage && !p.isAudio);
 
     const parts: string[] = [];
     if (hasText) parts.push(contentText);
     if (imageItems.length) parts.push(`[📎 ${imageItems.length} 张图片已附加]`);
     if (textFileItems.length) parts.push(textFileItems.map(f => `[📄 ${f.name}]`).join(' '));
+    // 0.4.29（P3）：语音附件的消息标记（UI 文案允许 emoji）
+    if (audioItems.length) parts.push(audioItems.map(f => `[🎤 ${f.name}]`).join(' '));
 
     const userMsg: Message = { id: newLocalMsgId(), role: 'user', content: parts.join('\n'), pending_images: imageItems.map(i => i.dataUri) };
 
@@ -1411,15 +1621,28 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         return `[${f.name}]（⚠️ 原件未能落盘，故全文随消息附上）\n${f.parsedText}`;
       });
 
+    // 0.4.29（P3）：音频附件注入。与文档的拉模式不同——agent 的 read_file 读不出
+    // 音频内容（parser 对音频恒返回 None），所以**转写文稿必须随消息内联**，
+    // 否则 agent 永远听不到这段语音；原件路径照旧附上供溯源。
+    const audioContents: string[] = audioItems.map(f => {
+      if (f.transcript) {
+        return `[🎤 语音转写：${f.name}]${f.savedPath ? `（原件已保存：${f.savedPath}）` : ''}\n${f.transcript}`;
+      }
+      // 转写失败/未完成也如实标注（不静默丢——用户能看到暂存区失败态，agent 也该知道有这段语音）
+      return `[🎤 ${f.name}]（⚠️ 语音转写${f.transcribeFailed ? '失败' : '未完成'}，未附文稿`
+           + `${f.savedPath ? `；原件已保存：${f.savedPath}` : ''}）`;
+    });
+    const allFileContents = [...textFileContents, ...audioContents];
+
     const finalMessages = [...apiMessages];
-    if (textFileContents.length && finalMessages.length > 0) {
+    if (allFileContents.length && finalMessages.length > 0) {
       const lastIdx = finalMessages.length - 1;
       // 附件正文注入：用模块常量 ATTACH_MARK 作分隔标记，把用户原话与附件全文分开。
       // #11（0.4.19）更正过时注释：此处原写「UserBody 折叠时按同一标记切分」，
       //    但 UserBody/FoldSection 已随正文折叠一并删除（用户拍板全删），**折叠消费方已不存在**。
       //    标记本身保留——它早于折叠功能存在，作用是让落库正文里"哪段是附件"可读可辨，
       //    且 agent 仍从落库正文读全文。表#6（附件改走路径）落地后本段注入逻辑会被重做。
-      finalMessages[lastIdx] = { ...finalMessages[lastIdx], content: finalMessages[lastIdx].content + `\n\n${ATTACH_MARK}\n` + textFileContents.join('\n\n') };
+      finalMessages[lastIdx] = { ...finalMessages[lastIdx], content: finalMessages[lastIdx].content + `\n\n${ATTACH_MARK}\n` + allFileContents.join('\n\n') };
     }
 
     // 创建占位 assistant 气泡（流式累加用）
@@ -2653,13 +2876,33 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               </button>
             </div>
           ))}
-          {pendingItems.filter(p=>!p.isImage).map((item, idx) => (
+          {pendingItems.filter(p=>!p.isImage && !p.isAudio).map((item, idx) => (
             <span key={idx} style={{background:colors.bgCard,padding:'4px 8px',borderRadius:radius.s,fontSize:12,color:colors.textPrimary,display:'inline-flex',alignItems:'center',gap:4,border:`1px solid ${colors.borderDefault}`}}>
               <Icon name="file" size={14} style={{color:colors.textTertiary}} /> {item.name}
               {/* checkpoint-048：附件解析状态（解析中/已提取/无法解析仅标注） */}
               {item.parsing && <span style={{color:colors.warn,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Spinner size={12} /> 解析中…</span>}
               {!item.parsing && item.parsedText && <span style={{color:colors.ok,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Icon name="check" size={14} style={{color:colors.ok}} /> 已提取</span>}
               {!item.parsing && item.parseFailed && <span style={{color:colors.textTertiary,fontSize:11}}>（仅文件名）</span>}
+              <button className="ui-ico-danger" data-tip="移除该附件" onClick={() => removePending(pendingItems.indexOf(item))} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
+                <Icon name="x" size={14} style={{color:colors.textTertiary}} />
+              </button>
+            </span>
+          ))}
+          {/* 0.4.29（P3）音频附件 chip：三态（转写中/已转写/转写失败可重试），失败绝不静默 */}
+          {pendingItems.filter(p=>p.isAudio).map((item, idx) => (
+            <span key={idx} style={{background:colors.bgCard,padding:'4px 8px',borderRadius:radius.s,fontSize:12,color:colors.textPrimary,display:'inline-flex',alignItems:'center',gap:4,border:`1px solid ${colors.borderDefault}`}}>
+              <Icon name="mic" size={14} style={{color:colors.textTertiary}} /> {item.name}
+              {item.transcribing && <span style={{color:colors.warn,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Spinner size={12} /> 转写中…</span>}
+              {!item.transcribing && item.transcript && <span style={{color:colors.ok,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}><Icon name="check" size={14} style={{color:colors.ok}} /> 已转写</span>}
+              {!item.transcribing && item.transcribeFailed && (
+                <span style={{color:colors.danger,fontSize:11,display:'inline-flex',alignItems:'center',gap:3}}>
+                  转写失败
+                  <button data-tip={item.audioError ? `重试转写（${item.audioError}）` : '重试转写'} onClick={() => void transcribePendingAudio(item)}
+                    style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
+                    <Icon name="rotate-cw" size={13} style={{color:colors.danger}} />
+                  </button>
+                </span>
+              )}
               <button className="ui-ico-danger" data-tip="移除该附件" onClick={() => removePending(pendingItems.indexOf(item))} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'inline-flex',alignItems:'center'}}>
                 <Icon name="x" size={14} style={{color:colors.textTertiary}} />
               </button>
@@ -2672,7 +2915,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           textarea 去边框融入卡片，底行左附件右发送/停止（30px 石墨圆钮）。
           事件链/IME 守卫/preventDefault/placeholder/data-tip 全部原样保留。 */}
       <div style={{ padding:'10px 16px 14px', flexShrink:0 }}>
-        <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.doc,.docx,.xlsx,.xlsm,.pptx" />
+        <input ref={fileInputRef} type="file" multiple style={{display:'none'}} onChange={handleFileChange} accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.doc,.docx,.xlsx,.xlsm,.pptx,.wav,.mp3,.m4a,.aac,.aiff,.aif,.caf,.flac,.ogg,.opus,.webm" />
         <div style={{ maxWidth:820, margin:'0 auto', background:colors.bgCard, border:`1px solid ${colors.borderDefault}`, borderRadius:radius.l, boxShadow:shadow.s }}>
         <textarea value={input} disabled={inputDisabled} onChange={e=>setInput(e.target.value)}
           onCompositionStart={()=>{composingRef.current=true;}}
@@ -2699,6 +2942,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           <button className="ui-btn ui-btn-ghost" onClick={handleUpload} data-tip="上传图片或文本文件（发送前可在暂存区删除）"
             style={{width:28,height:28,padding:0,display:'inline-flex',alignItems:'center',justifyContent:'center',borderRadius:radius.s,flexShrink:0,border:'none'}}>
             <Icon name="paperclip" size={16} style={{color:colors.textSecondary}} />
+          </button>
+          {/* 0.4.29（P3）语音输入：点开始录音、再点停止，停止后自动转 16k WAV 入暂存区并转写 */}
+          <button className="ui-btn ui-btn-ghost" onClick={() => void toggleRecording()}
+            data-tip={recording ? '停止录音' : '语音输入（录音后自动转文字）'}
+            style={{height:28,padding:'0 6px',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:4,borderRadius:radius.s,flexShrink:0,border:'none'}}>
+            <Icon name="mic" size={16} style={{color:recording?colors.danger:colors.textSecondary}} />
+            {recording && <span style={{fontSize:11,color:colors.danger}}>录音中 {recordSeconds}s</span>}
           </button>
           <div style={{ flex:1 }} />
         {sending ? (

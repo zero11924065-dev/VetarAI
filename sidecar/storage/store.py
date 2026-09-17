@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import uuid
 from datetime import datetime
@@ -686,6 +687,28 @@ def save_attachment(project_id: str, session_id: str, name: str, raw: bytes) -> 
         stem, ext = (safe[:dot], safe[dot:]) if dot > 0 else (safe, "")
         target = d / f"{stem}-{uuid.uuid4().hex[:8]}{ext}"
     target.write_bytes(raw)
+    return target
+
+
+def save_attachment_from_path(project_id: str, session_id: str, name: str,
+                              src: Path) -> Path:
+    """save_attachment 的路径版（0.4.29 P3，ASR 路径模式）：流式复制而非读整文件进内存。
+
+    为什么单独开：/api/asr/transcribe 走「客户端传本地绝对路径」模式
+    （knowledge/import-files 先例），录音文件可达数百 MB——save_attachment 的
+    write_bytes(raw) 会把整文件读进内存，大文件下不可接受；这里用
+    shutil.copyfileobj 分块流式复制。同名不覆盖的 "-<8位uuid>" 铁律保持一致。
+    """
+    d = attachments_dir(project_id, session_id)
+    d.mkdir(parents=True, exist_ok=True)
+    safe = _sanitize_attachment_name(name)
+    target = d / safe
+    if target.exists():
+        dot = safe.rfind(".")
+        stem, ext = (safe[:dot], safe[dot:]) if dot > 0 else (safe, "")
+        target = d / f"{stem}-{uuid.uuid4().hex[:8]}{ext}"
+    with open(src, "rb") as fi, open(target, "wb") as fo:
+        shutil.copyfileobj(fi, fo, length=1024 * 1024)
     return target
 
 

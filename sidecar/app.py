@@ -2646,3 +2646,98 @@ async def api_model_pack_toggle(pack_id: str, req: ModelPackToggleReq):
         raise HTTPException(status_code=404, detail=f"模型包 {pack_id} 未安装")
     _notify_change(RESOURCE_MODEL_PACK, ACTION_UPDATE, pack_id=pack_id, enabled=new_state)
     return {"ok": True, "pack_id": pack_id, "enabled": new_state}
+
+
+# ─────────────────────────────────────────────
+# ASR 语音转写 API（0.4.29 P3，计划 D5/D6）
+# ─────────────────────────────────────────────
+# 路径模式（knowledge/import-files 先例）：客户端传**本地绝对路径**（chooseInputFile
+# 文件对话框 / Electron webUtils.getPathForFile /  attachments/parse 落盘回的 saved_path），
+# 音频不过 base64 通道——不受 _CHAT_ATT_MAX_BYTES 10MB 限制，50MB 级长录音可达。
+# 转写是 CPU 密集活（SenseVoiceSmall ONNX），一律 run_in_executor 进线程池，
+# 不堵事件循环（import-files 端点同款纪律）。
+
+# 路径模式上限：防病态超大输入（读盘+解码+特征占内存），不防正常长录音
+# （50MB 验收案例约等于 45 分钟 m4a，余量充足）
+_ASR_MAX_BYTES = 500 * 1024 * 1024
+
+
+class AsrTranscribeReq(BaseModel):
+    path: str                          # 本地音频绝对路径
+    pack_id: str | None = None         # 指定 ASR 包；缺省=首个启用中的 asr 包
+    language: str = "auto"             # auto/zh/en/yue/ja/ko/nospeech
+    # 落盘归属（与 attachments/parse 的 C7 语义一致）：给了就把原件**复制**进会话
+    # 附件目录并回传 saved_path（写进消息正文，agent 后续可感知原件位置）；
+    # 缺省只转写不落盘，不报错。
+    project_id: str = ""
+    session_id: str = ""
+
+
+@app.post("/api/asr/transcribe")
+async def api_asr_transcribe(req: AsrTranscribeReq):
+    """语音转文字：本地音频路径 → {text, duration_s, model_pack_id, saved_path}。
+
+    双场景共用（用户原话：会话里发语音 + 上传录音文件转文稿）：
+      ① 会话内录音：前端 MediaRecorder → webm → WebAudio 转 16k WAV →
+         attachments/parse 落盘拿 saved_path → 本端点转写；
+      ② 录音文件：前端拿绝对路径直传本端点（大文件不走 base64）。
+    """
+    from pathlib import Path
+    from sidecar.attachments.parser import AUDIO_EXTS as _AUDIO_EXTS
+    from sidecar.model_packs import asr_driver as _asr
+
+    raw_path = str(req.path or "").strip()
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="path 不能为空（须本地音频绝对路径）")
+    p = Path(raw_path).expanduser()
+    if not p.is_absolute():
+        raise HTTPException(status_code=400, detail=f"path 须为绝对路径: {raw_path!r}")
+    if not p.is_file():
+        raise HTTPException(status_code=400, detail=f"音频文件不存在: {raw_path!r}")
+    ext = p.suffix.lower()
+    if ext not in _AUDIO_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的音频格式 {ext or '（无扩展名）'}；"
+                   f"支持: {' '.join(sorted(_AUDIO_EXTS))}")
+    try:
+        size = p.stat().st_size
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"无法读取音频文件: {e}")
+    if size > _ASR_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"音频文件超过 {_ASR_MAX_BYTES // (1024 * 1024)}MB 上限"
+                   f"（实际 {size / (1024 * 1024):.0f}MB），请切分后再转写")
+    if req.pack_id is not None and not _mp_manifest.valid_pack_id(req.pack_id):
+        raise HTTPException(status_code=400,
+                            detail=f"非法 pack_id: {req.pack_id!r}")
+
+    # 落盘归属：复制原件进会话附件目录（流式，大文件不进内存）。
+    # 落盘失败不得让转写失败——文稿是主价值，路径是增益（C7 同款语义）。
+    saved_path = None
+    save_error = None
+    pid = str(req.project_id or "").strip()
+    sid = str(req.session_id or "").strip()
+    if pid and sid:
+        try:
+            from sidecar.storage.store import save_attachment_from_path as _save_from_path
+            loop0 = asyncio.get_running_loop()
+            saved_path = str(await loop0.run_in_executor(
+                None, _save_from_path, pid, sid, p.name, p))
+        except OSError as e:
+            save_error = f"{type(e).__name__}: {e}"
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, lambda: _asr.transcribe(p, pack_id=req.pack_id, language=req.language))
+    except _asr.PackUnavailableError as e:
+        # 409 冲突态：先装/启用 ASR 模型包再来（EmbedUnavailableError 降级哲学，
+        # 但这里是用户显式功能，须明确指引而非静默降级）
+        raise HTTPException(status_code=409, detail=str(e))
+    except _asr.AudioDecodeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**result, "saved_path": saved_path, "save_error": save_error}

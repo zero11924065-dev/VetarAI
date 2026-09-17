@@ -34,7 +34,7 @@
  * （旧版因此崩溃，window.subagent 从未注入，用户被降级到手动填路径）。
  * 配置改由主进程经同步 IPC 提供，本脚本不再触碰文件系统。
  */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // 从主进程同步获取配置（主进程持有 readConfig()，读 ~/.subagent/config.json）
 let injected = {};
@@ -57,4 +57,11 @@ contextBridge.exposeInMainWorld('subagent', {
   reportBusy: (busy) => ipcRenderer.send('report-busy', !!busy),
   chooseInputFile: (options) => ipcRenderer.invoke('choose-input-file', options || {}),
   chooseInputDir: (options) => ipcRenderer.invoke('choose-input-dir', options || {}),
+  // 0.4.29（P3）：Electron 32 起移除 File.path，官方替代 webUtils.getPathForFile
+  // （沙盒 preload 允许 require('electron')，webUtils 是其受限子集）。
+  // 供 ChatPanel 音频附件把本地绝对路径直传 /api/asr/transcribe，免 base64 往返。
+  // 非 Electron 环境（纯浏览器调试）该函数不存在，前端已做 ?. 兜底。
+  getPathForFile: (file) => {
+    try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
+  },
 });

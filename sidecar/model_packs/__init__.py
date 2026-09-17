@@ -26,6 +26,8 @@
   * llamacpp_driver.py（P2）—— llama-server 子进程生命周期（spawn/健康探测/换装/停止）
   * mp_connector.py（P2）—— ModelPackageConnector：工厂第三分支的推理连接器
                      （协议零改动继承 OpenAICompatConnector）
+  * asr_driver.py（P3）—— SenseVoiceSmall ONNX 语音转写（懒加载单例；
+                     kaldi fbank 纯 numpy 移植 + afconvert 零依赖解码）
 
 安全边界（D7）：模型包只含权重 + manifest，不含可执行代码；
 files[].path 一律相对路径校验，拒绝对路径 / .. / 分隔符开头（防路径穿越）。

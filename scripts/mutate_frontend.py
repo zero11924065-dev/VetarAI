@@ -503,6 +503,46 @@ MUTATIONS: list[dict] = [
         "test": "src/__tests__/inferencePanel.test.tsx",
         "expect_fail": ["第三卡"],
     },
+    # ── 0.4.29 批 P3：ASR 语音转写双场景（chatPanelAudio.test.tsx）─────────
+    {
+        "id": 33,
+        "name": "0.4.29-P3 静默吞掉转写失败（catch 里不置 transcribeFailed）",
+        "why": "转写失败若不置 transcribeFailed，暂存区 chip 永远停在「既非转写中也非失败」"
+               "的空白态，重试按钮不出现——用户以为语音丢了且无任何补救入口。"
+               "失败可见可重试是本批次底线，A3 必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """      setPendingItems(prev => prev.map(p => match(p)
+        ? { ...p, transcribing: false, transcribeFailed: true,
+            audioError: err instanceof Error ? err.message : String(err) } : p));""",
+        "mutant": """      setPendingItems(prev => prev.map(p => match(p)
+        ? { ...p, transcribing: false } : p));  /* MUTATE-33：静默吞掉转写失败 */""",
+        "test": "src/__tests__/chatPanelAudio.test.tsx",
+        "expect_fail": ["A3"],
+    },
+    {
+        "id": 34,
+        "name": "0.4.29-P3 撤掉语音附件的消息标记（parts 不推 [🎤]）",
+        "why": "[🎤 文件名] 标记是用户消息气泡里语音附件的存在性证据——撤掉后气泡只剩"
+               "用户原话，语音是否被发送无从辨认；且 agent 侧也少了定位锚。"
+               "A2/A6 断言载荷含该标记，必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": """    // 0.4.29（P3）：语音附件的消息标记（UI 文案允许 emoji）
+    if (audioItems.length) parts.push(audioItems.map(f => `[🎤 ${f.name}]`).join(' '));""",
+        "mutant": """    /* MUTATE-34：撤掉语音附件消息标记 */""",
+        "test": "src/__tests__/chatPanelAudio.test.tsx",
+        "expect_fail": ["A2", "A6"],
+    },
+    {
+        "id": 35,
+        "name": "0.4.29-P3 accept 去掉音频扩展名（入口不可达）",
+        "why": "文件选择器 accept 不含音频扩展名时，macOS 文件对话框里音频文件直接灰掉"
+               "——场景②（上传录音文件转文稿）入口级不可达。A1 逐一断言扩展名，必须红。",
+        "file": PANELS / "ChatPanel.tsx",
+        "anchor": '''accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.doc,.docx,.xlsx,.xlsm,.pptx,.wav,.mp3,.m4a,.aac,.aiff,.aif,.caf,.flac,.ogg,.opus,.webm"''',
+        "mutant": '''accept="image/*,.txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.yaml,.yml,.log,.ini,.pdf,.doc,.docx,.xlsx,.xlsm,.pptx" /* MUTATE-35：去掉音频扩展名 */''',
+        "test": "src/__tests__/chatPanelAudio.test.tsx",
+        "expect_fail": ["A1"],
+    },
 ]
 
 

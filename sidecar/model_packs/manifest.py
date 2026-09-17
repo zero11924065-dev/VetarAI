@@ -25,6 +25,8 @@
     min_app_version, homepage, license,
     context_length（可选，P2 新增：正整数；llama.cpp 驱动启动时以 -c 注入，
                    /api/context/limit 也据此回答；缺省=不写，服务端用模型自身默认）,
+    sample_rate（可选，P3 新增：正整数；ASR 包声明目标采样率，asr_driver 据此重采样，
+                缺省=不写，驱动用 SenseVoiceSmall 的 16000）,
     files: [{path, size_bytes, sha256, sources: [URL, ...]}, ...]
   }
 
@@ -176,6 +178,11 @@ def validate_pack(pack: Any) -> list[str]:
     cl = pack.get("context_length")
     if cl is not None and not _is_pos_int(cl):
         errors.append(f"context_length 必须是正整数（可选键，不需要请整键省略），得到 {cl!r}")
+    # sample_rate：可选键（P3，ASR 包）。声明了就必须是正整数——asr_driver 据此
+    # 重采样并计算 fbank；非法值（0/负数/字符串/布尔）会让转写结果整体失真，入口拒掉最省事。
+    sr = pack.get("sample_rate")
+    if sr is not None and not _is_pos_int(sr):
+        errors.append(f"sample_rate 必须是正整数（可选键，不需要请整键省略），得到 {sr!r}")
     files = pack.get("files")
     if not (isinstance(files, list) and files):
         errors.append("files 必须是非空数组（多文件是硬需求：模型本体+tokenizer 等）")
