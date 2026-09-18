@@ -33,6 +33,12 @@
  *
  * 挂载：SettingsPanel 的 ComputerUseSection 内（CU 总开关开启时），
  * 原因是宏的录制/回放本身就是 CU 动作，无 CU 时面板无意义。
+ *
+ * 0.4.33（插单实测修复批 F2，空宏防护）：
+ * - 录制中轮询 recording_steps，实时显示「已捕获 N 步」（看得见「没录到」）；
+ * - stop 返回 saved:false（0 步契约）→ warn callout 原文上屏，不 refresh 出宏；
+ * - steps==0 的宏（含历史遗留）回放按钮置灰 + title「宏没有步骤」；
+ *   仍触发的 422「宏没有可回放的步骤」走 catch detail 上屏（既有范式）。
  */
 import { apiJson } from '../lib/api';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -84,10 +90,12 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
   const [macros, setMacros] = useState<MacroSummary[] | null>(null);
   const [recording, setRecording] = useState(false);
   const [recordingName, setRecordingName] = useState('');
+  const [recordingSteps, setRecordingSteps] = useState(0);   // 0.4.33(F2)：录制中实时已捕获步骤数
   const [recName, setRecName] = useState('');
   const [busy, setBusy] = useState(false);          // 录制起停/回放启动/删除的动作级防重
   const [run, setRun] = useState<ReplayRun | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);     // 0.4.33(F2)：0 步停止警告（saved:false）
 
   const refresh = useCallback(async () => {
     try {
@@ -95,12 +103,30 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
       setMacros(Array.isArray(d?.macros) ? d.macros as MacroSummary[] : []);
       const rec = !!d?.recording;
       setRecording(rec);
+      // recording_steps（0.4.33 新增契约字段，未录制为 0）；缺键按 0 兜底
+      setRecordingSteps(typeof d?.recording_steps === 'number' ? d.recording_steps : 0);
       if (!rec) setRecordingName('');
     } catch (e) {
       setErr('读取宏列表失败: ' + (e as Error).message);
     }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // 0.4.33（F2）：录制中轮询 GET /cu-macros 拿 recording_steps，实时显示「已捕获 N 步」，
+  // 让用户在停止前就能看见「没录到」（而不是存出个空宏才发现）。
+  // ⛔ 只同步步骤数：recording 开关态不随轮询翻面（防抖——stop 落盘宏后 SSE create 会 refresh 收敛），
+  //   否则对端 stop 的竞态会把本地录制 UI 闪没。
+  useEffect(() => {
+    if (!recording) return;
+    let alive = true;
+    const t = setInterval(async () => {
+      try {
+        const d = await apiJson('/cu-macros');
+        if (alive) setRecordingSteps(typeof d?.recording_steps === 'number' ? d.recording_steps : 0);
+      } catch { /* 单拍失败静默，下一拍重试（轮询语义） */ }
+    }, pollMs);
+    return () => { alive = false; clearInterval(t); };
+  }, [recording, pollMs]);
 
   // A13（0.4.22）实时刷新：宏 create/delete → 重拉列表。
   // replay_step 事件刻意不消费：回放进度走轮询（见下），步骤事件高频，
@@ -129,7 +155,7 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
   const startRecord = async () => {
     const name = recName.trim();
     if (!name || busy || runActive) return;
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setWarn(null);
     try {
       const d = await apiJson('/cu-macros/record/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -137,6 +163,7 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
       });
       setRecording(true);
       setRecordingName(String(d?.name || name));
+      setRecordingSteps(0);
       setRecName('');
     } catch (e) { setErr('开始录制失败: ' + (e as Error).message); }
     finally { setBusy(false); }
@@ -144,19 +171,29 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
 
   const stopRecord = async () => {
     if (busy) return;
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setWarn(null);
     try {
-      await apiJson('/cu-macros/record/stop', { method: 'POST' });
+      const d = await apiJson('/cu-macros/record/stop', { method: 'POST' });
       setRecording(false);
       setRecordingName('');
-      await refresh();
+      setRecordingSteps(0);
+      // 0.4.33（F2）0 步停止契约：HTTP 200 {ok:true, saved:false, steps:0, message}
+      //   → 警告原文上屏，⛔ 不 refresh（宏没落盘，列表无新项可刷）；
+      //   saved:true（或旧后端无该键）→ 原流程 refresh 出新宏。
+      if (d?.saved === false) {
+        setWarn(String(d?.message || '未捕获到任何动作，宏未保存'));
+      } else {
+        await refresh();
+      }
     } catch (e) { setErr('停止录制失败: ' + (e as Error).message); }
     finally { setBusy(false); }
   };
 
   const startReplay = async (m: MacroSummary) => {
     // 回放忙防重：真实键鼠是独占资源，后端另有 422 兜底（replay_busy）
-    if (busy || runActive) return;
+    // 0.4.33（F2）空宏防护：steps==0 的宏（含历史遗留）不回放，按钮已置灰，此处双保险；
+    //   若仍触发到后端 422「宏没有可回放的步骤」，走 catch 把 detail 如实上屏。
+    if (busy || runActive || m.steps <= 0) return;
     setBusy(true); setErr(null);
     try {
       const d = await apiJson(`/cu-macros/${encodeURIComponent(m.id)}/replay`, { method: 'POST' });
@@ -213,11 +250,20 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
         </div>
       )}
 
+      {/* 0.4.33（F2）：0 步停止警告——后端 saved:false 的 message 原文上屏（warn 而非 error：
+          录制/停止动作本身成功，只是没有可保存的内容） */}
+      {warn && (
+        <div style={{ ...calloutStyle('warn'), margin: '8px 0' }}>
+          <Icon name="alert-triangle" size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>{warn}</span>
+        </div>
+      )}
+
       {/* ── 录制控制 ── */}
       {recording ? (
         <div style={{ ...calloutStyle('info'), margin: '8px 0', alignItems: 'center' }}>
           <span style={{ flex: 1 }}>
-            ● 正在录制{recordingName ? `「${recordingName}」` : ''}——此后 Agent 的每个 CU 动作都会记为一步
+            ● 正在录制{recordingName ? `「${recordingName}」` : ''} · 已捕获 {recordingSteps} 步——此后 Agent 的每个 CU 动作都会记为一步
           </span>
           <button className="ui-btn ui-btn-primary"
             style={{ ...btnPrimary, height: 24, padding: '0 10px', fontSize: 12 }}
@@ -318,7 +364,9 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
             </div>
             <button className="ui-btn ui-btn-secondary"
               style={{ ...btnSecondary, height: 24, padding: '0 10px', fontSize: 12, gap: 4 }}
-              onClick={() => void startReplay(m)} disabled={busy || runActive || recording}>
+              onClick={() => void startReplay(m)}
+              disabled={busy || runActive || recording || m.steps <= 0}
+              title={m.steps <= 0 ? '宏没有步骤' : undefined}>
               <Icon name="play" size={11} /> 回放
             </button>
             <button className="ui-btn ui-btn-ghost ui-ico-danger" data-tip="删除宏"

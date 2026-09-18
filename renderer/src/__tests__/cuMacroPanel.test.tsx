@@ -29,6 +29,12 @@
  *   DELETE /api/cu-macros/{id}         → {deleted:true}
  * 命中率口径（计划 P3 拍板）：回放口径——element vs pixel_fallback 计数自 run.steps，
  *   后端审计 actions.jsonl 无读取端点，故 UI 必须如实标注「回放口径」。
+ *
+ * 0.4.33（插单实测修复批 F2，空宏防护）契约增量（后端并行实现，字段钉死不得改名）：
+ *   GET  /api/cu-macros                → 新增 recording_steps:int（未录制为 0）
+ *   POST /api/cu-macros/record/stop    → 0 步：HTTP 200 {ok:true, saved:false, steps:0, message:"未捕获到任何动作，宏未保存"}
+ *                                        有步骤：{ok:true, saved:true, macro:{...}}
+ *   POST /api/cu-macros/{id}/replay    → 空宏 422 {detail:"宏没有可回放的步骤"}
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
@@ -36,6 +42,8 @@ import React from 'react';
 import { CuMacroPanel } from '../panels/CuMacroPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { installFetchMock, routeJson, jsonRes, type FetchRoute } from './helpers/fetchMock';
+import { styleColorIs } from './helpers/styleAssert';
+import { colors } from '../theme';
 import { emit, __resetEventsForTest } from '../events';
 import { APP_RESOURCE_CHANGED } from '../appEvents';
 
@@ -222,6 +230,130 @@ describe('0.4.32 P3 任务宏面板', () => {
     act(() => { emit(APP_RESOURCE_CHANGED, { resource: 'cu_macro', action: 'replay_step', run_id: 'r', seq: 1 }); });
     await new Promise(r => setTimeout(r, 80));
     expect(h.countOf('/api/cu-macros')).toBe(3);
+    unmount();
+  });
+});
+
+describe('0.4.33 F2 宏面板空宏防护', () => {
+  /** 只数 GET /api/cu-macros（countOf 是 includes 匹配，会连 record/stop 的 POST 一起数进去）。 */
+  const getCount = (h: { calls: Array<{ method: string; url: string }> }) =>
+    h.calls.filter(c => c.method === 'GET' && c.url.endsWith('/api/cu-macros')).length;
+
+  it('录制中实时步骤数：轮询显示「已捕获 N 步」且随 recording_steps 递增', async () => {
+    let captured = 0;
+    const listRoute: FetchRoute = (url) =>
+      url.endsWith('/api/cu-macros')
+        ? jsonRes({ ok: true, macros: [], recording: false, recording_steps: captured }) : null;
+    installFetchMock([
+      routeJson('/api/cu-macros/record/start', { ok: true, name: '实时计数' }),
+      listRoute,
+    ]);
+    const { unmount } = render(<CuMacroPanel pollMs={20} />);
+    await waitFor(() => expect(screen.getByText(/暂无宏/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/宏名称/), { target: { value: '实时计数' } });
+    await act(async () => { (screen.getByText('开始录制') as HTMLButtonElement).click(); });
+    // 录制态出现，初始 0 步（recording_steps 契约：未捕获到动作时为 0）
+    await waitFor(() => expect(screen.getByText(/正在录制「实时计数」 · 已捕获 0 步/)).toBeTruthy());
+
+    // 后端录制推进：recording_steps 0 → 3 → 7，轮询必须如实递增（用户看得见「在录到」）
+    captured = 3;
+    await waitFor(() => expect(screen.getByText(/已捕获 3 步/)).toBeTruthy());
+    captured = 7;
+    await waitFor(() => expect(screen.getByText(/已捕获 7 步/)).toBeTruthy());
+    unmount();
+  });
+
+  it('0 步停止：saved:false → 警告原文上屏（warn 色），不刷新出宏（GET 不重拉、列表无新项）', async () => {
+    const h = installFetchMock([
+      routeJson('/api/cu-macros/record/start', { ok: true, name: '空宏' }),
+      routeJson('/api/cu-macros/record/stop', {
+        ok: true, saved: false, steps: 0, message: '未捕获到任何动作，宏未保存',
+      }),
+      routeJson('/api/cu-macros', { ok: true, macros: MACROS, recording: false, recording_steps: 0 }),
+    ]);
+    const { unmount } = render(<CuMacroPanel />);
+    await waitFor(() => expect(screen.getByText('整理下载目录')).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/宏名称/), { target: { value: '空宏' } });
+    await act(async () => { (screen.getByText('开始录制') as HTMLButtonElement).click(); });
+    await waitFor(() => expect(screen.getByText(/正在录制「空宏」/)).toBeTruthy());
+
+    const getsBefore = getCount(h);
+    await act(async () => { (screen.getByText('停止并保存') as HTMLButtonElement).click(); });
+    expect(h.countOf('/api/cu-macros/record/stop')).toBe(1);
+
+    // 警告原文上屏，且是 warn callout（语义色令牌联动，不钉色值）
+    const warnText = await screen.findByText('未捕获到任何动作，宏未保存');
+    const warnBox = warnText.closest('div') as HTMLElement;
+    expect(styleColorIs(warnBox.style.background, colors.warnBg)).toBe(true);
+    // 录制态退出
+    await waitFor(() => expect(screen.queryByText(/正在录制/)).toBeNull());
+    // ⛔ saved:false 不 refresh：GET 不得重拉（宏没落盘，列表无新项可刷）
+    expect(getCount(h)).toBe(getsBefore);
+    // 列表仍是原两条，无新宏「空宏」
+    expect(screen.queryByText('空宏')).toBeNull();
+    expect(screen.getByText('整理下载目录')).toBeTruthy();
+    expect(screen.getByText('晨间例行')).toBeTruthy();
+    unmount();
+  });
+
+  it('saved:true 停止仍走原流程：refresh 重拉列表', async () => {
+    const h = installFetchMock([
+      routeJson('/api/cu-macros/record/start', { ok: true, name: '晚间备份' }),
+      routeJson('/api/cu-macros/record/stop', {
+        ok: true, saved: true,
+        macro: { id: 'cu-3', name: '晚间备份', created_at: '2026-09-18 11:00:00', steps: 2 },
+      }),
+      routeJson('/api/cu-macros', { ok: true, macros: MACROS, recording: false, recording_steps: 0 }),
+    ]);
+    const { unmount } = render(<CuMacroPanel />);
+    await waitFor(() => expect(screen.getByText('整理下载目录')).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/宏名称/), { target: { value: '晚间备份' } });
+    await act(async () => { (screen.getByText('开始录制') as HTMLButtonElement).click(); });
+    await waitFor(() => expect(screen.getByText(/正在录制「晚间备份」/)).toBeTruthy());
+    const getsBefore = getCount(h);
+    await act(async () => { (screen.getByText('停止并保存') as HTMLButtonElement).click(); });
+    await waitFor(() => expect(screen.queryByText(/正在录制/)).toBeNull());
+    await waitFor(() => expect(getCount(h)).toBeGreaterThan(getsBefore));
+    unmount();
+  });
+
+  it('空宏按钮置灰：steps==0 → disabled + title「宏没有步骤」，点击不发回放请求', async () => {
+    const h = installFetchMock([
+      routeJson('/api/cu-macros', { ok: true, macros: [
+        { id: 'cu-0', name: '历史遗留空宏', created_at: '2026-09-10 08:00:00', steps: 0 },
+        MACROS[0],
+      ], recording: false, recording_steps: 0 }),
+    ]);
+    const { unmount } = render(<CuMacroPanel />);
+    await waitFor(() => expect(screen.getByText('历史遗留空宏')).toBeTruthy());
+    expect(screen.getByText(/2026-09-10 08:00:00 · 0 步/)).toBeTruthy();
+
+    const btns = screen.getAllByText('回放') as HTMLButtonElement[];
+    expect(btns.length).toBe(2);
+    // 行序 = 宏顺序：第一行是空宏 → 置灰 + title；第二行正常宏不受影响
+    expect(btns[0].disabled).toBe(true);
+    expect(btns[0].title).toBe('宏没有步骤');
+    expect(btns[1].disabled).toBe(false);
+    expect(btns[1].title).toBe('');
+
+    fireEvent.click(btns[0]);
+    await new Promise(r => setTimeout(r, 50));
+    expect(h.countOf('/api/cu-macros/cu-0/replay')).toBe(0);
+    unmount();
+  });
+
+  it('空宏 422 兜底：回放触发 422「宏没有可回放的步骤」→ detail 如实上屏', async () => {
+    installFetchMock([
+      routeJson('/api/cu-macros/cu-1/replay', { detail: '宏没有可回放的步骤' }, 422),
+      routeJson('/api/cu-macros', { ok: true, macros: [MACROS[0]], recording: false, recording_steps: 0 }),
+    ]);
+    const { unmount } = render(<CuMacroPanel />);
+    await waitFor(() => expect(screen.getByText('整理下载目录')).toBeTruthy());
+    // MACROS[0] steps=3 按钮可用；后端若以 422 兜底（如并发下被清空），detail 必须上屏
+    await act(async () => { (screen.getByText('回放') as HTMLButtonElement).click(); });
+    await waitFor(() => expect(screen.getByText(/回放启动失败: 宏没有可回放的步骤/)).toBeTruthy());
     unmount();
   });
 });

@@ -2378,10 +2378,12 @@ class CuMacroRecordStartReq(BaseModel):
 
 @app.get("/api/cu-macros")
 async def api_cu_macro_list():
-    """宏列表（摘要：id/name/created_at/steps 数）+ 当前是否录制中。"""
+    """宏列表（摘要：id/name/created_at/steps 数）+ 当前是否录制中。
+    0.4.33（F2）：追加 recording_steps（int，未录制 0）——前端录制中轮询显示实时步骤数。"""
     from sidecar.computer_use import cu_macro as _cm
     return {"ok": True, "macros": await asyncio.to_thread(_cm.list_macros),
-            "recording": _cm.is_recording()}
+            "recording": _cm.is_recording(),
+            "recording_steps": _cm.recording_steps()}
 
 
 @app.post("/api/cu-macros/record/start")
@@ -2396,14 +2398,19 @@ async def api_cu_macro_record_start(req: CuMacroRecordStartReq):
 
 @app.post("/api/cu-macros/record/stop")
 async def api_cu_macro_record_stop():
-    """停止录制并落盘（原子写），返回完整宏。未在录制 → 422。"""
+    """停止录制。steps>0 → 落盘（原子写）返回完整宏（saved:true）；未在录制 → 422。
+    0.4.33（F2 空宏防护）：steps==0 → 不落盘，HTTP 200 返回
+    {ok:true, saved:false, steps:0, message:"未捕获到任何动作，宏未保存"}。"""
     from sidecar.computer_use import cu_macro as _cm
     r = await asyncio.to_thread(_cm.stop_recording)
     if not r.get("ok"):
         raise HTTPException(status_code=422, detail=r.get("error"))
+    if r.get("saved") is False:                     # 0 步空宏：不落盘、不发创建通知
+        return {"ok": True, "saved": False, "steps": 0,
+                "message": r.get("message") or "未捕获到任何动作，宏未保存"}
     m = r["macro"]
     _notify_change(RESOURCE_CU_MACRO, ACTION_CREATE, macro_id=m["id"])
-    return {"ok": True, "macro": m}
+    return {"ok": True, "saved": True, "macro": m}
 
 
 @app.post("/api/cu-macros/{macro_id}/replay")

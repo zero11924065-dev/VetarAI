@@ -2834,11 +2834,17 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
                       <span style={{ width:6, height:6, borderRadius:'50%', background:colors.accent, flexShrink:0, animation:'ui-pulse-dot 1.2s ease-in-out infinite' }} />
                       <span>思考中… {msg.thinkingElapsed != null ? `${msg.thinkingElapsed}s` : ''}</span>
                     </span>
-                    {/* 简版思考预览：让你实时知道 agent 在想什么（只留末尾 120 字） */}
+                    {/* 简版思考预览：让你实时知道 agent 在想什么（只留末尾 120 字）
+                        0.4.33（F3）1↔2 行跳动修复：旧版是 3 行 -webkit-box 钳制，流式期
+                        预览长短变化 → 渲染在 1/2/3 行间来回切换 → 下方会话整体上下频繁抖动
+                        （模型极快时尤甚，用户真机反馈）。现钳制单行（nowrap+ellipsis），
+                        完整预览留 title 悬浮（信息不丢）；多行预览本来就不是刚需——
+                        它只是"在思考"的活态信号。 */}
                     {msg.thinkingPreview && (
-                      <span style={{ fontSize: 11, color: colors.textTertiary, lineHeight: 1.5,
-                        display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                        wordBreak: 'break-word', width: '100%', paddingLeft:13 }}>
+                      <span title={msg.thinkingPreview}
+                        style={{ fontSize: 11, color: colors.textTertiary, lineHeight: 1.5,
+                          display: 'block', width: '100%', paddingLeft: 13, boxSizing: 'border-box',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {msg.thinkingPreview}
                       </span>
                     )}

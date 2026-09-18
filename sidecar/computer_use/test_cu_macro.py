@@ -22,12 +22,15 @@
 - 录制挂钩（C 组）复用 test_ax_element 的假 CF/AS/CG 层（事件构造全记录、零真实输出）；
 - 回放（D~H 组）把 executor.mouse_click / keyboard_type / keyboard_hotkey 与
   ax_element.app_elements 全部换成捕获桩，断言【调用参数】而非真实效果；
-- 端点回放用例（I 组）只用 0 步宏（回放线程无事可做），绝不触发真实动作。
+- 端点回放用例（I 组）有步宏回放时 executor 三动作全部桩化（_patch_replay），
+  绝不触发真实动作；0 步宏只验证 422 拒绝（0.4.33 F2）。
 
-变异测试机制（MUTATE=1|2|3 .venv/bin/python -m sidecar.computer_use.test_cu_macro）：
+变异测试机制（MUTATE=1|2|3|4|5 .venv/bin/python -m sidecar.computer_use.test_cu_macro）：
   1 = 重定位 title 匹配失效（同 role 多元素选错 → D 组灭）
   2 = 匹配不到回落像素失效（变成中止 → E 组灭）
   3 = app 未运行/无窗口中止失效（变成回落像素乱点 → F 组灭）
+  4 = 0.4.33 F2 空宏防护失效：0 步照存（K6/K7、I4d/I4e 灭）
+  5 = 0.4.33 F2 回放防护失效：0 步照放（K8、I6 灭）
 """
 import importlib
 import json
@@ -91,8 +94,22 @@ def _apply_mutation() -> None:
                      "            return (\"abort\", None, None, f\"目标应用「{app}」未运行或没有窗口（{err}）\")",
                      "            return (\"pixel_fallback\", ox, oy, \"\")  # 变异3：app 未开不中止",
                      "cm")
+    elif MUTATE == 4:
+        # 0 步照存：空宏防护失效（实测空转期 steps=[] 照存）
+        _mutate_file(src,
+                     "    if not rec[\"steps\"]:\n"
+                     "        # ⛔ MUTATE锚点：0 步宏不得落盘（空宏防护：实测空转期 steps=[] 照存）",
+                     "    if False:  # 变异4：0 步照存（空宏防护失效）",
+                     "cm")
+    elif MUTATE == 5:
+        # 0 步照放：回放防护失效（0 步回放静默完成=假成功）
+        _mutate_file(src,
+                     "    if not (macro.get(\"steps\") or []):\n"
+                     "        # ⛔ MUTATE锚点：0 步宏不得回放（静默完成等于假成功）",
+                     "    if False:  # 变异5：0 步照放（回放防护失效）",
+                     "cm")
     else:
-        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3）")
+        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3|4|5）")
     importlib.reload(cm)
 
 
@@ -319,6 +336,69 @@ def test_b_recorder():
 
     check("B9 未录制 stop→not_recording", cm.stop_recording().get("ok") is False)
     check("B9b 未录制 record_step→False", cm.record_step({"action": "click"}) is False)
+
+
+# ── K 组：0.4.33（插单修复 F2）空宏防护 + recording_steps 实时步数 ──────────
+def test_k_empty_macro_guard():
+    import sidecar.computer_use.cu_macro as cm
+    isolate_all("cum_k_")
+
+    # recording_steps：未录制 0 → 录制中递增 → 停止归 0
+    check("K1 未录制 recording_steps=0", cm.recording_steps() == 0)
+    r = cm.start_recording("步数宏")
+    check("K2 开始录制→recording_steps=0", r.get("ok") is True
+          and cm.recording_steps() == 0)
+    cm.record_step({"action": "click", "x": 1, "y": 2, "app": "Finder", "payload": {}})
+    cm.record_step({"action": "key", "app": "Finder", "payload": {"keys": "cmd+c"}})
+    check("K3 录制中 recording_steps 递增（=2）", cm.recording_steps() == 2)
+    st = cm.stop_recording()
+    check("K4 有步 stop→saved=True + macro", st.get("ok") is True
+          and st.get("saved") is True
+          and len((st.get("macro") or {}).get("steps") or []) == 2, str(st)[:200])
+    check("K5 停止后 recording_steps 归 0", cm.recording_steps() == 0)
+
+    # 空宏防护（问题3 实测：录制窗口内无任何动作，steps=[] 照存、回放静默完成）
+    n0 = len(cm.list_macros())
+    cm.start_recording("空转宏")
+    st = cm.stop_recording()
+    check("K6 0 步 stop→ok 且契约字段逐字（saved/steps/message）",
+          st.get("ok") is True and st.get("saved") is False
+          and st.get("steps") == 0
+          and st.get("message") == "未捕获到任何动作，宏未保存", str(st))
+    check("K7 0 步宏不落盘（列表数不变；变异 4 守护）",
+          len(cm.list_macros()) == n0, f"before={n0} after={len(cm.list_macros())}")
+
+    # 0 步宏回放拒绝（存量 0 步宏也拦；变异 5 守护）
+    empty = _macro(mid="cu-20260918-125959-empty-e0f0", steps=[])
+    cm.save_macro(empty)
+    r = cm.start_replay(empty["id"])
+    check("K8 0 步宏 start_replay→拒绝且含「宏没有可回放的步骤」",
+          r.get("ok") is False and "宏没有可回放的步骤" in str(r.get("error")), str(r))
+    check("K8b 0 步拒绝后忙锁未占用（可立即回放别的宏）", cm._REPLAY_BUSY is False)
+
+    # 有步宏回放不受影响（executor 桩化，⛔零真实事件）
+    cap = _CapExec()
+    undo, _ = _patch_replay(cap, els=[])
+    try:
+        m2 = _macro(mid="cu-20260918-125958-ok-o1k1",
+                    steps=[_click_step(1, x=1, y=2, element=None)])
+        cm.save_macro(m2)
+        r = cm.start_replay(m2["id"])
+        check("K9 有步宏 start_replay 不受影响", r.get("ok") is True
+              and str(r.get("run_id", "")).startswith("run-"), str(r))
+        run = None
+        for _ in range(50):
+            run = cm.get_run(r["run_id"])
+            if run and run.get("status") != "running":
+                break
+            time.sleep(0.1)
+        check("K9b 有步宏回放 done 且按原像素点击",
+              run and run.get("status") == "done"
+              and cap.clicks == [(1, 2, "left", 1)],
+              f"run={str(run)[:150]} clicks={cap.clicks}")
+    finally:
+        undo()
+        cm._REPLAY_BUSY = False
 
 
 # ── C 组：executor 录制挂钩（假 CG/CF/AS 层，⛔零真实事件）──────────────────
@@ -636,17 +716,19 @@ def test_h_replay_events():
         ae.notify = orig_notify
 
 
-# ── I 组：端点（TestClient；回放用例只用 0 步宏，⛔绝不触发真实动作）─────────
+# ── I 组：端点（TestClient；有步宏回放时 executor 桩化，⛔绝不触发真实动作）───
 def test_i_endpoints():
     isolate_all("cum_i_")
     from fastapi.testclient import TestClient
     import sidecar.app as appmod
+    import sidecar.computer_use.cu_macro as cm
     c = TestClient(appmod.app)
 
     r = c.get("/api/cu-macros")
-    check("I1 空列表 + recording=False",
+    check("I1 空列表 + recording=False + recording_steps=0（0.4.33 F2 新字段）",
           r.status_code == 200 and r.json() == {"ok": True, "macros": [],
-                                                "recording": False}, r.text[:150])
+                                                "recording": False,
+                                                "recording_steps": 0}, r.text[:150])
 
     r = c.post("/api/cu-macros/record/start", json={})
     check("I2 缺 name→422", r.status_code == 422, f"{r.status_code}")
@@ -659,36 +741,76 @@ def test_i_endpoints():
     r = c.post("/api/cu-macros/record/start", json={"name": "重复"})
     check("I3b 重复开始→422（单例）", r.status_code == 422, f"{r.status_code}")
     r = c.get("/api/cu-macros")
-    check("I3c 列表 recording=True", r.json().get("recording") is True, r.text[:150])
+    check("I3c 列表 recording=True 且 recording_steps=0",
+          r.json().get("recording") is True and r.json().get("recording_steps") == 0,
+          r.text[:150])
+    # 录制中落一步（直接调模块挂钩，等价 executor 成功动作落宏），轮询应见递增
+    cm.record_step({"action": "click", "x": 1, "y": 2, "app": "FakeApp", "payload": {}})
+    r = c.get("/api/cu-macros")
+    check("I3d 录制中 recording_steps=1（前端轮询实时步数）",
+          r.json().get("recording_steps") == 1, r.text[:150])
 
     r = c.post("/api/cu-macros/record/stop")
     body = r.json()
-    check("I4 停止→落盘返回完整宏", r.status_code == 200 and body.get("ok") is True
+    check("I4 有步停止→saved=True 落盘返回完整宏", r.status_code == 200
+          and body.get("ok") is True and body.get("saved") is True
           and body.get("macro", {}).get("name") == "端点宏"
           and body["macro"].get("id", "").startswith("cu-")
-          and body["macro"].get("steps") == [], r.text[:200])
+          and len(body["macro"].get("steps") or []) == 1, r.text[:200])
     mid = body["macro"]["id"]
     r = c.get("/api/cu-macros")
-    check("I4b 列表含新宏（steps=0 摘要）",
-          any(m["id"] == mid and m["steps"] == 0 for m in r.json().get("macros", [])),
-          r.text[:200])
+    check("I4b 列表含新宏（steps=1 摘要）且 recording_steps 归 0",
+          any(m["id"] == mid and m["steps"] == 1 for m in r.json().get("macros", []))
+          and r.json().get("recording_steps") == 0, r.text[:200])
+
+    # 0.4.33（F2）空宏防护（问题3 实测）：录制窗口内无任何动作 → 不落盘，
+    # HTTP 200 契约逐字 {ok, saved:false, steps:0, message}
+    r = c.post("/api/cu-macros/record/start", json={"name": "空转宏"})
+    check("I4c 再次开始录制→ok", r.status_code == 200 and r.json().get("ok") is True,
+          r.text[:150])
+    r = c.post("/api/cu-macros/record/stop")
+    check("I4d 0 步 stop→200 且契约逐字（变异 4 守护）",
+          r.status_code == 200
+          and r.json() == {"ok": True, "saved": False, "steps": 0,
+                           "message": "未捕获到任何动作，宏未保存"}, r.text[:200])
+    r = c.get("/api/cu-macros")
+    check("I4e 0 步未落盘（列表仍只有 1 个宏）且未在录制",
+          len(r.json().get("macros", [])) == 1
+          and r.json().get("recording") is False, r.text[:200])
+
     r = c.post("/api/cu-macros/record/stop")
     check("I5 未录制 stop→422", r.status_code == 422, f"{r.status_code}")
 
-    # 回放：0 步宏 → 线程无事可做、立即 done（⛔ 绝不用有步宏走端点回放）
-    r = c.post(f"/api/cu-macros/{mid}/replay")
-    check("I6 回放→立即返回 run_id", r.status_code == 200
-          and str(r.json().get("run_id", "")).startswith("run-"), r.text[:150])
-    run_id = r.json()["run_id"]
-    st = None
-    for _ in range(50):                       # 轮询回放状态（≤5s）
-        rr = c.get(f"/api/cu-macros/replays/{run_id}")
-        if rr.status_code == 200 and rr.json().get("run", {}).get("status") != "running":
-            st = rr.json()["run"]
-            break
-        time.sleep(0.1)
-    check("I6b 回放状态查询→done", st and st.get("status") == "done"
-          and st.get("macro_id") == mid, str(st)[:200])
+    # 0.4.33（F2）0 步宏回放 → 422「宏没有可回放的步骤」（此前静默完成=假成功）
+    cm.save_macro(_macro(mid="cu-20260918-130000-empty-e5m5", steps=[]))
+    r = c.post("/api/cu-macros/cu-20260918-130000-empty-e5m5/replay")
+    check("I6 0 步宏回放→422 含「宏没有可回放的步骤」（变异 5 守护）",
+          r.status_code == 422
+          and "宏没有可回放的步骤" in str(r.json().get("detail")),
+          f"{r.status_code} {r.text[:150]}")
+
+    # 有步宏回放不受影响（executor 桩化，⛔零真实事件）
+    cap = _CapExec()
+    undo, _ = _patch_replay(cap, els=[])
+    try:
+        r = c.post(f"/api/cu-macros/{mid}/replay")
+        check("I6b 有步宏回放→立即返回 run_id", r.status_code == 200
+              and str(r.json().get("run_id", "")).startswith("run-"), r.text[:150])
+        run_id = r.json()["run_id"]
+        st = None
+        for _ in range(50):                       # 轮询回放状态（≤5s）
+            rr = c.get(f"/api/cu-macros/replays/{run_id}")
+            if rr.status_code == 200 and rr.json().get("run", {}).get("status") != "running":
+                st = rr.json()["run"]
+                break
+            time.sleep(0.1)
+        check("I6c 有步宏回放→done 且按原像素点击（不受空宏防护影响）",
+              st and st.get("status") == "done" and st.get("macro_id") == mid
+              and cap.clicks == [(1, 2, "left", 1)],
+              f"run={str(st)[:150]} clicks={cap.clicks}")
+    finally:
+        undo()
+        cm._REPLAY_BUSY = False
 
     r = c.post("/api/cu-macros/cu-20990101-000000-none-zzzz/replay")
     check("I7 回放不存在宏→404", r.status_code == 404, f"{r.status_code}")
@@ -702,8 +824,11 @@ def test_i_endpoints():
     r = c.delete("/api/cu-macros/cu-20990101-000000-none-zzzz")
     check("I9b 删除不存在→404", r.status_code == 404, f"{r.status_code}")
     r = c.delete(f"/api/cu-macros/{mid}")
-    check("I9c 删除→deleted=True 且列表清空",
-          r.status_code == 200 and r.json().get("deleted") is True
+    check("I9c 删除→deleted=True",
+          r.status_code == 200 and r.json().get("deleted") is True, r.text[:150])
+    r = c.delete("/api/cu-macros/cu-20260918-130000-empty-e5m5")
+    check("I9d 删除存量 0 步宏→列表清空",
+          r.status_code == 200
           and c.get("/api/cu-macros").json().get("macros") == [], r.text[:150])
 
 
@@ -718,7 +843,8 @@ def test_j_start_replay():
           cm.start_replay("../etc").get("error") == "not_found")
 
     # J2：busy 守卫——真实键鼠独占，并发回放 422 语义
-    macro = _macro()
+    #（0.4.33 F2：busy 校验在空宏防护之后，故本用例必须用有步宏才能走到 busy 分支）
+    macro = _macro(steps=[_click_step(1)])
     cm.save_macro(macro)
     cm._REPLAY_BUSY = True
     try:
@@ -766,6 +892,7 @@ def main():
         _apply_mutation()
         test_a_storage()
         test_b_recorder()
+        test_k_empty_macro_guard()
         test_c_executor_hook()
         test_d_replay_relocate()
         test_e_replay_fallback()

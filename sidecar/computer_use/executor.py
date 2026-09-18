@@ -633,6 +633,22 @@ def _post(cg, ev) -> None:
             pass
 
 
+# ── 0.4.33（插单实测修复批 F1）校正链「容器吞没」双闸门常量 ─────────────────
+# 实测事故（2026-09-18 问题1）：瞄准桌面「压力测试」文件夹双击，AX 命中测试返回
+# Finder 桌面容器 AXGroup（frame 全屏 1728×1117），校正链把点击拽到该容器中心
+# (864,558.5) 开错文件夹——「命中即点 frame 中心」对巨型容器是灾难。故命中校正
+# 只信【白名单叶子角色 + 有界 frame】，其余一律回落原像素坐标并记 guard 原因。
+_CORRECT_ROLE_ALLOW = frozenset({   # 白名单：可信叶子角色（其 frame 中心即可点目标）
+    "AXButton", "AXImage", "AXCell", "AXCheckBox", "AXRadioButton",
+    "AXMenuItem", "AXMenuBarItem", "AXLink", "AXTextField", "AXTextArea",
+    "AXStaticText", "AXTab", "AXRow", "AXOutlineRow", "AXDockItem", "AXIcon"})
+_CORRECT_ROLE_BLOCK = frozenset({   # 黑名单：容器类角色一律回落（显式钉死防误放行）
+    "AXGroup", "AXWindow", "AXSplitGroup", "AXScrollArea", "AXWebArea",
+    "AXToolbar", "AXMenuBar", "AXApplication", "AXUnknown"})
+_CORRECT_MAX_DIM = 480.0            # frame 宽/高上限（逻辑点；64×64 图标、常规按钮/行全保留）
+_CORRECT_MAX_AREA_RATIO = 0.10      # frame 面积上限 = 屏幕逻辑面积 × 10%（1728×1117 容器必被杀）
+
+
 def _correct_xy_by_element(px: float, py: float, lw: int, lh: int) -> tuple[float, float, dict]:
     """0.4.32（CU 二期 E2，REQ-FUT-005 路径①）点击校正链：
     视觉模型给的近似坐标 → AX 命中测试取精确 frame → 命中则改点 frame 中心。
@@ -640,6 +656,9 @@ def _correct_xy_by_element(px: float, py: float, lw: int, lh: int) -> tuple[floa
     回落规则（任一条不满足都保持原坐标，绝不阻断点击）：
       开关 cu_element_locate_enabled 关闭 / 无 AX 权限 / 未命中 /
       frame 缺失或宽高 ≤0 / frame 中心越屏 → 原像素坐标。
+      0.4.33（F1）容器吞没双闸门：命中角色在容器黑名单 / 不在白名单（未列出角色
+      保守回落）/ frame 超 480 逻辑点或超屏面积 10% → 原像素坐标，locate 附
+      guard（role_blocked / oversize）+ 实际 role/frame 进审计。
     ⛔ 本函数绝不抛异常：校正是增强，像素点击才是主流程
       （⛔ 真实占用键鼠是需求不是缺陷，本层只校正坐标、不改变事件投递机制）。
     返回 (x, y, locate)；locate["method"] = "element" | "pixel_fallback"，
@@ -665,8 +684,25 @@ def _correct_xy_by_element(px: float, py: float, lw: int, lh: int) -> tuple[floa
         # 中心点必须落在屏内（容差同坐标校验）：frame 异常时宁可信模型给的像素坐标
         if lw and lh and (cx < -20 or cy < -20 or cx > lw + 20 or cy > lh + 20):
             return px, py, locate
+        # ── 0.4.33（F1）双闸门：容器角色 / 未列出角色 / 巨型 frame 一律回落原像素
+        # 坐标，locate 记 guard 原因 + 实际 role/frame（随审计落 actions.jsonl）──
+        role = str(hit.get("role") or "")
+        if role in _CORRECT_ROLE_BLOCK:                    # ⛔ MUTATE锚点：容器角色必须回落（桌面全屏 AXGroup 吞没实测事故）
+            locate = {"method": "pixel_fallback", "guard": "role_blocked",
+                      "role": role[:40], "frame": [round(v, 1) for v in frame]}
+            return px, py, locate
+        if role not in _CORRECT_ROLE_ALLOW:                # ⛔ MUTATE锚点：未列出角色必须保守回落（只信白名单叶子角色）
+            locate = {"method": "pixel_fallback", "guard": "role_blocked",
+                      "role": role[:40], "frame": [round(v, 1) for v in frame]}
+            return px, py, locate
+        oversize = (max(fw, fh) > _CORRECT_MAX_DIM
+                    or bool(lw and lh and fw * fh > lw * lh * _CORRECT_MAX_AREA_RATIO))
+        if oversize:                                       # ⛔ MUTATE锚点：巨型 frame 必须回落（超边长/超面积防护）
+            locate = {"method": "pixel_fallback", "guard": "oversize",
+                      "role": role[:40], "frame": [round(v, 1) for v in frame]}
+            return px, py, locate
         locate = {"method": "element",
-                  "role": str(hit.get("role") or "")[:40],
+                  "role": role[:40],
                   "title": str(hit.get("title") or "")[:80],
                   # 0.4.32（CU 三期 P2）：frame/app 随命中结果带出（本次 hit_test 的既有
                   # 产出，零额外 AX 调用），供宏录制落语义化 step（回放按 app+role/title

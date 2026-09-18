@@ -27,12 +27,16 @@
 - 唯一真实调用的是 H 组真值用例（AX 只读查询，无副作用），skip 条件照
   test_computer_use.py C 组同款：环境不满足时打印 SKIP 返回，不判失败。
 
-变异测试机制（MUTATE=1|2|3|4|5 .venv/bin/python -m sidecar.computer_use.test_ax_element）：
+变异测试机制（MUTATE=1|2|3|4|5|6|7|8 .venv/bin/python -m sidecar.computer_use.test_ax_element）：
   1 = ax_element 索引 clamp 失效（越界防护失守 → B 组灭）
   2 = executor 零尺寸 frame 防护失效（C4 灭）
   3 = executor frame 中心算成左上角（C1 灭）
   4 = element_locate title 截断失效（E4 灭）
   5 = 校正开关默认值被改（C1/F1 灭）
+  6 = 0.4.33 F1 白名单失效（角色闸门整体失守：容器+未列出放行 → C11/C13 灭；
+      全屏 AXGroup 仍有尺寸闸门兜底，双闸门冗余是刻意设计）
+  7 = 0.4.33 F1 frame 尺寸上限失效（超边长/超面积放行 → C12 灭）
+  8 = 0.4.33 F1 未列出角色放行（仅白名单闸失效，黑名单仍在 → C13 灭）
 """
 import importlib
 import json
@@ -109,8 +113,39 @@ def _apply_mutation() -> None:
                      '        if True:  # 变异5：校正开关强制视为关闭',
                      "executor")
         importlib.reload(ex)
+    elif MUTATE == 6:
+        # 白名单失效：角色闸门整体失守（容器 + 未列出角色都能命中校正）。
+        # ⚠️ 单锚点不足以观测——全屏 AXGroup 还会被尺寸闸门拦下（双闸门冗余是
+        # 刻意设计）；本变异同时拆掉两道角色闸，由 C11（小 frame 容器）/C13 抓住。
+        _mutate_file(Path(ex.__file__),
+                     "        if role in _CORRECT_ROLE_BLOCK:                    # ⛔ MUTATE锚点：容器角色必须回落（桌面全屏 AXGroup 吞没实测事故）\n"
+                     "            locate = {\"method\": \"pixel_fallback\", \"guard\": \"role_blocked\",\n"
+                     "                      \"role\": role[:40], \"frame\": [round(v, 1) for v in frame]}\n"
+                     "            return px, py, locate\n"
+                     "        if role not in _CORRECT_ROLE_ALLOW:                # ⛔ MUTATE锚点：未列出角色必须保守回落（只信白名单叶子角色）",
+                     "        if False:  # 变异6：角色闸门整体失效（容器黑名单失守）\n"
+                     "            locate = {\"method\": \"pixel_fallback\", \"guard\": \"role_blocked\",\n"
+                     "                      \"role\": role[:40], \"frame\": [round(v, 1) for v in frame]}\n"
+                     "            return px, py, locate\n"
+                     "        if False:  # 变异6：角色闸门整体失效（白名单失守）",
+                     "executor")
+        importlib.reload(ex)
+    elif MUTATE == 7:
+        # frame 尺寸上限失效：超边长/超面积的巨帧也能命中校正
+        _mutate_file(Path(ex.__file__),
+                     "        if oversize:                                       # ⛔ MUTATE锚点：巨型 frame 必须回落（超边长/超面积防护）",
+                     "        if False:  # 变异7：巨型 frame 放行（尺寸上限失效）",
+                     "executor")
+        importlib.reload(ex)
+    elif MUTATE == 8:
+        # 未列出角色放行：白名单闸失效（容器黑名单仍在——C11 应仍绿、C13 灭）
+        _mutate_file(Path(ex.__file__),
+                     "        if role not in _CORRECT_ROLE_ALLOW:                # ⛔ MUTATE锚点：未列出角色必须保守回落（只信白名单叶子角色）",
+                     "        if False:  # 变异8：未列出角色放行（白名单失效）",
+                     "executor")
+        importlib.reload(ex)
     else:
-        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3|4|5）")
+        raise SystemExit(f"未知变异编号 {MUTATE}（支持 1|2|3|4|5|6|7|8）")
 
 
 def _restore() -> None:
@@ -683,6 +718,106 @@ def test_c_correction_chain():
     finally:
         undo()
 
+    # ── 0.4.33（插单修复 F1）容器吞没双闸门 ─────────────────────────────
+    # C10：⛔问题1 回归钉住——AXGroup 全屏 frame（Finder 桌面容器 1728×1117）→
+    # 回落原坐标 + guard=role_blocked（实测：校正链把双击拽到容器中心 (864,558.5)
+    # 开错文件夹；变异 6 守护）
+    fas = FakeAS(attrs={"el0": _full_elem(frame=(0.0, 0.0, 1728.0, 1117.0),
+                                          role="AXGroup", title="")})
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(864, 558, 1728, 1117)
+        check("C10 AXGroup 全屏容器→回落原坐标（问题1回归）",
+              (x, y) == (864, 558) and loc.get("method") == "pixel_fallback"
+              and loc.get("guard") == "role_blocked" and loc.get("role") == "AXGroup",
+              f"({x},{y}) {loc}")
+        check("C10b guard 审计附实际 frame",
+              loc.get("frame") == [0.0, 0.0, 1728.0, 1117.0], str(loc))
+    finally:
+        undo()
+
+    # C11：容器角色即使 frame 很小也回落（黑名单按角色不按尺寸，防小容器套娃）
+    fas = FakeAS(attrs={"el0": _full_elem(frame=(100.0, 200.0, 40.0, 20.0),
+                                          role="AXWindow")})
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(110, 210, 1728, 1117)
+        check("C11 AXWindow 小 frame→role_blocked（黑名单不看尺寸）",
+              (x, y) == (110, 210) and loc.get("method") == "pixel_fallback"
+              and loc.get("guard") == "role_blocked" and loc.get("role") == "AXWindow",
+              f"({x},{y}) {loc}")
+    finally:
+        undo()
+
+    # C12：白名单角色但 frame 巨型 → oversize 回落（变异 7 守护）。
+    # 1728×1117=1930176 逻辑点，10%=193017.6：480×480=230400 边长未超但面积超；
+    # 1000×900 边长超。两者都必须被杀。
+    fas = FakeAS(attrs={"el0": _full_elem(frame=(0.0, 0.0, 480.0, 480.0),
+                                          role="AXStaticText")})
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(240, 240, 1728, 1117)
+        check("C12 超面积（480×480>屏10%）→oversize 回落",
+              (x, y) == (240, 240) and loc.get("method") == "pixel_fallback"
+              and loc.get("guard") == "oversize" and loc.get("role") == "AXStaticText",
+              f"({x},{y}) {loc}")
+    finally:
+        undo()
+    fas = FakeAS(attrs={"el0": _full_elem(frame=(0.0, 0.0, 1000.0, 900.0),
+                                          role="AXImage")})
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(500, 450, 1728, 1117)
+        check("C12b 超边长（1000>480）→oversize 回落",
+              (x, y) == (500, 450) and loc.get("guard") == "oversize",
+              f"({x},{y}) {loc}")
+    finally:
+        undo()
+
+    # C13：未列出角色 → 保守回落（白名单之外一律不信任；变异 8 守护）
+    fas = FakeAS(attrs={"el0": _full_elem(role="AXComboBox")})   # 40×20 小 frame 也拦
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(110, 210, 1728, 1117)
+        check("C13 未列出角色（AXComboBox）→role_blocked 回落",
+              (x, y) == (110, 210) and loc.get("method") == "pixel_fallback"
+              and loc.get("guard") == "role_blocked"
+              and loc.get("role") == "AXComboBox", f"({x},{y}) {loc}")
+    finally:
+        undo()
+    fas = FakeAS(attrs={"el0": _full_elem(role="")})
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(110, 210, 1728, 1117)
+        check("C13b 空角色→role_blocked 回落",
+              (x, y) == (110, 210) and loc.get("guard") == "role_blocked",
+              f"({x},{y}) {loc}")
+    finally:
+        undo()
+
+    # C14：白名单角色 + 有界 frame → 正常校正不受影响（64×64 图标；
+    # 边界 480×400=192000 ≤ 193017.6 且 max=480 ≤ 480 → 仍校正）
+    fas = FakeAS(attrs={"el0": _full_elem(frame=(100.0, 200.0, 64.0, 64.0),
+                                          role="AXIcon")})
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(110, 210, 1728, 1117)
+        check("C14 AXIcon 64×64→正常校正 frame 中心",
+              (x, y) == (132.0, 232.0) and loc.get("method") == "element",
+              f"({x},{y}) {loc}")
+    finally:
+        undo()
+    fas = FakeAS(attrs={"el0": _full_elem(frame=(0.0, 0.0, 480.0, 400.0),
+                                          role="AXRow")})
+    undo = _inject(fas, FakeCF())
+    try:
+        x, y, loc = ex._correct_xy_by_element(100, 100, 1728, 1117)
+        check("C14b 边界内（480×400 ≤ 屏10%）→正常校正",
+              (x, y) == (240.0, 200.0) and loc.get("method") == "element",
+              f"({x},{y}) {loc}")
+    finally:
+        undo()
+
 
 # ── D 组：mouse_click 集成校正（假 CG 零真实事件）+ 审计字段 ────────────────
 class FakeCG:
@@ -812,6 +947,30 @@ def test_d_click_integration_audit():
         clicks = [e for e in fcg.events if e[0] in (1, 2)]
         check("D4 校正异常→原坐标点击仍成功", r.get("ok") is True and clicks
               and all(abs(e[1] - 110.0) < 1e-6 for e in clicks), str(clicks))
+    finally:
+        undo_cg()
+        undo()
+
+    # D5：⛔0.4.33 F1 问题1 集成回归——AXGroup 全屏容器命中：点击落原坐标
+    # （绝不拽到容器中心 (864,558.5)），审计 method=pixel_fallback + guard 原因
+    fas = FakeAS(attrs={"el0": _full_elem(frame=(0.0, 0.0, 1728.0, 1117.0),
+                                          role="AXGroup", title="")})
+    undo = _inject(fas, FakeCF())
+    fcg, undo_cg = _install_fake_cg()
+    try:
+        r = ex.mouse_click(864, 558)
+        clicks = [e for e in fcg.events if e[0] in (1, 2)]
+        check("D5 容器命中→点击落原坐标（不拽到容器中心）",
+              r.get("ok") is True and clicks
+              and all(abs(e[1] - 864.0) < 1e-6 and abs(e[2] - 558.0) < 1e-6
+                      for e in clicks), str(clicks))
+        rec = [a for a in read_audit() if a.get("action") == "click" and a.get("ok")]
+        check("D5b 审计 pixel_fallback + guard=role_blocked + 实际 role/frame",
+              rec and rec[-1].get("method") == "pixel_fallback"
+              and rec[-1].get("guard") == "role_blocked"
+              and rec[-1].get("role") == "AXGroup"
+              and rec[-1].get("frame") == [0.0, 0.0, 1728.0, 1117.0],
+              str(rec[-1] if rec else None))
     finally:
         undo_cg()
         undo()

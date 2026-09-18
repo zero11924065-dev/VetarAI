@@ -172,6 +172,13 @@ def is_recording() -> bool:
         return _REC is not None
 
 
+def recording_steps() -> int:
+    """当前录制已捕获的动作步数（未录制 → 0）。
+    0.4.33（插单修复 F2）：列表端点轮询带出，前端录制中实时显示步骤数。"""
+    with _REC_LOCK:
+        return len(_REC["steps"]) if _REC is not None else 0
+
+
 def start_recording(name: str) -> dict[str, Any]:
     """开始录制。已在录制 / 名称为空 → ok:False（端点按 422）。"""
     nm = str(name or "").strip()
@@ -221,12 +228,19 @@ def record_step(step: dict[str, Any]) -> bool:
 
 
 def stop_recording() -> dict[str, Any]:
-    """停止录制并落盘。返回 {"ok": True, "macro": 完整宏 dict}；未在录制 → ok:False。"""
+    """停止录制。steps>0 → 落盘返回 {"ok","saved":True,"macro"}；未在录制 → ok:False。
+    0.4.33（插单修复 F2 空宏防护，实测问题3：录制窗口内无任何动作 steps=[] 照存、
+    回放静默完成等于假成功）：steps==0 → 【不落盘】，返回
+    {"ok","saved":False,"steps":0,"message":"未捕获到任何动作，宏未保存"}。"""
     global _REC
     with _REC_LOCK:
         if _REC is None:
             return {"ok": False, "error": "not_recording: 当前没有进行中的录制"}
         rec, _REC = _REC, None
+    if not rec["steps"]:
+        # ⛔ MUTATE锚点：0 步宏不得落盘（空宏防护：实测空转期 steps=[] 照存）
+        return {"ok": True, "saved": False, "steps": 0,
+                "message": "未捕获到任何动作，宏未保存"}
     macro = {"id": _new_macro_id(rec["name"]),
              "name": rec["name"],
              "created_at": rec["started_at"],
@@ -235,7 +249,7 @@ def stop_recording() -> dict[str, Any]:
         save_macro(macro)
     except Exception as e:
         return {"ok": False, "error": f"save_failed: 宏落盘失败（{type(e).__name__}: {e}）"}
-    return {"ok": True, "macro": macro}
+    return {"ok": True, "saved": True, "macro": macro}
 
 
 # ══════════ 回放（语义重放 + 失败回落像素 + R4 中止）═════════════════════
@@ -254,12 +268,16 @@ def get_run(run_id: str) -> dict[str, Any] | None:
 
 def start_replay(macro_id: str) -> dict[str, Any]:
     """校验宏存在 → 登记 run → 后台线程回放。立即返回 run_id（异步，照 workflow
-    engine 后台执行范式；⛔ 端点不能同步等回放——回放是秒级的真实键鼠操作）。"""
+    engine 后台执行范式；⛔ 端点不能同步等回放——回放是秒级的真实键鼠操作）。
+    0.4.33（F2）：0 步宏拒绝回放（empty_macro）——0 步回放静默完成等于假成功。"""
     if not valid_macro_id(macro_id):
         return {"ok": False, "error": "not_found"}
     macro = load_macro(macro_id)
     if macro is None:
         return {"ok": False, "error": "not_found"}
+    if not (macro.get("steps") or []):
+        # ⛔ MUTATE锚点：0 步宏不得回放（静默完成等于假成功）
+        return {"ok": False, "error": "empty_macro: 宏没有可回放的步骤"}
     global _REPLAY_BUSY
     with _RUN_LOCK:
         if _REPLAY_BUSY:
