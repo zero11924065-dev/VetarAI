@@ -72,6 +72,9 @@ interface Config {
   cu_element_locate_enabled?: boolean;
   // 0.4.12（B2）：权限确认弹窗等待超时秒数；0 = 无限等待
   auth_confirm_timeout?: number;
+  // R2（0.4.33）：「永久允许」的工具授权清单（元素 {tool, action, granted_at}；
+  // 键口径只有 tool+action，不含路径/参数）。只读展示 + 逐条移除。
+  auth_grants?: { tool: string; action: string; granted_at?: string }[];
 }
 
 // 0.4.9（3.48.1）：Computer Use 设置区——总开关 + 每步确认 + 应用白名单 + 权限探测。
@@ -620,6 +623,39 @@ export function SettingsPanel({ onClose, embedded, onOpenLogs, onOpenDataDir }: 
                 {(cfg.auth_confirm_timeout ?? 600) === 0
                   ? '当前：无限等待——你随时回来点确认都有效，不会被误判为拒绝。'
                   : `当前：${Math.round((cfg.auth_confirm_timeout ?? 600) / 60)} 分钟内未确认将按拒绝处理。`}
+              </div>
+            </div>
+
+            {/* R2（0.4.33）：已永久授权的工具——授权弹窗点「永久允许」后落 config auth_grants。
+                只读清单 + 逐条移除（移除 = 写回过滤后的完整数组，后端 reload_config 校验结构）。
+                会话级「本会话不再询问」随进程重启自动清空，不在此列出。 */}
+            <div style={{ marginTop: 14 }}>
+              <label style={formLabel}>已永久授权的工具</label>
+              {(cfg.auth_grants || []).length === 0 ? (
+                <div style={hintStyle}>暂无。授权弹窗中点「永久允许」后，对应工具会列在这里。</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                  {(cfg.auth_grants || []).map((g) => (
+                    <div key={`${g.tool}|${g.action}`}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{
+                        flex: 1, minWidth: 0, fontSize: 12.5, fontFamily: fonts.mono,
+                        color: colors.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>{g.tool} · {g.action}</span>
+                      <span style={{ fontSize: 11, color: colors.textTertiary, flexShrink: 0 }}>{g.granted_at || ''}</span>
+                      <button className="ui-btn ui-btn-secondary"
+                        style={{ ...btnSecondary, height: 24, padding: '0 10px', fontSize: 12, flexShrink: 0 }}
+                        onClick={() => save({
+                          auth_grants: (cfg.auth_grants || []).filter(
+                            x => !(x.tool === g.tool && x.action === g.action)),
+                        })}>移除</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={hintStyle}>
+                点「移除」后，该工具下次触发敏感操作时重新弹窗询问。联网安装永不进入本清单（安全敏感，每次必问）。
               </div>
             </div>
           </div>

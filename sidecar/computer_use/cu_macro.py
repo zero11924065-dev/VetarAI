@@ -17,10 +17,17 @@
 # along with VetarAI. If not, see <https://www.gnu.org/licenses/>.
 """0.4.32（CU 三期 P2，REQ-FUT-006）任务宏：录制 / 保存 / 列表 / 回放 / 删除。
 
-三期口径（执行计划 E4，用户可异议但未异议，按此执行）：
-- **录制** = 录制【Agent 自己发起的 CU 动作序列】：executor 各动作执行成功后
-  经 `_maybe_record` 挂钩追加 step（语义化落盘：app + element role/title/frame + 坐标）。
-  ⛔ 不是系统级用户操作录制（AXObserver/事件 tap 长驻监听）——那是范围外另一量级需求。
+三期口径（执行计划 E4）+ 0.4.34（四期 R4）双模式录制：
+- **录制**两种模式：
+  - mode="agent"（默认，缺省=三期原行为零变化）：录制【Agent 自己发起的 CU 动作
+    序列】——executor 各动作执行成功后经 `_maybe_record` 挂钩追加 step
+    （语义化落盘：app + element role/title/frame + 坐标）。
+  - mode="user"（0.4.34 R4 拍板新增）：**系统级用户手动操作录制**——
+    computer_use/user_recorder.py 以 CGEventTap（listen-only，kCGSessionEventTap）
+    捕获真实键鼠，归并（打字聚合/双击合并/修饰组合键）+ AX 命中富化后写入本模块
+    同一录制器，落盘/列表/回放链路完全复用。需「输入监控」TCC 授权（与辅助功能
+    是两项独立权限，互不覆盖）；与回放互斥（真实键鼠独占，回放合成事件会被 tap
+    录进宏造成污染）。
 - **回放** = 逐步 element 语义重放：click 类按 step.app + element.role/title 经
   app_elements(depth≤2) 找匹配元素 → 点其 frame 中心（窗口挪位仍命中）；
   匹配不到回落 step 原像素坐标（走 executor 现有点击链）；type/key 类直接重放 payload。
@@ -161,15 +168,25 @@ def delete_macro(macro_id: str) -> bool:
 
 
 # ══════════ 录制器（进程级单例，线程安全）═══════════════════════════════
-# 语义：录制的是 Agent 经 executor 发起的动作；executor 在每个动作【成功后】调
-# record_step（失败动作不落宏——回放一个当时就没成功的动作无意义）。
-_REC: dict[str, Any] | None = None     # {"name","started_at","steps":[...]}；None=未录制
+# 语义：agent 模式录制的是 Agent 经 executor 发起的动作；executor 在每个动作
+# 【成功后】调 record_step（失败动作不落宏——回放一个当时就没成功的动作无意义）。
+# user 模式（0.4.34 R4）录制的是用户手动操作：user_recorder 的 tap 归并后同样
+# 调 record_step——两种模式共用 _REC 单例与落盘/回放链路。
+_REC: dict[str, Any] | None = None     # {"name","started_at","steps":[...],"mode","capture"}；None=未录制
 _REC_LOCK = threading.RLock()
+
+_RECORD_MODES = ("agent", "user")
 
 
 def is_recording() -> bool:
     with _REC_LOCK:
         return _REC is not None
+
+
+def recording_mode() -> str | None:
+    """当前录制模式：None（未录制）| "agent" | "user"（0.4.34 R4 契约字段）。"""
+    with _REC_LOCK:
+        return str(_REC["mode"]) if _REC is not None else None
 
 
 def recording_steps() -> int:
@@ -179,18 +196,86 @@ def recording_steps() -> int:
         return len(_REC["steps"]) if _REC is not None else 0
 
 
-def start_recording(name: str) -> dict[str, Any]:
-    """开始录制。已在录制 / 名称为空 → ok:False（端点按 422）。"""
+def _input_monitoring_error() -> dict[str, Any]:
+    """契约5：user 模式未授权的统一报错（端点映射 403；detail 含中文授权指引）。
+    与 executor._ax_denied 同款「给出侧车二进制确切路径」口径——TCC 按二进制授权。"""
+    exe = ""
+    try:
+        from sidecar.computer_use import executor as _ex
+        exe = _ex._process_identity().get("exe") or ""
+    except Exception:
+        pass
+    guide = (f"请把这个文件本身加入名单：\n    {exe}\n" if exe else "")
+    return {"ok": False, "error": (
+        "input_monitoring_not_granted: 「输入监控」权限未授予，系统级录制会被系统拒绝"
+        "（CGEventTapCreate 直接返回空）。它与「辅助功能」是两项独立授权，"
+        "已授权辅助功能不覆盖输入监控。\n"
+        f"{guide}"
+        "操作：系统设置→隐私与安全性→输入监控 → 点「+」→ 按 Cmd+Shift+G 粘贴上述路径 "
+        "→ 添加并勾选 → 完全退出 VetarAI（Cmd+Q）后重开（权限在进程启动时读取）。")}
+
+
+def start_recording(name: str, mode: str = "agent") -> dict[str, Any]:
+    """开始录制。已在录制 / 名称为空 / mode 非法 → ok:False（端点按 422/409）。
+
+    mode="agent"（默认）：三期原行为零变化（重复开始 → already_recording，conflict=False）。
+    mode="user"（0.4.34 R4）：
+      - 未授予「输入监控」→ input_monitoring_not_granted（端点 403，契约5）；
+      - 回放进行中 → replay_busy（端点 409；互斥：回放合成事件会被 tap 录进宏）；
+      - 任一模式录制中再开始（任一模式）→ already_recording + conflict=True（端点 409，
+        契约6「agent 与 user 不能同时录」；agent+agent 保持 422 原状）。
+    """
     nm = str(name or "").strip()
     if not nm:
         return {"ok": False, "error": "bad_arg: 宏名称不能为空"}
+    md = str(mode or "agent").strip().lower()
+    if md not in _RECORD_MODES:
+        return {"ok": False, "error": (
+            f"bad_arg: mode 只能是 {'/'.join(_RECORD_MODES)}（收到 {mode!r}）")}
     global _REC
     with _REC_LOCK:
         if _REC is not None:
+            cur = str(_REC.get("mode") or "agent")
             return {"ok": False, "error": (
-                f"already_recording: 正在录制宏「{_REC['name']}」，请先停止当前录制")}
-        _REC = {"name": nm[:TITLE_MAX], "started_at": _now(), "steps": []}
-        return {"ok": True, "name": _REC["name"]}
+                f"already_recording: 正在录制宏「{_REC['name']}」（{cur} 模式），"
+                "请先停止当前录制"),
+                # agent+agent → conflict=False（端点 422 原状）；涉 user → True（409）
+                "conflict": md == "user" or cur == "user"}
+        if md == "user":
+            # ⛔ MUTATE锚点：user 模式未授权必须拒绝（403 契约；真实 tap 无权限必建空）
+            from sidecar.computer_use import user_recorder as _ur
+            if _ur.listen_access_granted() is False:
+                return _input_monitoring_error()
+            with _RUN_LOCK:
+                replay_busy = _REPLAY_BUSY
+            if replay_busy:
+                return {"ok": False, "error": (
+                    "replay_busy: 已有回放进行中（真实键鼠是独占资源，回放的合成事件"
+                    "会被系统级捕获录进宏造成污染），请等当前回放完成再开始录制"),
+                        "conflict": True}
+            try:
+                from sidecar.config import get_config as _gc
+                max_s = float((_gc() or {}).get("cu_user_record_max_seconds", 600) or 600)
+            except Exception:
+                max_s = 600.0
+            capture = _ur.start_capture(on_step=record_step,
+                                        on_timeout=_auto_stop_timeout,
+                                        max_seconds=max_s)
+            if capture is None:
+                return {"ok": False, "error": (
+                    "capture_failed: 系统级捕获启动失败（CGEventTap 创建失败或已在捕获）。"
+                    "请确认「输入监控」已授予且没有其他录制在进行")}
+        _REC = {"name": nm[:TITLE_MAX], "started_at": _now(), "steps": [],
+                "mode": md, "capture": capture if md == "user" else None}
+        return {"ok": True, "name": _REC["name"], "mode": md}
+
+
+def _auto_stop_timeout() -> None:
+    """硬上限到点（user_recorder ticker 线程触发）：视作正常 stop（有步落盘）。"""
+    try:
+        stop_recording()
+    except Exception:
+        pass
 
 
 def record_step(step: dict[str, Any]) -> bool:
@@ -231,12 +316,24 @@ def stop_recording() -> dict[str, Any]:
     """停止录制。steps>0 → 落盘返回 {"ok","saved":True,"macro"}；未在录制 → ok:False。
     0.4.33（插单修复 F2 空宏防护，实测问题3：录制窗口内无任何动作 steps=[] 照存、
     回放静默完成等于假成功）：steps==0 → 【不落盘】，返回
-    {"ok","saved":False,"steps":0,"message":"未捕获到任何动作，宏未保存"}。"""
+    {"ok","saved":False,"steps":0,"message":"未捕获到任何动作，宏未保存"}。
+    0.4.34（R4）：两模式同一契约。user 模式先拆系统级捕获（tap 线程 flush 的最终
+    聚合步骤经 record_step 落入宏），再清空 _REC 落盘——顺序不可反：先清 _REC
+    会让 flush 出来的收尾步骤被 record_step 丢弃（宏丢尾巴）。"""
     global _REC
     with _REC_LOCK:
         if _REC is None:
             return {"ok": False, "error": "not_recording: 当前没有进行中的录制"}
-        rec, _REC = _REC, None
+        rec = _REC
+    cap = rec.get("capture")
+    if cap is not None:
+        try:
+            cap.stop()      # 干净拆除 + flush 收尾步骤（此刻 _REC 仍在，record_step 受理）
+        except Exception:
+            pass
+    with _REC_LOCK:
+        if _REC is rec:
+            _REC = None
     if not rec["steps"]:
         # ⛔ MUTATE锚点：0 步宏不得落盘（空宏防护：实测空转期 steps=[] 照存）
         return {"ok": True, "saved": False, "steps": 0,
@@ -278,6 +375,14 @@ def start_replay(macro_id: str) -> dict[str, Any]:
     if not (macro.get("steps") or []):
         # ⛔ MUTATE锚点：0 步宏不得回放（静默完成等于假成功）
         return {"ok": False, "error": "empty_macro: 宏没有可回放的步骤"}
+    with _REC_LOCK:
+        _user_rec = _REC is not None and _REC.get("mode") == "user"
+    if _user_rec:
+        # ⛔ MUTATE锚点：user 录制中必须拒绝回放（0.4.34 R4 互斥契约6：
+        #    回放的合成事件会被系统级 tap 录进宏造成污染，真实键鼠是独占资源）
+        return {"ok": False, "error": (
+            "user_recording_busy: 正在录制用户操作宏（系统级捕获中），回放的真实键鼠"
+            "事件会被录进宏造成污染。请先停止录制再回放"), "conflict": True}
     global _REPLAY_BUSY
     with _RUN_LOCK:
         if _REPLAY_BUSY:

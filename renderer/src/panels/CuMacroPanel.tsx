@@ -39,6 +39,15 @@
  * - stop 返回 saved:false（0 步契约）→ warn callout 原文上屏，不 refresh 出宏；
  * - steps==0 的宏（含历史遗留）回放按钮置灰 + title「宏没有步骤」；
  *   仍触发的 422「宏没有可回放的步骤」走 catch detail 上屏（既有范式）。
+ *
+ * R4（用户手动录制模式）：
+ * - 录制入口分两模式：「录制 Agent 操作」（原 start，body 仍只有 name，后端默认 mode=agent）
+ *   与「录制我的操作」（先 GET user-record/permission，已授权才 POST start {name, mode:"user"}）。
+ * - 未授权引导：permission granted:false 或 start 403（detail 以 input_monitoring_not_granted
+ *   开头）→ warn 引导 callout（系统设置 → 隐私与安全性 → 输入监控），内嵌「请求授权」按钮
+ *   触发 POST permission/request，再 GET 复查一次 granted；已授权则直接补发 start。
+ * - 录制中按 GET /cu-macros 的 recording_mode 区分文案（user/agent），停止按钮同一；
+ *   互斥 409（录制中回放 / 回放中录制 / 重复录制）走 catch detail 上屏（既有错误样式）。
  */
 import { apiJson } from '../lib/api';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -91,11 +100,17 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
   const [recording, setRecording] = useState(false);
   const [recordingName, setRecordingName] = useState('');
   const [recordingSteps, setRecordingSteps] = useState(0);   // 0.4.33(F2)：录制中实时已捕获步骤数
+  // R4：录制模式（GET /cu-macros 的 recording_mode 契约：null|"agent"|"user"；
+  // 未录制为 null；录制中缺键按 'agent' 兜底——旧后端无该键时只有 agent 录制）
+  const [recordingMode, setRecordingMode] = useState<'agent' | 'user' | null>(null);
   const [recName, setRecName] = useState('');
   const [busy, setBusy] = useState(false);          // 录制起停/回放启动/删除的动作级防重
   const [run, setRun] = useState<ReplayRun | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);     // 0.4.33(F2)：0 步停止警告（saved:false）
+  // R4：「录制我的操作」输入监控权限未授予 → 引导 callout；permBusy 是「请求授权」按钮的防重
+  const [permDenied, setPermDenied] = useState(false);
+  const [permBusy, setPermBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -105,6 +120,8 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
       setRecording(rec);
       // recording_steps（0.4.33 新增契约字段，未录制为 0）；缺键按 0 兜底
       setRecordingSteps(typeof d?.recording_steps === 'number' ? d.recording_steps : 0);
+      // recording_mode（R4 新增契约字段）：未录制为 null；录制中缺键按 agent 兜底
+      setRecordingMode(rec ? (d?.recording_mode === 'user' ? 'user' : 'agent') : null);
       if (!rec) setRecordingName('');
     } catch (e) {
       setErr('读取宏列表失败: ' + (e as Error).message);
@@ -152,21 +169,81 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
     return () => { alive = false; clearInterval(t); };
   }, [runActive, runId, pollMs]);
 
+  // R4：start 成功后的本地录制态落位（两种模式共用）
+  const applyStartOk = (serverName: unknown, fallback: string, mode: 'agent' | 'user') => {
+    setRecording(true);
+    setRecordingName(String(serverName || fallback));
+    setRecordingMode(mode);
+    setRecordingSteps(0);
+    setRecName('');
+    setPermDenied(false);
+  };
+
+  /** R4：start 失败的归一——403 未授权落引导 callout，其余（含 409 互斥）走错误 callout。 */
+  const handleStartError = (e: unknown) => {
+    const msg = (e as Error).message;
+    if (msg.startsWith('input_monitoring_not_granted')) setPermDenied(true);
+    else setErr('开始录制失败: ' + msg);
+  };
+
   const startRecord = async () => {
     const name = recName.trim();
     if (!name || busy || runActive) return;
-    setBusy(true); setErr(null); setWarn(null);
+    setBusy(true); setErr(null); setWarn(null); setPermDenied(false);
     try {
+      // agent 模式：现状保留——body 只带 name（后端 mode 缺省即 "agent"）
       const d = await apiJson('/cu-macros/record/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       });
-      setRecording(true);
-      setRecordingName(String(d?.name || name));
-      setRecordingSteps(0);
-      setRecName('');
-    } catch (e) { setErr('开始录制失败: ' + (e as Error).message); }
+      applyStartOk(d?.name, name, 'agent');
+    } catch (e) { handleStartError(e); }
     finally { setBusy(false); }
+  };
+
+  /** R4：已授权后的 user 模式 start（permission 前置通过与「请求授权」复查通过共用）。 */
+  const startUserPost = async (name: string) => {
+    const d = await apiJson('/cu-macros/record/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, mode: 'user' }),
+    });
+    applyStartOk(d?.name, name, 'user');
+  };
+
+  // R4「录制我的操作」：先 GET permission → 未授权落引导 callout（不发 start）；
+  // 已授权才 POST start {name, mode:"user"}；start 403（权限被收回等）同样落引导 callout。
+  const startUserRecord = async () => {
+    const name = recName.trim();
+    if (!name || busy || runActive) return;
+    setBusy(true); setErr(null); setWarn(null); setPermDenied(false);
+    try {
+      const p = await apiJson('/cu-macros/user-record/permission');
+      if (!p?.granted) { setPermDenied(true); return; }
+      await startUserPost(name);
+    } catch (e) { handleStartError(e); }
+    finally { setBusy(false); }
+  };
+
+  // R4 引导 callout 的「请求授权」：POST permission/request 触发系统授权流程，
+  // 再 GET 复查一次 granted（结果以复查为准——用户也可能在系统设置里手动改）；
+  // 已授权则直接补发 user start，仍无权限则保持引导 callout。
+  const requestPermission = async () => {
+    if (permBusy) return;
+    setPermBusy(true); setErr(null);
+    try {
+      await apiJson('/cu-macros/user-record/permission/request', { method: 'POST' });
+      const p = await apiJson('/cu-macros/user-record/permission');
+      if (p?.granted) {
+        setPermDenied(false);
+        const name = recName.trim();
+        if (name) await startUserPost(name);
+      }
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg.startsWith('input_monitoring_not_granted')) setPermDenied(true);
+      else setErr('请求授权失败: ' + msg);
+    }
+    finally { setPermBusy(false); }
   };
 
   const stopRecord = async () => {
@@ -176,6 +253,7 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
       const d = await apiJson('/cu-macros/record/stop', { method: 'POST' });
       setRecording(false);
       setRecordingName('');
+      setRecordingMode(null);
       setRecordingSteps(0);
       // 0.4.33（F2）0 步停止契约：HTTP 200 {ok:true, saved:false, steps:0, message}
       //   → 警告原文上屏，⛔ 不 refresh（宏没落盘，列表无新项可刷）；
@@ -240,7 +318,11 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
         任务宏（操作录制与回放）
       </div>
       <div style={hintStyle}>
-        录制的是 Agent 自己发起的 CU 动作（语义化步骤）；回放时逐步重新定位执行，窗口挪动后仍能命中。
+        录制 Agent 操作：记录 Agent 自己发起的 CU 动作（语义化步骤）；回放时逐步重新定位执行，窗口挪动后仍能命中。
+      </div>
+      {/* R4：「录制我的操作」边界写清——录什么、不录什么、产物去向 */}
+      <div style={hintStyle}>
+        录制我的操作：记录你的鼠标点击与键盘输入（密码框内容不会被记录）；录制产物与 Agent 宏同格式，可回放、可交给 Agent 使用。
       </div>
 
       {err && (
@@ -259,11 +341,29 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
         </div>
       )}
 
+      {/* R4：输入监控权限未授予引导——permission granted:false 或 start 403 时上屏；
+          授权结果以「请求授权」后的复查为准（用户也可能去系统设置手动开） */}
+      {permDenied && !recording && (
+        <div style={{ ...calloutStyle('warn'), margin: '8px 0', alignItems: 'center' }}>
+          <Icon name="alert-triangle" size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span style={{ flex: 1 }}>
+            录制我的操作需要「输入监控」权限。请前往 系统设置 → 隐私与安全性 → 输入监控 为本应用开启；或点击「请求授权」由系统发起授权。
+          </span>
+          <button className="ui-btn ui-btn-secondary"
+            style={{ ...btnSecondary, height: 24, padding: '0 10px', fontSize: 12, whiteSpace: 'nowrap' }}
+            onClick={requestPermission} disabled={permBusy}>
+            {permBusy ? '正在请求…' : '请求授权'}
+          </button>
+        </div>
+      )}
+
       {/* ── 录制控制 ── */}
       {recording ? (
         <div style={{ ...calloutStyle('info'), margin: '8px 0', alignItems: 'center' }}>
           <span style={{ flex: 1 }}>
-            ● 正在录制{recordingName ? `「${recordingName}」` : ''} · 已捕获 {recordingSteps} 步——此后 Agent 的每个 CU 动作都会记为一步
+            {/* R4：按 recording_mode 区分进行态文案；停止按钮两模式同一 */}
+            ● 正在录制{recordingName ? `「${recordingName}」` : ''} · {recordingMode === 'user' ? '录制我的操作中' : '录制 Agent 操作中'}…已捕获 {recordingSteps} 步
+            {recordingMode === 'user' ? '——你的鼠标点击与键盘输入会记为一步' : '——此后 Agent 的每个 CU 动作都会记为一步'}
           </span>
           <button className="ui-btn ui-btn-primary"
             style={{ ...btnPrimary, height: 24, padding: '0 10px', fontSize: 12 }}
@@ -280,7 +380,12 @@ export function CuMacroPanel({ pollMs = 500 }: { pollMs?: number }) {
           <button className="ui-btn ui-btn-secondary"
             style={{ ...btnSecondary, whiteSpace: 'nowrap' }}
             onClick={startRecord} disabled={busy || runActive || !recName.trim()}>
-            开始录制
+            录制 Agent 操作
+          </button>
+          <button className="ui-btn ui-btn-secondary"
+            style={{ ...btnSecondary, whiteSpace: 'nowrap' }}
+            onClick={startUserRecord} disabled={busy || runActive || !recName.trim()}>
+            录制我的操作
           </button>
         </div>
       )}

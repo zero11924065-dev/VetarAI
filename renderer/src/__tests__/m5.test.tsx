@@ -22,7 +22,7 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import React from 'react';
 import { ProjectPanel } from '../panels/ProjectPanel';
 
-import { jsonRes, sseRes } from './helpers/fetchMock';
+import { jsonRes, sseRes, tokenEvent, doneEvent } from './helpers/fetchMock';
 
 // TS-111 M5 前端专项：模型降级卡片 / 项目改名行内编辑
 if (typeof (globalThis as any).localStorage === 'undefined') {
@@ -163,8 +163,10 @@ describe('M5 模型降级卡片（ChatPanel 错误块）', () => {
   });
 });
 
-describe('0.4.31（P2）顶栏指示器：懒加载当前档（上限 N）', () => {
-  // /context/limit 返回 lazy=true + ceiling → 「≈用量 / 当前档（上限 N）」；否则单值现状
+describe('0.4.33（R3）顶栏指示器：懒加载口径回归——主数字=上限（当前档 N）', () => {
+  // /context/limit 返回 lazy=true + ceiling → 「≈用量 / 上限（当前档 N）」（R3 回归修复：
+  // 0.4.31 曾显示「/ 当前档（上限 N）」，用户看到主数字变 12288 以为 num_ctx 设置失效）；
+  // 无追加字段（懒加载关闭/未配置）→ 保持单值现状
   function mockBase(limitResp: Record<string, unknown>) {
     const impl: typeof fetch = async (url) => {
       const u = String(url);
@@ -179,18 +181,20 @@ describe('0.4.31（P2）顶栏指示器：懒加载当前档（上限 N）', () 
     vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
   }
 
-  it('lazy=true 且有 ceiling → 显示「≈用量 / 当前档（上限 N）」', async () => {
+  it('R3-1 lazy=true 且有 ceiling → 主数字=上限，当前档进括号「≈用量 / 上限（当前档 N）」', async () => {
     mockBase({ context_length: 12288, source: 'config', ceiling: 65536, lazy: true });
     const { ChatPanel } = await import('../panels/ChatPanel');
     const r = render(<ChatPanel projectId="p1" agentId="a1" />);
     await waitFor(() => {
       const txt = document.body.textContent || '';
-      expect(txt).toContain('/ 12288（上限 65536）');
+      expect(txt).toContain('/ 65536（当前档 12288）');
     }, { timeout: 3000 });
+    // ⛔ 旧口径（当前档当主数字）不得回魂
+    expect(document.body.textContent).not.toContain('/ 12288（上限');
     r.unmount();
   });
 
-  it('无 lazy 追加字段 → 保持单值（不显示上限）', async () => {
+  it('R3-2 无 lazy 追加字段 → 保持单值（不显示当前档/上限注解）', async () => {
     mockBase({ context_length: 262144, source: 'show' });
     const { ChatPanel } = await import('../panels/ChatPanel');
     const r = render(<ChatPanel projectId="p1" agentId="a1" />);
@@ -198,6 +202,56 @@ describe('0.4.31（P2）顶栏指示器：懒加载当前档（上限 N）', () 
       expect(document.body.textContent).toContain('/ 262144');
     }, { timeout: 3000 });
     expect(document.body.textContent).not.toContain('（上限');
+    expect(document.body.textContent).not.toContain('（当前档');
+    r.unmount();
+  });
+
+  it('R3-3 升档刷新：流式 done 后顺手重拉 /context/limit（新档即时上屏，不加轮询）', async () => {
+    // 首拉报起始档 12288；升档后第二次拉报 24576——断言 done 触发重拉且显示新档
+    let limitCalls = 0;
+    const impl: typeof fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/agents/')) return jsonRes([{ id: 'a1', name: '测试', role: 'x', model_name: 'm' }]);
+      if (u.includes('/ollama/models')) return jsonRes([{ name: 'm' }]);
+      if (u.includes('/sessions?')) return jsonRes([{ id: 's1', title: '会话1', message_count: 0 }]);
+      if (u.includes('/context/limit')) {
+        limitCalls += 1;
+        const tier = limitCalls >= 2 ? 24576 : 12288;   // 第二次起 = 升档后的当前档
+        return jsonRes({ context_length: tier, source: 'config', ceiling: 65536, lazy: true });
+      }
+      if (u.includes('/config')) return jsonRes({ reconnect_max_attempts: 3 });
+      if (u.includes('/messages')) return jsonRes([]);
+      if (u.includes('/ollama/chat/stream')) return sseRes([tokenEvent('好'), doneEvent('好')]);
+      return jsonRes([]);
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(impl);
+    const { ChatPanel } = await import('../panels/ChatPanel');
+    const r = render(<ChatPanel projectId="p1" agentId="a1" />);
+    // 首拉上屏：起始档
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('/ 65536（当前档 12288）');
+    }, { timeout: 3000 });
+    const callsAfterMount = limitCalls;
+    // 发一条消息 → 流式完成（done）→ 应触发一次重拉
+    await waitFor(() => expect(document.querySelector('select option[value="s1"]')).toBeTruthy(), { timeout: 3000 });
+    await act(async () => {
+      const sel = document.querySelector('select') as HTMLSelectElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+      setter.call(sel, 's1');
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const inputEl = document.querySelector('textarea[placeholder*="输入消息"]') as HTMLTextAreaElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(inputEl, '你好');
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { (document.querySelector('button[data-tip="发送"]') as HTMLElement).click(); });
+    // 重拉发生（次数 > 挂载时）且新档上屏
+    await waitFor(() => {
+      expect(limitCalls).toBeGreaterThan(callsAfterMount);
+      expect(document.body.textContent).toContain('/ 65536（当前档 24576）');
+    }, { timeout: 4000 });
     r.unmount();
   });
 });

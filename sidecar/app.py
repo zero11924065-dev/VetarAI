@@ -123,6 +123,60 @@ def _auth_timeout() -> float:
         return _AUTH_TIMEOUT_DEFAULT
 
 
+# ── R2（0.4.33）授权记忆：同 agent 同工具只需授权一次 ──────────────────
+# 此前 _sse_authorizer 每次调用都生成新 request_id 弹窗、决定只活一次 await，
+# 无任何记忆——同一会话里模型连续写 10 个敏感文件就弹 10 次（真机反馈）。
+# 两级记忆：
+#   会话级：本 set（随进程生命周期，重启即清）；
+#   永久级：config.json 的 auth_grants（用户点「永久允许」时写入，设置页可逐条移除）。
+# ⚠️ 键口径 = (tool_name, action)，action 为空时用 tool_name 补齐——
+#    绝不含 target_path / 参数 detail（registry 传完整路径、loop 传 json.dumps(params)[:400]，
+#    每次调用都不同，含进键里永远命不中，记忆形同虚设）。
+# ⚠️ 联网安装（action="net_install"）安全敏感（下载外来代码 + 可能切全量联网），
+#    永不进记忆表——每次必弹（见 _sse_authorizer 入口与 api_auth_respond 双重把守）。
+_auth_grants_session: set[tuple[str, str]] = set()
+
+
+def _auth_grant_key(tool_name: str, action: str) -> tuple[str, str]:
+    """记忆键：action 为空时以 tool_name 补齐（两级存储共用的唯一口径，勿另写）。"""
+    return (tool_name, action or tool_name)
+
+
+def _auth_grant_remembered(tool_name: str, action: str) -> bool:
+    """查记忆：会话级命中或永久级（config auth_grants）命中 → True（直接放行）。"""
+    key = _auth_grant_key(tool_name, action)
+    if key in _auth_grants_session:
+        return True
+    try:
+        grants = get_config().get("auth_grants") or []
+        if isinstance(grants, list):
+            for g in grants:
+                if isinstance(g, dict) and (g.get("tool"), g.get("action")) == key:
+                    return True
+    except Exception:
+        pass  # 配置读失败不阻断授权流程（回落为"无记忆"，照常弹窗）
+    return False
+
+
+def _auth_grant_record(tool_name: str, action: str, remember: str) -> None:
+    """用户批准后按记忆级别记录：session=本会话不再询问；always=永久允许（落 config）。
+
+    只记"批准"不记"拒绝"（拒绝语义可能因路径/参数而异，记住拒绝会误伤后续合法操作）。
+    """
+    key = _auth_grant_key(tool_name, action)
+    _auth_grants_session.add(key)
+    if remember == "always":
+        try:
+            grants = [g for g in (get_config().get("auth_grants") or []) if isinstance(g, dict)]
+            if not any((g.get("tool"), g.get("action")) == key for g in grants):
+                grants.append({"tool": key[0], "action": key[1],
+                               "granted_at": datetime.now().isoformat(timespec="seconds")})
+                reload_config({"auth_grants": grants})
+        except Exception as e:
+            # 永久级写盘失败不阻断本次放行（会话级已记上）；设置页只是少一条记录
+            _log.warning("写入永久授权(auth_grants)失败: %s", e)
+
+
 async def _sse_authorizer(tool_name: str, target_path: str, action: str,
                           extra: dict | None = None):
     """SSE 驱动的授权回调（注入 run_tool_loop 的 authorizer 参数）。
@@ -140,9 +194,15 @@ async def _sse_authorizer(tool_name: str, target_path: str, action: str,
     超时按"拒绝"处理；超时时长由 config `auth_confirm_timeout` 决定（0.4.12 B2：
     默认 600s，**0 = 无限等待**，用户可在设置页调整——此前硬编码 120s 导致
     用户晚点确认被误记为拒绝）。
+    R2（0.4.33）：入口先查授权记忆（见 `_auth_grant_remembered`），命中已批准
+    直接放行不再弹窗；联网安装（net_install）永不记忆、每次必弹。
     """
     import uuid
     _is_net_install = action == "net_install"
+    # R2：记忆命中 → 直接放行（返回口径与"用户点允许"一致：非 net_install 即 True）。
+    # 键 = (tool_name, action)，不含 target_path/detail（每次不同，含了永远命不中）。
+    if not _is_net_install and _auth_grant_remembered(tool_name, action):
+        return True
     req_id = str(uuid.uuid4())[:8]
     evt = asyncio.Event()
     _auth_pending[req_id] = {"event": evt, "result": False,
@@ -715,6 +775,9 @@ class AuthRespondReq(BaseModel):
     allowed: bool
     # 0.4.9 任务152：联网安装确认时，用户是否同时同意开启全量联网（切 proxy 模式）
     enable_network: bool = False
+    # R2（0.4.33）：记忆级别——"session"=本会话不再询问；"always"=永久允许；
+    # 缺省/空 = 仅本次（旧前端不带本字段，行为与此前逐字节一致）
+    remember: str | None = None
 
 @app.post("/api/auth/respond")
 async def api_auth_respond(req: AuthRespondReq):
@@ -724,6 +787,13 @@ async def api_auth_respond(req: AuthRespondReq):
         raise HTTPException(status_code=404, detail="授权请求不存在或已过期")
     entry["result"] = req.allowed
     entry["enable_network"] = bool(req.enable_network)
+    # R2：批准 + 用户点了「本会话不再询问 / 永久允许」→ 记入对应级别。
+    # 双重把守：①只在批准时记忆（拒绝不记）；②net_install 永不记忆
+    # （前端本就不给联网安装弹窗配记忆按钮，这里是后端兜底，防绕过前端的调用）。
+    if req.allowed and req.remember in ("session", "always") \
+            and entry.get("action") != "net_install":
+        _auth_grant_record(str(entry.get("tool") or ""), str(entry.get("action") or ""),
+                           req.remember)
     entry["event"].set()
     return {"ok": True}
 
@@ -1097,6 +1167,8 @@ async def api_ollama_chat_stream(req: ChatStreamReq):
         model_strengths_text=_model_strengths_text,
         archive_enabled=bool(req.auto_archive_unit and req.project_id and req.session_id),
         module_catalog_text=_module_catalog_text,
+        # 0.4.33（CU 三期 R1）：CU 能力段（含任务宏指引）与工具暴露同开关
+        computer_use_enabled=_computer_use_on,
     )
     msgs = [{"role": "system", "content": sys_prompt}] + list(req.messages)
 
@@ -2368,31 +2440,62 @@ async def api_computer_use_capabilities():
 
 
 # ── 0.4.32（CU 三期 P2，REQ-FUT-006）任务宏端点 ─────────────────────────
-# 口径（计划 E4）：录制=Agent 自己发起的 CU 动作序列（executor 挂钩语义化落盘），
+# 口径（计划 E4 + 0.4.34 R4）：录制双模式——agent=Agent 自己发起的 CU 动作序列
+# （executor 挂钩语义化落盘，缺省零变化）；user=系统级用户手动操作录制
+# （user_recorder.py CGEventTap listen-only，需「输入监控」TCC，与回放互斥）。
 # 回放=逐步 element 语义重放、失败回落像素、app 未开中止报步骤号（R4 拍板）。
-# ⛔ 不是系统级用户操作录制（AXObserver/事件 tap），那是范围外另一量级需求。
 
 class CuMacroRecordStartReq(BaseModel):
     name: str
+    mode: str = "agent"          # "agent"（默认，现状零变化）| "user"（系统级录制）
 
 
 @app.get("/api/cu-macros")
 async def api_cu_macro_list():
     """宏列表（摘要：id/name/created_at/steps 数）+ 当前是否录制中。
-    0.4.33（F2）：追加 recording_steps（int，未录制 0）——前端录制中轮询显示实时步骤数。"""
+    0.4.33（F2）：追加 recording_steps（int，未录制 0）——前端录制中轮询显示实时步骤数。
+    0.4.34（R4）：追加 recording_mode（null|"agent"|"user"）——两模式 UI 文案分叉。"""
     from sidecar.computer_use import cu_macro as _cm
     return {"ok": True, "macros": await asyncio.to_thread(_cm.list_macros),
             "recording": _cm.is_recording(),
-            "recording_steps": _cm.recording_steps()}
+            "recording_steps": _cm.recording_steps(),
+            "recording_mode": _cm.recording_mode()}
+
+
+@app.get("/api/cu-macros/user-record/permission")
+async def api_cu_user_record_permission():
+    """0.4.34（R4）查询「输入监控」TCC 状态（listen-only tap 的实际授权服务；
+    与辅助功能是两项独立权限，互不覆盖）。只读状态位，无隐私副作用。"""
+    from sidecar.computer_use import user_recorder as _ur
+    g = await asyncio.to_thread(_ur.listen_access_granted)
+    return {"ok": True, "granted": bool(g)}
+
+
+@app.post("/api/cu-macros/user-record/permission/request")
+async def api_cu_user_record_permission_request():
+    """0.4.34（R4）触发系统「输入监控」授权弹窗并返回弹窗后状态。
+    ⚠️ 系统只弹一次；用户在弹窗点「允许」后本进程需重启才生效（TCC 进程启动时读取）。"""
+    from sidecar.computer_use import user_recorder as _ur
+    g = await asyncio.to_thread(_ur.request_listen_access)
+    return {"ok": True, "granted": bool(g)}
 
 
 @app.post("/api/cu-macros/record/start")
 async def api_cu_macro_record_start(req: CuMacroRecordStartReq):
-    """开始录制（单例：已在录制 → 422）。此后 Agent 的 CU 动作逐步落入宏。"""
+    """开始录制（单例：已在录制 → 422/409）。此后对应模式的动作逐步落入宏。
+    0.4.34（R4）契约：
+      - mode="user" 未授予「输入监控」→ 403 input_monitoring_not_granted（含中文指引）；
+      - user 与回放互斥 / agent 与 user 同时录 → 409（already_recording/replay_busy 风格）；
+      - agent+agent 重复开始保持 422 原状（缺省零变化）。"""
     from sidecar.computer_use import cu_macro as _cm
-    r = _cm.start_recording(req.name)
+    r = _cm.start_recording(req.name, mode=req.mode)
     if not r.get("ok"):
-        raise HTTPException(status_code=422, detail=r.get("error"))
+        err = str(r.get("error") or "")
+        if err.startswith("input_monitoring_not_granted"):
+            raise HTTPException(status_code=403, detail=err)
+        if err.startswith("replay_busy") or r.get("conflict"):
+            raise HTTPException(status_code=409, detail=err)
+        raise HTTPException(status_code=422, detail=err)
     return r
 
 
@@ -2416,12 +2519,15 @@ async def api_cu_macro_record_stop():
 @app.post("/api/cu-macros/{macro_id}/replay")
 async def api_cu_macro_replay(macro_id: str):
     """异步回放：立即返回 run_id，后台线程逐步执行（真实键鼠，同一时刻只允许
-    一个回放；忙 → 422）。步骤事件经 app_events 推送，状态经 /replays/{run_id} 查询。"""
+    一个回放；忙 → 422）。步骤事件经 app_events 推送，状态经 /replays/{run_id} 查询。
+    0.4.34（R4）互斥：user 模式录制中回放 → 409（合成事件会被 tap 录进宏污染）。"""
     from sidecar.computer_use import cu_macro as _cm
     r = _cm.start_replay(macro_id)
     if not r.get("ok"):
         if str(r.get("error")) == "not_found":
             raise HTTPException(status_code=404, detail="宏不存在或已删除")
+        if str(r.get("error") or "").startswith("user_recording_busy"):
+            raise HTTPException(status_code=409, detail=r.get("error"))
         raise HTTPException(status_code=422, detail=r.get("error"))
     return r
 

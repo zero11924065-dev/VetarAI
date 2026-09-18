@@ -2109,6 +2109,15 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
         (async () => {
           let allowed = false;
           let enableNetwork = false;
+          // R2（0.4.33）授权记忆：用户点「本会话不再询问 / 永久允许」时由 Dialog 回传级别，
+          // 随 /auth/respond 带给后端记忆；null = 仅本次（普通「允许」按钮）。
+          // 联网安装（net_install）不配记忆按钮——安全敏感，每次必问。
+          let remember: 'session' | 'always' | null = null;
+          const rememberOpts = {
+            rememberSessionLabel: '本会话不再询问',
+            rememberAlwaysLabel: '永久允许',
+            onRemember: (m: 'session' | 'always') => { remember = m; },
+          };
           if (isNetInstall) {
             // 联网安装：必须告知"下载什么、从哪下载"，用户确认后才联网（用户实测事故：
             // 子 Agent 擅自 install_skill 去 GitHub 拉取，弹 git 凭据窗并装入无关插件）。
@@ -2142,6 +2151,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               danger: true,
               confirmText: '允许执行',
               cancelText: '拒绝',
+              ...rememberOpts,
             });
           } else if (isComputerUse) {
             // 3.48.1：Agent 要操作真实电脑（点击/输入）。误操作后果可见（删文件/发消息/点支付），
@@ -2160,6 +2170,7 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               danger: true,
               confirmText: '允许执行',
               cancelText: '拒绝',
+              ...rememberOpts,
             });
           } else {
             allowed = await confirmDialog({
@@ -2168,12 +2179,18 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
               danger: true,
               confirmText: '允许',
               cancelText: '拒绝',
+              ...rememberOpts,
             });
           }
           try {
             await fetch(`${API}/auth/respond`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ request_id: rid, allowed, enable_network: allowed && enableNetwork }),
+              body: JSON.stringify({
+                request_id: rid, allowed,
+                enable_network: allowed && enableNetwork,
+                // R2：点了「本会话不再询问 / 永久允许」才带 remember；普通允许/拒绝不带
+                ...(remember ? { remember } : {}),
+              }),
             });
           } catch (e) { console.error('auth respond failed:', e); }
         })();
@@ -2278,6 +2295,11 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
             return [...prev, finalMsg as Message];
           });
         }
+        // R3（0.4.33）升档刷新：懒加载升档发生在流式过程中（loop 触档后下一轮
+        // options.num_ctx 即注入新档），而指示器此前只在挂载/换模型时拉一次
+        // → 「当前档 N」升档后不实时。每次流式完成顺手重拉一次（fire-and-forget，
+        // 不加轮询）；懒加载关闭时后端无 ceiling/lazy 追加字段，重拉是 no-op 口径。
+        fetchContextLimit();
       }
     };
 
@@ -2484,7 +2506,12 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
   const modelUsed = getEffectiveModel();
 
   // Token 进度条颜色三档
-  const tokenRatio = contextLimit > 0 ? tokenUsed / contextLimit : 0;
+  // R3（0.4.33）指示器口径回归：懒加载生效（ceiling>0）时主除数 = 用户上限 ceiling，
+  // 「当前档」降为括号注解——0.4.31 把懒加载当前档（首访 12288）报成主数字，
+  // 用户误以为设置的 num_ctx 上限失效（实际档位生效没错，是显示口径回归）。
+  // 占比/颜色与主数字同除数，否则条与数对不上。
+  const contextDivisor = contextCeiling > 0 ? contextCeiling : contextLimit;
+  const tokenRatio = contextDivisor > 0 ? tokenUsed / contextDivisor : 0;
   const tokenBarColor = tokenRatio >= 0.99 ? colors.danger : tokenRatio >= 0.90 ? colors.warn : colors.ok;
 
   // A12（0.4.25）：顶栏「⋯ 更多操作」菜单项（原 9 枚图标平铺太挤 → 低频动作收纳进菜单）。
@@ -2559,11 +2586,13 @@ export function ChatPanel({ projectId, agentId, jumpToSessionId, onJumpConsumed 
           {contextLimit > 0 && (
             <div
               title={contextCeiling > 0
-                ? `当前会话上下文估算：约 ${tokenUsed} / 当前档 ${contextLimit}（懒加载：上下文膨胀自动升档，上限 ${contextCeiling}；按未移入仓库的对话实时估算，非模型精确计费口径）`
+                ? `当前会话上下文估算：约 ${tokenUsed} / 上限 ${contextCeiling}（懒加载：当前档 ${contextLimit}，上下文膨胀自动升档直至上限；按未移入仓库的对话实时估算，非模型精确计费口径）`
                 : `当前会话上下文估算：约 ${tokenUsed} / 上限 ${contextLimit}（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）`}
               style={{display:'flex',alignItems:'center',gap:6,fontSize:11, cursor:'help'}}>
               <span className="chat-topbar-ctx-text" style={{color:colors.textTertiary, whiteSpace:'nowrap'}}>
-                上下文 ≈{tokenUsed} / {contextLimit}{contextCeiling > 0 ? `（上限 ${contextCeiling}）` : ''}
+                {/* R3：懒加载生效 → 主数字 = 用户上限 ceiling，「当前档 N」进括号；
+                    懒加载关闭/未配置 → 维持原单值显示 */}
+                上下文 ≈{tokenUsed} / {contextCeiling > 0 ? contextCeiling : contextLimit}{contextCeiling > 0 ? `（当前档 ${contextLimit}）` : ''}
               </span>
               <div style={{width:64,height:4,background:colors.borderSubtle,borderRadius:2,overflow:'hidden'}}>
                 <div style={{

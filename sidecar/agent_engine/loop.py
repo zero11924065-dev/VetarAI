@@ -574,6 +574,62 @@ def tools_spec(with_delegation: bool = True, with_knowledge: bool = False,
                     },
                 },
             },
+            # 0.4.33（CU 三期 R1）：任务宏接入 Agent 工具组（录制/回放/列表）。
+            # 此前宏只有 HTTP 层（/api/cu-macros/*）供前端用，Agent 完全感知不到——
+            # 用户说「把这个动作录成宏」时 Agent 只能自由发挥写 shell 脚本。
+            # ⛔ 录制语义：只捕获【Agent 自己经 CU 工具发起的动作序列】（executor 挂钩落 step），
+            #    不是系统级用户操作录制；回放是语义重放（元素命中失败回落像素坐标）。
+            {
+                "type": "function",
+                "function": {
+                    "name": "cu_macro_record",
+                    "description": "任务宏录制开关。action=start 开始录制（需带 name）：此后你经 "
+                                   "mouse_click / keyboard_type / keyboard_hotkey 执行成功的动作会"
+                                   "逐步录入宏；action=stop 停止并保存，返回宏 id 与步数。"
+                                   "录制窗口内没有任何动作时【不会保存】（返回 saved=false 与说明）。"
+                                   "⛔ 录制的只是你自己发起的 CU 动作序列，用户手动操作不会被捕获。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["start", "stop"],
+                                       "description": "start=开始录制，stop=停止并保存"},
+                            "name": {"type": "string",
+                                     "description": "宏名称（action=start 时必填）"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "cu_macro_replay",
+                    "description": "回放已保存的任务宏（id 或 name 二选一；同名多个时必须用 id）。"
+                                   "回放是【语义重放】：点击步骤按元素 role/title 重定位（窗口挪位"
+                                   "仍命中），匹配不到时回落录制时的像素坐标；输入/按键按原内容重放。"
+                                   "回放驱动真实键鼠，开始前会请用户确认一次；目标应用未运行时"
+                                   "在该步报错并中止。0 步空宏不可回放（返回可读错误）。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string",
+                                   "description": "宏 id（cu- 开头，见 cu_macro_list 返回）"},
+                            "name": {"type": "string",
+                                     "description": "宏名称（与 id 二选一，id 优先）"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "cu_macro_list",
+                    "description": "列出全部已保存的任务宏（id/名称/步数/创建时间）与当前录制状态。"
+                                   "回放前先调用本工具确认宏存在、拿到准确 id。"
+                                   "本工具组不提供删除：如需删除宏，请用户在宏管理界面操作。",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
         ])
     # 0.4.9 F2：子 Agent（with_install=False）剔除联网安装工具，杜绝擅自 git clone。
     # 默认 True 保持主 Agent 行为不变（现有测试断言主会话共 10 工具仍成立）。
@@ -599,6 +655,7 @@ def build_system_prompt(
     model_strengths_text: str = "",
     archive_enabled: bool = False,
     module_catalog_text: str = "",
+    computer_use_enabled: bool = False,
 ) -> str:
     """按需求顺序拼装：红线区 → 身份 → 环境 → 工具说明（+委派纪律）。零硬编码（全从入参）。
     M4（TS-110）：新增知识/记忆/技能注入（禁止事项并入红线区，100% 拦截；优先级 记忆>知识）。
@@ -666,6 +723,21 @@ def build_system_prompt(
         base += ("\n【可用应用模块动作】（用 app_control 工具调用：module=模块名, action=动作名, "
                  "params=参数对象。低成本查询类直接执行；运行工作流、创建圆桌等高成本动作"
                  "会先请用户确认，被拒绝时不要重试）\n" + module_catalog_text)
+    # 0.4.33（CU 三期 R1）：Computer Use 能力段——仅当总开关开启时注入（关闭时零开销）。
+    # 此前 CU 能力只靠工具描述自解释，而 0.4.32 上线的任务宏在提示词里零提及——
+    # 实测后果：用户说「把这个动作录成宏」，Agent 自由发挥在桌面写 shell 脚本。
+    if computer_use_enabled:
+        base += (
+            "\n【Computer Use】（已开启电脑操作能力）\n"
+            "- 截屏/点击/输入/元素定位可操作用户真实电脑：动作前先 screen_view 看清界面"
+            "（界面会变，别凭记忆操作），坐标按 coord_factor 换算；"
+            "点击/输入等副作用动作会请用户逐步确认。\n"
+            "- 【任务宏】用户说「录成宏 / 录制这个动作 / 回放宏」时，用 cu_macro_record"
+            "（action=start/stop）、cu_macro_replay、cu_macro_list，⛔ 不要自己写脚本模拟。\n"
+            "- 录制只捕获【你自己经 CU 工具发起的动作序列】（仅成功动作落步，"
+            "用户手动操作不会被捕获）；回放是语义重放（点击按元素 role/title 重定位，"
+            "匹配不到回落录制时像素坐标），驱动真实键鼠、开始前会请用户确认一次。"
+        )
     # 0.4.9（3.47.1）：单元归档纪律——仅当会话窗开关开启时注入（关闭时工具不存在，零开销）
     if archive_enabled:
         base += (
@@ -1556,6 +1628,147 @@ async def run_tool_loop(
                         else:
                             computer_use_strikes[tc["name"]] = _cu_strikes + 1
 
+            # ---- 0.4.33（CU 三期 R1）：任务宏路由（录制/回放/列表）----
+            # 与 5 个动作工具的关系（防线取舍，刻意为之）：
+            # - record/list 是纯状态/只读操作（不窥屏、不发任何 HID 事件）→ 同 screen_view
+            #   不弹逐步确认；也【不查白名单/权限】——白名单与权限防的是"碰别的应用/发事件"，
+            #   宏元数据操作两者都不沾，查了只会误伤（如录制中被白名单挡住 start/stop）。
+            # - replay 驱动真实键鼠 → 走防线4 白名单 + 防线1 辅助功能预检 + 防线3 确认
+            #   【整宏一次】；回放线程内部的逐步执行保持 0.4.32 现状（不复用逐步确认链，
+            #   逐步弹窗会让长宏变成弹窗风暴——H 组真机事故同款教训）。
+            # - 宏工具【不计入】computer_use_strikes 连败熔断：already_recording /
+            #   empty_macro / replay_busy / not_found 是语义错误（Agent 可据此自纠正），
+            #   不是硬件连败；熔断它们会误锁正常流程。
+            # - 删除刻意不暴露给 Agent（见 tools_spec 注释与 cu_macro_list 描述）：
+            #   宏文件在 data_root/cu_macros（沙箱外），删除不可逆，交由用户在前端界面管理。
+            if tc["name"] in ("cu_macro_record", "cu_macro_replay", "cu_macro_list"):
+                _args_m = tc["args"] or {}
+                if computer_use_ctx is None:
+                    result = {"ok": False, "error": (
+                        "当前会话未启用 Computer Use（工具不应出现在列表中）。"
+                        "请如实告知用户：需在 设置 → Computer Use 开启总开关后才能操作电脑。")}
+                else:
+                    try:
+                        from sidecar.computer_use import cu_macro as _cm
+                    except Exception as e:
+                        _cm = None
+                        result = {"ok": False, "error": f"cu_macro 模块加载失败：{e}"}
+                    if _cm is not None:
+                        if tc["name"] == "cu_macro_list":
+                            result = await asyncio.to_thread(
+                                lambda: {"ok": True, "macros": _cm.list_macros(),
+                                         "recording": _cm.is_recording(),
+                                         "recording_steps": _cm.recording_steps()})
+                        elif tc["name"] == "cu_macro_record":
+                            _act_m = str(_args_m.get("action") or "").strip().lower()
+                            if _act_m == "start":
+                                # 0.4.33 契约原样透传：重名/已在录制 → ok=False 可读错误
+                                result = await asyncio.to_thread(
+                                    _cm.start_recording, str(_args_m.get("name") or ""))
+                            elif _act_m == "stop":
+                                # 0.4.33 契约原样透传：0 步 → {ok, saved:False, steps:0,
+                                # message:"未捕获到任何动作，宏未保存"}（不落盘，HTTP 同款）
+                                result = await asyncio.to_thread(_cm.stop_recording)
+                            else:
+                                result = {"ok": False, "error": (
+                                    "bad_arg: cu_macro_record 的 action 只能是 start/stop"
+                                    f"（收到 {_act_m!r}）")}
+                        else:
+                            # cu_macro_replay：先解析 id（name → id 精确匹配；
+                            # 同名多个 → 拒绝猜测，回放是真实键鼠，猜错后果可见）
+                            _mid = str(_args_m.get("id") or "").strip()
+                            _mname = str(_args_m.get("name") or "").strip()
+                            if not _mid and _mname:
+                                _matches = [m for m in _cm.list_macros()
+                                            if m.get("name") == _mname]
+                                if len(_matches) == 1:
+                                    _mid = str(_matches[0].get("id") or "")
+                                elif not _matches:
+                                    result = {"ok": False, "error": (
+                                        f"not_found: 找不到名为「{_mname}」的宏。"
+                                        "请先 cu_macro_list 查看现有宏的 id/名称。")}
+                                else:
+                                    _ids = "、".join(str(m.get("id")) for m in _matches[:5])
+                                    result = {"ok": False, "error": (
+                                        f"ambiguous: 名为「{_mname}」的宏有 {len(_matches)} 个"
+                                        f"（id：{_ids}）。回放会操作真实键鼠，不能猜——"
+                                        "请改用 id 参数指定其中一个。")}
+                            elif not _mid:
+                                result = {"ok": False, "error": (
+                                    "bad_arg: cu_macro_replay 需要 id 或 name 参数"
+                                    "（先 cu_macro_list 查看现有宏）")}
+                            if _mid:
+                                # 防线4 白名单 + 防线1 权限预检 + 防线3 整宏一次确认
+                                try:
+                                    from sidecar.computer_use import (
+                                        check_whitelist as _wl_m_f,
+                                        check_permission_for as _perm_m_f)
+                                    import sidecar.config as _cfg_m
+                                    _cfgm = _cfg_m.get_config()
+                                    _wlm = _cfgm.get("computer_use_app_whitelist") or []
+                                    _confirm_m = bool(_cfgm.get("computer_use_confirm_each", True))
+                                except Exception as e:
+                                    result = {"ok": False,
+                                              "error": f"computer_use 模块加载失败：{e}"}
+                                    _wlm = None
+                                if _wlm is not None:
+                                    _wl_rm = _wl_m_f(_wlm if isinstance(_wlm, list) else [])
+                                    if not _wl_rm.get("ok"):
+                                        result = {"ok": False, "error": (
+                                            f"app_not_allowed: {_wl_rm.get('reason')}")}
+                                    elif not (_pm := _perm_m_f("cu_macro_replay")).get("ok"):
+                                        result = {"ok": False,
+                                                  "error": _pm.get("error") or "权限未授予"}
+                                    else:
+                                        _allowed_m = True
+                                        if _confirm_m:
+                                            _auth_m = computer_use_ctx.get("authorizer")
+                                            if _auth_m is None:
+                                                result = {"ok": False, "error": (
+                                                    "computer_use_denied: 「回放宏」需用户确认，"
+                                                    "但当前无授权通道，已拒绝执行"
+                                                    "（不擅自操作你的电脑）。")}
+                                                _allowed_m = False
+                                            else:
+                                                _ok_m = await _auth_m(
+                                                    "computer_use:cu_macro_replay",
+                                                    json.dumps({"id": _mid},
+                                                               ensure_ascii=False)[:400],
+                                                    "computer_use",
+                                                    {"kind": "computer_use",
+                                                     "tool": "cu_macro_replay",
+                                                     "desc": "回放宏",
+                                                     "args": {"id": _mid},
+                                                     "app": _wl_rm.get("app") or ""})
+                                                _allowed_m = (
+                                                    _ok_m.get("allowed")
+                                                    if isinstance(_ok_m, dict) else bool(_ok_m))
+                                                if not _allowed_m:
+                                                    result = {"ok": False, "error": (
+                                                        "denied_by_user: 用户拒绝了本次「回放宏」"
+                                                        "操作。不要再重试该操作，请如实告知用户"
+                                                        "已取消，并询问下一步。")}
+                                        if _allowed_m:
+                                            result = await asyncio.to_thread(
+                                                _cm.start_replay, _mid)
+                                            if result.get("ok"):
+                                                # 回放异步（后台线程真实键鼠逐步执行）：
+                                                # 告知 Agent 不要干等，可截屏核对结果
+                                                result["hint"] = (
+                                                    "回放已在后台开始（真实键鼠逐步执行）。"
+                                                    "执行期间请勿再发起其他 CU 动作（会互相"
+                                                    "抢焦点）；如需确认效果，稍后 screen_view "
+                                                    "截屏核对实际界面状态。")
+                                            else:
+                                                # 0.4.33 契约翻译：422 语义 → Agent 可读文本
+                                                _err_m = str(result.get("error") or "")
+                                                if _err_m == "not_found":
+                                                    result["error"] = (
+                                                        f"not_found: 宏「{_mid}」不存在或已删除。"
+                                                        "请先 cu_macro_list 查看现有宏。")
+                                                # empty_macro / replay_busy 本身已是
+                                                # 中文可读文本，原样透传
+
             # ---- 0.4.9（3.47.1）：archive_work_unit 路由（单元归档）----
             # 不走 registry.execute：归档是"搬移本会话消息"，需要 project_id/session_id，
             # 与文件工具的路径语义无关。范式对齐 search_knowledge（同属知识仓库拉模式配套）。
@@ -1809,10 +2022,13 @@ async def run_tool_loop(
             # 仅"敏感系统位置的删除/覆盖"才请求用户确认，其余操作默认放行。
             # TS-107/TS-110：delegate_task 与 read_skill 已在上方路由，跳过通用执行。
             # TS-120 阶段二：search_knowledge 同理（拉模式知识检索路由）。
+            # 0.4.33（CU 三期 R1）：cu_macro_* 三工具已在上方宏路由，同样跳过通用执行
+            # （漏登会被 registry 二次执行并覆盖 result——动作工具的既有登记同款纪律）。
             if tc["name"] not in ("delegate_task", "read_skill", "search_knowledge",
                                   "archive_work_unit", "app_control",
                                   "screen_view", "mouse_click",
-                                  "keyboard_type", "keyboard_hotkey", "element_locate"):
+                                  "keyboard_type", "keyboard_hotkey", "element_locate",
+                                  "cu_macro_record", "cu_macro_replay", "cu_macro_list"):
                 result = await _run_tool(tc["name"], tc["args"], sandbox_root, authorizer)
             ok = bool(result.get("ok"))
             if ok:

@@ -311,12 +311,27 @@ def _reset_ctx_lazy_state() -> None:
         _CTX_LAZY_STATE.clear()
 
 
+def _strip_tag(name: str) -> str:
+    """模型名去 tag：`qwen3.8:latest` → `qwen3.8`。
+
+    既有口径原本是 `_raw_model_options` 里内联的 `name.split(":", 1)[0]`；
+    R3（0.4.33）配置键侧也要做同口径归一化，收敛成函数防止两处写法漂移。
+    """
+    return name.split(":", 1)[0]
+
+
 def _raw_model_options(model: str) -> dict[str, Any]:
     """从 config 的 model_options 里取该模型的原始配置（未做后端映射）。
 
-    匹配规则：先精确匹配，再试 `模型名:tag` 去 tag 匹配。
-    理由：Ollama 模型名常带 tag（`qwen3.8:latest`），而用户配置时通常写 `qwen3.8`；
-    若只精确匹配，用户配的项会静默失效——这类"设了不生效"的缺陷极难排查。
+    匹配规则（三级，优先级从高到低）：
+      1. 精确匹配：查询名原样命中配置键；
+      2. 查询名去 tag：查询 `qwen3.8:latest` 命中配置键 `qwen3.8`
+         （Ollama 模型名常带 tag，而用户配置时通常不写 tag）；
+      3. **配置键去 tag**（R3，0.4.33）：配置键 `qwen3.8:latest` 命中查询 `qwen3.8`
+         ——旧逻辑只给查询名去 tag、不给配置键去 tag，用户在设置页存了带 tag 的键
+         （如下拉选中的 `qwen3.8:latest`）而会话模型名不带 tag 时 configured_num_ctx
+         静默落空 → /api/context/limit 掉到 ps/show 级，指示器误显示模型默认值
+         262144，用户以为 num_ctx 设置失效。两侧同口径归一后该形态必然命中。
     """
     mo = _cfg().get("model_options")
     if not isinstance(mo, dict) or not mo:
@@ -326,8 +341,15 @@ def _raw_model_options(model: str) -> dict[str, Any]:
         return {}
     hit = mo.get(name)
     if not isinstance(hit, dict):
-        base = name.split(":", 1)[0]
+        base = _strip_tag(name)
         hit = mo.get(base)
+        if not isinstance(hit, dict):
+            # R3：配置键侧同样去 tag（第三级）。遍历顺序 = dict 插入序，先配先中；
+            # 精确/查询去 tag 两级已在上方先行，不会改变既有命中的优先级。
+            for k, v in mo.items():
+                if isinstance(k, str) and _strip_tag(k) == base and isinstance(v, dict):
+                    hit = v
+                    break
     return dict(hit) if isinstance(hit, dict) else {}
 
 

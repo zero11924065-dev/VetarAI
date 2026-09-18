@@ -156,6 +156,34 @@ def main() -> None:
     check("A2-7 configured_num_ctx 精确取值", io.configured_num_ctx("qwen3.8") == 4096)
     check("A2-8 configured_num_ctx 未配置 → None", io.configured_num_ctx("other-model") is None)
 
+    # ── R3（0.4.33）：tag 归一化双侧化——配置键也去 tag ─────────────────
+    # 旧 bug：只对查询名去 tag。设置页存了带 tag 的键（qwen3.8:latest）而会话模型名
+    # 不带 tag（qwen3.8）时 configured_num_ctx 落空 → 指示器误显示模型默认 262144。
+    setcfg({"qwen3.8:latest": {"num_ctx": 65536}})
+    check("R3-1 ⛳ 配置键带 tag + 查询不带 tag → 命中 num_ctx",
+          io.configured_num_ctx("qwen3.8") == 65536,
+          str(io.configured_num_ctx("qwen3.8")))
+    check("R3-2 model_options 同口径（注入 payload 也不落空）",
+          io.model_options("qwen3.8") == {"options": {"num_ctx": 65536}},
+          str(io.model_options("qwen3.8")))
+    check("R3-3 查询带不同 tag 也命中（两侧同口径归一）",
+          io.configured_num_ctx("qwen3.8:7b") == 65536,
+          str(io.configured_num_ctx("qwen3.8:7b")))
+    # 优先级钉住：精确 > 查询名去 tag > 配置键去 tag
+    setcfg({"qwen3.8": {"num_ctx": 4096}, "qwen3.8:latest": {"num_ctx": 65536}})
+    check("R3-4 精确匹配优先：查询 qwen3.8 命中无 tag 键",
+          io.configured_num_ctx("qwen3.8") == 4096, str(io.configured_num_ctx("qwen3.8")))
+    check("R3-5 精确匹配优先：查询 qwen3.8:latest 命中带 tag 键",
+          io.configured_num_ctx("qwen3.8:latest") == 65536,
+          str(io.configured_num_ctx("qwen3.8:latest")))
+    check("R3-6 查询名去 tag 优先于配置键去 tag：qwen3.8:7b 命中 qwen3.8",
+          io.configured_num_ctx("qwen3.8:7b") == 4096,
+          str(io.configured_num_ctx("qwen3.8:7b")))
+    setcfg({"qwen3.8:latest": {"num_ctx": 65536}})
+    check("R3-7 不相关模型名不受归一化影响 → None",
+          io.configured_num_ctx("qwen3") is None
+          and io.configured_num_ctx("deepseek-r1:14b") is None)
+
     # ── 0.4.31 懒加载语义（旧语义上方已用 ctx_lazy_enabled=False 钉住）──
     # 完整覆盖见 test_ctx_lazy.py；此处只守 A2 注入口径的分叉点。
     setcfg({"qwen3.8": {"num_ctx": 65536}}, "ollama", ctx_lazy_enabled=True)

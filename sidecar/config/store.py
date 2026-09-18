@@ -155,9 +155,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 0.4.32（CU 二期 E2 点击校正链）：点击前对目标坐标做 AX 命中测试，命中则改点元素
     # frame 中心；未命中/无权限/异常一律回落原像素坐标（不阻断点击，审计如实记录命中方式）。
     "cu_element_locate_enabled": True,   # 元素定位校正开关，默认开；关闭=一期纯像素点击行为。
+    # 0.4.34（CU 四期 R4 用户手动操作录制）：系统级录制（CGEventTap listen-only）硬上限
+    # 秒数——到点自动停（视作正常 stop：有步落盘）。防用户忘了停导致 tap 长驻监听
+    # （隐私面 + 内存面双风险）。下限 10s（再短录不出任何完整操作），上限 86400。
+    "cu_user_record_max_seconds": 600,
     # 0.4.12（B2）：权限确认弹窗的等待超时（秒）。此前硬编码 120s（app.py _AUTH_TIMEOUT），
     # 用户离开一会儿回来点确认就被记为"拒绝"（真机反馈）。0=无限等待（不超时，只能手动关闭）。
     "auth_confirm_timeout": 600,         # 默认提到 10 分钟；0=不超时
+    # R2（授权记忆，0.4.33）：「永久允许」清单——用户在同名授权弹窗点「永久允许」后，
+    # 同 (tool, action) 的后续授权请求直接放行不再弹窗（会话级记忆在 app.py 内存，
+    # 本键是永久级，跨进程重启仍生效）。
+    # 元素结构：{"tool": str, "action": str, "granted_at": str(ISO 时间)}。
+    # ⚠️ 键口径只有 (tool, action)，绝不含路径/参数 detail——detail 每次调用都不同，
+    #    含进键里永远命不中，记忆形同虚设。
+    # ⚠️ 联网安装（action="net_install"）安全敏感，永不写入本表（每次必弹）。
+    "auth_grants": [],
 
     # ── 0.4.29（P1 可扩展模型包）─────────────────────────────────────────
     "model_packs_dir": "",               # 模型包安装根；空 = data_root()/models/packs
@@ -374,6 +386,22 @@ def _validate(cur: dict[str, Any]) -> None:
         v = cur.get(key)
         if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= float(v) <= 86400)):
             raise ValueError(f"{key} 必须是 0-86400 的秒数（{label}）")
+    # 0.4.34（CU 四期 R4）：系统级录制硬上限。10-86400 秒（无 0=不限档——
+    # 长驻监听必须有上限，这是设计前提不是可选项）。
+    urm = cur.get("cu_user_record_max_seconds")
+    if urm is not None and (not isinstance(urm, (int, float)) or isinstance(urm, bool)
+                            or not (10 <= float(urm) <= 86400)):
+        raise ValueError("cu_user_record_max_seconds 必须是 10-86400 的秒数")
+    # R2（0.4.33）：永久授权清单结构校验——元素必须含字符串 tool/action；
+    # granted_at 只是展示用元数据，不强校验（缺了不挡，设置页照常列出）。
+    ag = cur.get("auth_grants")
+    if ag is not None:
+        if not isinstance(ag, list) or not all(isinstance(x, dict) for x in ag):
+            raise ValueError("auth_grants 必须是对象数组（{tool, action, granted_at}）")
+        for g in ag:
+            if not isinstance(g.get("tool"), str) or not g.get("tool") \
+                    or not isinstance(g.get("action"), str) or not g.get("action"):
+                raise ValueError("auth_grants 元素必须含非空字符串 tool 与 action")
     dmr = cur.get("delegation_max_retries")
     if dmr is not None and (not isinstance(dmr, int) or isinstance(dmr, bool) or not (0 <= dmr <= 10)):
         raise ValueError("delegation_max_retries 必须是 0-10 的整数（0=不限）")

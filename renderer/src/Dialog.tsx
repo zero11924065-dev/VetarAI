@@ -50,6 +50,7 @@ const dialogBodyStyle: React.CSSProperties = {
 };
 const dialogActionsStyle: React.CSSProperties = {
   display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 22,
+  flexWrap: 'wrap',   // R2（0.4.33）：授权弹窗加「本会话不再询问/永久允许」后按钮变 4 枚，允许换行防溢出
 };
 
 interface DialogOptions {
@@ -63,6 +64,13 @@ interface DialogOptions {
   checkboxLabel?: string;
   checkboxDefault?: boolean;
   onCheckbox?: (checked: boolean) => void;  // 确认时回传勾选值（取消不回传）
+  // R2（0.4.33）授权记忆：「本会话不再询问 / 永久允许」附加按钮（授权弹窗专用）。
+  // 点其中任一个 = 批准 + 记忆：先回调 onRemember(mode)，再按"确认"关闭（resolve(true)）。
+  // 与 onCheckbox 同范式：弹窗本身不解释 mode 语义，由调用方（/api/auth/respond）消费。
+  // 不配这两个 label 则不渲染附加按钮（联网安装等安全敏感弹窗保持两键，每次必问）。
+  rememberSessionLabel?: string;
+  rememberAlwaysLabel?: string;
+  onRemember?: (mode: 'session' | 'always') => void;
 }
 
 interface DialogState extends DialogOptions {
@@ -106,6 +114,9 @@ export function confirmDialog(opts: {
   confirmText?: string; cancelText?: string; danger?: boolean;
   checkboxLabel?: string; checkboxDefault?: boolean;
   onCheckbox?: (checked: boolean) => void;
+  // R2（0.4.33）：授权记忆附加按钮（见 DialogOptions 注释）
+  rememberSessionLabel?: string; rememberAlwaysLabel?: string;
+  onRemember?: (mode: 'session' | 'always') => void;
 }): Promise<boolean> {
   return openDialog({ kind: 'confirm', ...opts });
 }
@@ -228,8 +239,10 @@ function PromptHost({ state }: { state: PromptState | null }) {
 function DialogHost({ state }: { state: DialogState | null }) {
   // 0.4.9 任务152：勾选项当前值（用 ref 避免重渲染，close 时读取）
   const checkedRef = React.useRef(false);
+  // R2（0.4.33）：记忆级别当前值（点「本会话不再询问/永久允许」时先落 ref 再 close(true)）
+  const rememberRef = React.useRef<'session' | 'always' | null>(null);
   useEffect(() => {
-    if (state) checkedRef.current = !!state.checkboxDefault;
+    if (state) { checkedRef.current = !!state.checkboxDefault; rememberRef.current = null; }
   }, [state]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -246,10 +259,15 @@ function DialogHost({ state }: { state: DialogState | null }) {
   const close = (v: boolean) => {
     const r = current?.resolve;
     const cb = current?.onCheckbox;
+    const rm = current?.onRemember;
+    const rmMode = rememberRef.current;
     current = null;
     listeners.forEach((l) => l());
     // 仅用户主动确认时回传勾选值；取消/Esc/遮罩关闭视为未勾选
     if (v && cb) cb(!!checkedRef.current);
+    // R2：仅确认路径回传记忆级别（取消 = 拒绝，谈不上"不再询问"）；
+    // 普通「允许」按钮不经过 rememberRef → rmMode 为 null，不回传（= 仅本次）。
+    if (v && rm && rmMode) rm(rmMode);
     r?.(v);
   };
 
@@ -293,6 +311,25 @@ function DialogHost({ state }: { state: DialogState | null }) {
           {isConfirm && (
             <button className="ui-btn ui-btn-secondary" style={btnSecondary} onClick={() => close(false)}>
               {state.cancelText || '取消'}
+            </button>
+          )}
+          {/* R2（0.4.33）：授权记忆附加按钮——点下 = 批准 + 按级别记忆（不回传则仅本次）。
+              用次按钮样式与主「允许」拉开层级；仅在调用方显式配置 label 时渲染
+              （联网安装弹窗不配 → 保持「允许安装/拒绝」两键，每次必问）。 */}
+          {isConfirm && state.rememberSessionLabel && (
+            <button
+              className="ui-btn ui-btn-secondary" style={btnSecondary}
+              onClick={() => { rememberRef.current = 'session'; close(true); }}
+            >
+              {state.rememberSessionLabel}
+            </button>
+          )}
+          {isConfirm && state.rememberAlwaysLabel && (
+            <button
+              className="ui-btn ui-btn-secondary" style={btnSecondary}
+              onClick={() => { rememberRef.current = 'always'; close(true); }}
+            >
+              {state.rememberAlwaysLabel}
             </button>
           )}
           <button

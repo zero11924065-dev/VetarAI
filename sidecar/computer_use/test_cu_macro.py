@@ -725,10 +725,11 @@ def test_i_endpoints():
     c = TestClient(appmod.app)
 
     r = c.get("/api/cu-macros")
-    check("I1 空列表 + recording=False + recording_steps=0（0.4.33 F2 新字段）",
+    check("I1 空列表 + recording=False + recording_steps=0 + recording_mode=None（0.4.34 R4 新字段）",
           r.status_code == 200 and r.json() == {"ok": True, "macros": [],
                                                 "recording": False,
-                                                "recording_steps": 0}, r.text[:150])
+                                                "recording_steps": 0,
+                                                "recording_mode": None}, r.text[:150])
 
     r = c.post("/api/cu-macros/record/start", json={})
     check("I2 缺 name→422", r.status_code == 422, f"{r.status_code}")
