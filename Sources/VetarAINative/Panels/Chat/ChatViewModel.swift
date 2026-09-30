@@ -196,9 +196,28 @@ public final class ChatViewModel: ObservableObject {
                 await self.refreshCurrentAgentInfo()
             }
         }
+        // 0.7.16 批次7 修复②：模型目录变更订阅——.vmodel/模型包安装/移除/启停后
+        // 聊天模型下拉实时刷新（此前仅 bootstrap 拉一次，新装模型要重启才可选）。
+        modelCatalogBusTask = Task { [weak self] in
+            for await ev in NativeAppEvents.subscribe() {
+                guard let self else { return }
+                guard NativeAppEvents.isModelCatalogChangedEvent(ev) else { continue }
+                await self.refreshModels()
+            }
+        }
     }
 
-    deinit { agentBusTask?.cancel(); contextLimitRetryTask?.cancel() }
+    deinit { agentBusTask?.cancel(); modelCatalogBusTask?.cancel(); contextLimitRetryTask?.cancel() }
+
+    /// 0.7.16 批次7 修复②：模型目录变更总线订阅任务（随 VM 销毁取消）。
+    private var modelCatalogBusTask: Task<Void, Never>?
+
+    /// 0.7.16 批次7 修复②：重拉模型并集（vmodel/模型包变更后；失败静默——
+    /// 内核未就绪时下次事件再刷，与 pullModel 重拉同款容错）。
+    public func refreshModels() async {
+        let client = runtime.client
+        if let list = try? await client.listModels() { models = list }
+    }
 
     /// W6：agent:updated 总线订阅任务（随 VM 销毁取消，订阅者计数不泄漏）。
     private var agentBusTask: Task<Void, Never>?

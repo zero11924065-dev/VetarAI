@@ -60,6 +60,9 @@ public final class AgentPanelViewModel: ObservableObject {
     private var client: SidecarClientProtocol? { clientOverride ?? appState.runtime.client }
 
     private var pollTask: Task<Void, Never>?
+    /// 0.7.16 批次7 修复②：模型目录变更总线订阅（.vmodel/模型包装完即刷新下拉，
+    /// 不再要重启）；随 stop() 取消、start() 重挂。
+    private var modelCatalogBusTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     private var started = false
 
@@ -89,6 +92,15 @@ public final class AgentPanelViewModel: ObservableObject {
         Task { await fetchAgents() }
         Task { await fetchModels() }
         startPolling()
+        // 0.7.16 批次7 修复②：模型目录变更 → 重拉模型下拉（进程内总线直订，
+        // ChatViewModel agentBusTask 同款模式）。
+        modelCatalogBusTask = Task { [weak self] in
+            for await ev in NativeAppEvents.subscribe() {
+                guard let self else { return }
+                guard NativeAppEvents.isModelCatalogChangedEvent(ev) else { continue }
+                await self.fetchModels()
+            }
+        }
         appState.$currentProjectId
             .removeDuplicates()
             .dropFirst()
@@ -104,6 +116,8 @@ public final class AgentPanelViewModel: ObservableObject {
         started = false
         pollTask?.cancel()
         pollTask = nil
+        modelCatalogBusTask?.cancel()
+        modelCatalogBusTask = nil
     }
 
     // MARK: - 拉取（失败静默记日志，对齐前端 console.error 分支——列表面板不弹错）

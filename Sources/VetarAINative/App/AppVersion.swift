@@ -181,14 +181,23 @@
 //  语言；协议门加固两小项（sync 失败落日志+门开收 showAuth）。
 //  回归 +30（StudioGateS1×8/LicenseS2Fix×11/S3S4Fix×11），全量 2374
 //  绿/7 skip/0 fail；明细见 versions.md 0.7.15 条目。
+//  0.7.16（build 28，2026-09-30 业主实测 vmodel 双 bug 修复批）：
+//  修复①严重——.vmodel 同名不同档互撞装新替旧（数据丢失）：slug 判别
+//  因子并入容器 salt 前 4B hex（导出器 SecRandom 每容器随机；同文件重装
+//  幂等保留），注册表增 salt_hex 留档，面板行加来源文件名可区分同名条目。
+//  修复②次——新装 .vmodel 要重启才出现在模型选择：installer 三写路径
+//  补发 resource_changed（vmodel create/update/delete）+ 聊天/Agent/独立
+//  Agent 三 VM 订阅进程内总线命中即重拉模型并集（魔塔包同类陈旧顺带覆盖）。
+//  回归 +6（slug 钉桩×2/共存集成×1/过滤契约×1/发射钉桩×3 中 2 项并计），
+//  全量 2382 绿/7 skip/0 fail；明细见 versions.md 0.7.16 条目。
 //
 
 import Foundation
 
 public enum AppVersion {
-    public static let current = "0.7.15"
-    public static let build = "27"
-    public static let phaseName = "上线前排查S1~S4收口"
+    public static let current = "0.7.16"
+    public static let build = "28"
+    public static let phaseName = "vmodel双bug修复"
     public static let appName = "VetarAI"
     /// 版权行（0.7.1 Bug 7：菜单栏标准关于弹窗 credits 唯一来源；不发版不改）
     public static let copyright = "Copyright © 2025–2026 VetarAI"

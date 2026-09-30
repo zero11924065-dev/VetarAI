@@ -184,6 +184,9 @@ public enum NativeAppEvents {
     public static let resourceSession = "session"
     /// 0.4.29（P1 可扩展模型包）：模型包安装/卸载/启停/下载进度 → 模型管理器面板。
     public static let resourceModelPack = "model_pack"
+    /// 0.7.16（批次7 修复②）：.vmodel 安装/移除/启停 → 模型包面板 + 聊天/Agent
+    /// 模型选择列表实时刷新（修复「装完要重启才可选」）。
+    public static let resourceVModel = "vmodel"
     /// 0.4.32（CU 三期 P2，REQ-FUT-006）：CU 任务宏录制/删除/回放进度。
     public static let resourceCuMacro = "cu_macro"
 

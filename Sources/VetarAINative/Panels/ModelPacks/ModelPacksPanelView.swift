@@ -724,6 +724,14 @@ private struct ModelPacksPanelBody: View {
                     Text(ModelPackFormat.formatSize(Int64(bitPattern: m.assetBytes)))
                         .font(VTheme.Typo.caption)
                         .foregroundStyle(VTheme.textTertiary)
+                    // 来源文件名（同名不同档并存时的区分依据，0.7.16 批次7 修复①配套）
+                    Text(m.sourceFile)
+                        .font(VTheme.Typo.caption)
+                        .foregroundStyle(VTheme.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 180)
+                        .help(m.sourceFile)
                     // MLX 推理徽标（0.7.3 起正式可分派：LoRA 叠加底座本机推理）
                     HStack(spacing: 3) {
                         Image(systemName: "cpu").font(.system(size: 9))

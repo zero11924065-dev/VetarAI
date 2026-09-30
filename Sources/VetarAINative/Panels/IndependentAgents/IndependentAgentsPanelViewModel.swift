@@ -68,6 +68,9 @@ public final class IndependentAgentsPanelViewModel: ObservableObject {
     }
 
     private var started = false
+    /// 0.7.16 批次7 修复②：模型目录变更总线订阅（.vmodel/模型包装完即刷新下拉，
+    /// 不再要重启）；随 stop() 取消、start() 重挂。
+    private var modelCatalogBusTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     public init(appState: AppState,
@@ -95,6 +98,15 @@ public final class IndependentAgentsPanelViewModel: ObservableObject {
         started = true
         Task { await fetchAgents() }
         Task { await fetchModels() }
+        // 0.7.16 批次7 修复②：模型目录变更 → 重拉模型下拉（进程内总线直订，
+        // ChatViewModel agentBusTask 同款模式）。
+        modelCatalogBusTask = Task { [weak self] in
+            for await ev in NativeAppEvents.subscribe() {
+                guard let self else { return }
+                guard NativeAppEvents.isModelCatalogChangedEvent(ev) else { continue }
+                await self.fetchModels()
+            }
+        }
         // 内核就绪（nativeReady）自愈重拉（P3-W6 口径：恒原生，nativeReady 为唯一
         // 就绪信号；历史上为 侧车 ready / 内核接管 双信号 CombineLatest，
         // checkpoint-064 首启空白修复语义由 nativeReady 单信号承接——runtime init
@@ -112,6 +124,8 @@ public final class IndependentAgentsPanelViewModel: ObservableObject {
 
     public func stop() {
         started = false
+        modelCatalogBusTask?.cancel()
+        modelCatalogBusTask = nil
     }
 
     // MARK: - 拉取（失败静默记日志，对齐现状 catch{}/console.error——侧车未运行不弹错）
