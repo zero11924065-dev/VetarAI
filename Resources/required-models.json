@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "updated": "2026-09-25",
+  "models": [
+    {
+      "model_id": "bge-m3-coreml",
+      "name": "索引模型 bge-m3",
+      "purpose": "知识仓库与工作室画布的语义检索（向量索引）。未安装时检索自动降级为关键词模式，功能可用但召回质量下降。",
+      "install_kind": "embedder_dir",
+      "dest_subdir": "models/bge-m3-coreml",
+      "size_bytes": 1156161300,
+      "size_display": "约 1.1 GB",
+      "restart_required": false,
+      "files": [
+        {
+          "path": "bge_m3_dense_fp16.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "size_bytes": 570723,
+          "sha256": "3ff289f44d794dad160f6d7a70e67970833affef76106515d50fa62d2de7e7df",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/bge_m3_dense_fp16.mlpackage/Data/com.apple.CoreML/model.mlmodel"
+          ]
+        },
+        {
+          "path": "bge_m3_dense_fp16.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "size_bytes": 1133435264,
+          "sha256": "226d04f03bae910d4adeb8cf56f039492a54dfa42df89a552457cbfd5b4bed0c",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/bge_m3_dense_fp16.mlpackage/Data/com.apple.CoreML/weights/weight.bin"
+          ]
+        },
+        {
+          "path": "bge_m3_dense_fp16.mlpackage/Manifest.json",
+          "size_bytes": 617,
+          "sha256": "35711d01023391a1f042fd2d5d2e57633ba89cf6dab444f05abeeae916f6d36a",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/bge_m3_dense_fp16.mlpackage/Manifest.json"
+          ]
+        },
+        {
+          "path": "config.json",
+          "size_bytes": 679,
+          "sha256": "68bf436cb7a210655f599b3944065f12a81317291b32e78bd4338b5745cda63a",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/config.json"
+          ]
+        },
+        {
+          "path": "sentencepiece.bpe.model",
+          "size_bytes": 5069051,
+          "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/sentencepiece.bpe.model"
+          ]
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size_bytes": 964,
+          "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/special_tokens_map.json"
+          ]
+        },
+        {
+          "path": "tokenizer.json",
+          "size_bytes": 17082799,
+          "sha256": "249df0778f236f6ece390de0de746838ef25b9d6954b68c2ee71249e0a9d8fd4",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/tokenizer.json"
+          ]
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size_bytes": 1203,
+          "sha256": "b87c8703482b0300d3da30e201519aa641f6a450f5eb5bf1e624afbf70c74d80",
+          "sources": [
+            "https://modelscope.cn/models/VetarAI/bge_m3CoreML/resolve/master/tokenizer_config.json"
+          ]
+        }
+      ]
+    },
+    {
+      "model_id": "sensevoice-small",
+      "name": "语音识别模型 SenseVoice Small",
+      "purpose": "语音输入转文字（中/英/粤/日/韩多语种，INT8 量化，CPU 可跑）。未安装时点击话筒会提示安装。",
+      "install_kind": "model_pack",
+      "pack_id": "sensevoice-small",
+      "dest_subdir": "packs/sensevoice-small",
+      "size_bytes": 241581392,
+      "size_display": "约 230 MB",
+      "restart_required": false,
+      "files": [
+        {
+          "path": "model_quant.onnx",
+          "size_bytes": 241216270,
+          "sha256": "21dc965f689a78d1604717bf561e40d5a236087c85a95584567835750549e822",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/model_quant.onnx"
+          ]
+        },
+        {
+          "path": "am.mvn",
+          "size_bytes": 11203,
+          "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/am.mvn"
+          ]
+        },
+        {
+          "path": "tokens.json",
+          "size_bytes": 352064,
+          "sha256": "a2594fc1474e78973149cba8cd1f603ebed8c39c7decb470631f66e70ce58e97",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/tokens.json"
+          ]
+        },
+        {
+          "path": "config.yaml",
+          "size_bytes": 1855,
+          "sha256": "f71e239ba36705564b5bf2d2ffd07eece07b8e3f2bbf6d2c99d8df856339ac19",
+          "sources": [
+            "https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/config.yaml"
+          ]
+        }
+      ],
+      "pack_registry": {
+        "task": "asr",
+        "format": "onnx",
+        "driver": "onnxruntime",
+        "version": "1.0.0"
+      }
+    }
+  ]
+}
