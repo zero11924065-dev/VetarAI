@@ -440,6 +440,93 @@ final class NativeModelScopeInstallerTests: XCTestCase {
         XCTAssertEqual(listed?["sha256_ok"]?.bool, true)
     }
 
+    // MARK: - MLX 仓安装前架构预检（A2）
+
+    /// MLX 仓架构不支持：下载 config.json 读 model_type → 查支持表 false →
+    /// 提前抛 unsupportedFormat（不下载大权重、注册表无登记）
+    func testMLXPreflightUnsupportedThrowsBeforeDownload() async throws {
+        let ref = ModelScopeRepoRef(org: "mlx-community", name: "Some-MLX")
+        let weightData = Data(repeating: 0x1, count: 1000)
+        let files = [
+            ModelScopeRepoFile(path: "config.json", sizeBytes: 60,
+                               sha256: shaHex(Data("cfg".utf8)), isLFS: false),
+            ModelScopeRepoFile(path: "model.safetensors", sizeBytes: Int64(weightData.count),
+                               sha256: shaHex(weightData), isLFS: true),
+        ]
+        let variant = ModelScopeVariant(id: "mlx", title: "MLX 整仓", format: .mlx, files: files)
+        let snap = ModelScopeRepoSnapshot(ref: ref, license: "apache-2.0", variants: [variant])
+        // config.json 内容：model_type = deepseek（不在支持表）
+        installer.fetchData = { url in
+            if url.contains("config.json") {
+                let cfg: [String: Any] = ["model_type": "deepseek",
+                                          "architectures": ["DeepseekV3ForCausalLM"]]
+                return (200, try JSONSerialization.data(withJSONObject: cfg))
+            }
+            return (200, Data())
+        }
+        installer.supportsModelType = { _ in false }   // 桩：架构不支持
+
+        do {
+            _ = try await installer.install(snapshot: snap, variantId: "mlx")
+            XCTFail("应抛 unsupportedFormat")
+        } catch {
+            guard case NativeModelScopeError.unsupportedFormat(let m) = error else {
+                return XCTFail("应抛 unsupportedFormat，得到 \(error)")
+            }
+            XCTAssertTrue(m.contains("deepseek"), m)
+            XCTAssertTrue(m.contains("暂不支持"), m)
+        }
+        // 不下载、不登记（避免白下大权重）
+        let pid = ModelScopeManifestBuilder.packId(ref: ref, variant: variant)
+        XCTAssertNil(store.getEntry(pid))
+    }
+
+    /// MLX 仓架构支持：预检通过 → 正常下载 + 落位 + 登记（format=mlx driver=mlxswift）
+    func testMLXPreflightSupportedProceeds() async throws {
+        let ref = ModelScopeRepoRef(org: "mlx-community", name: "Qwen3-4B-4bit")
+        let weightData = Data(repeating: 0x2, count: 800)
+        let localWeight = tmp.appendingPathComponent("src-model.safetensors")
+        try weightData.write(to: localWeight)
+        let cfgData = try JSONSerialization.data(withJSONObject:
+            ["model_type": "qwen3_5", "architectures": ["Qwen3_5ForConditionalGeneration"]])
+        let localConfig = tmp.appendingPathComponent("src-config.json")
+        try cfgData.write(to: localConfig)
+        let files = [
+            ModelScopeRepoFile(path: "config.json", sizeBytes: Int64(cfgData.count),
+                               sha256: shaHex(cfgData), isLFS: false),
+            ModelScopeRepoFile(path: "model.safetensors", sizeBytes: Int64(weightData.count),
+                               sha256: shaHex(weightData), isLFS: true),
+        ]
+        let variant = ModelScopeVariant(id: "mlx", title: "MLX 整仓", format: .mlx, files: files)
+        let snap = ModelScopeRepoSnapshot(ref: ref, license: "apache-2.0", variants: [variant])
+        installer.fetchData = { url in
+            if url.contains("config.json") { return (200, cfgData) }
+            return (200, Data())
+        }
+        installer.supportsModelType = { _ in true }   // 桩：架构支持
+        installer.resolveURLForFile = { _, path in
+            path == "config.json" ? localConfig.absoluteString : localWeight.absoluteString
+        }
+        let pid = try await installer.install(snapshot: snap, variantId: "mlx")
+        XCTAssertEqual(pid, "ms-mlx-community-qwen3-4b-4bit")
+        let entry = store.getEntry(pid)
+        XCTAssertEqual(entry?["format"]?.string, "mlx")
+        XCTAssertEqual(entry?["driver"]?.string, "mlxswift")
+        XCTAssertEqual(entry?["status"]?.string, "installed")
+    }
+
+    /// GGUF 仓不预检：supportsModelType 桩返回 false 也不影响 GGUF 安装（兜底路径）
+    func testGGUFRepoSkipsMLXPreflight() async throws {
+        let weight = Data(repeating: 0x61, count: 512)
+        let (local, _) = try stubGGUFRepo(weight: weight)
+        let snap = try await installer.resolve("https://modelscope.cn/models/Qwen/M-GGUF")
+        installer.supportsModelType = { _ in false }   // 即使「不支持」，GGUF 也跳过预检
+        installer.resolveURLForFile = { _, _ in local.absoluteString }
+        let pid = try await installer.install(snapshot: snap, variantId: snap.variants[0].id)
+        XCTAssertEqual(store.getEntry(pid)?["format"]?.string, "gguf")
+        XCTAssertEqual(store.getEntry(pid)?["driver"]?.string, "llamacpp")
+    }
+
     func testInstallUnknownVariantThrows() async throws {
         _ = try stubGGUFRepo(weight: Data(repeating: 0x1, count: 10))
         let snap = try await installer.resolve("Qwen/M-GGUF")

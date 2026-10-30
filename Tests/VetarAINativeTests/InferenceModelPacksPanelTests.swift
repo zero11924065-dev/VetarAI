@@ -527,7 +527,8 @@ final class InferencePanelVMTests: XCTestCase {
         XCTAssertEqual(client.putConfigCalls.count, 1)
         XCTAssertEqual(client.putConfigCalls[0].keys.sorted(), ["timeout_reading"])
         XCTAssertEqual(client.putConfigCalls[0]["timeout_reading"] as? Int, 600)
-        XCTAssertEqual(vm.message, "已保存 ✓")
+        // 方向2 波次2：文案去字符对勾「 ✓」（VCallout 自带 success 图标）
+        XCTAssertEqual(vm.message, "已保存")
         // 消息 50ms 后自动消隐
         let cleared = await waitFor(1000) { vm.message == nil }
         XCTAssertTrue(cleared)
@@ -542,7 +543,8 @@ final class InferencePanelVMTests: XCTestCase {
         await vm.saveBackend(["ctx_lazy_start": 100])     // mock 不校验，直接改 config
         // 模拟后端拒绝：fetchConfig 后 putConfig 抛错路径另行验证——这里用 saveOllamaURL
         // mock 不抛错，故直接验证成功路径文案即可（失败路径由 SidecarError.describe 拼接）。
-        XCTAssertEqual(vm.message, "已保存 ✓")
+        // 方向2 波次2：文案去字符对勾「 ✓」
+        XCTAssertEqual(vm.message, "已保存")
         vm.stop()
     }
 

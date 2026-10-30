@@ -336,11 +336,20 @@ public final class NativeOnnxSession {
         let outputNamePtrs: [UnsafePointer<CChar>?] = outputNameHolders.map { $0.ptr }
 
         var outputs = [UnsafeMutableRawPointer?](repeating: nil, count: outputNames.count)
-        let runStatus = inputNamePtrs.withUnsafeBufferPointer { inNames in
-            inputValues.withUnsafeBufferPointer { inVals in
-                outputNamePtrs.withUnsafeBufferPointer { outNames in
-                    runFn(session, nil, inNames.baseAddress, inVals.baseAddress,
-                          inputValues.count, outNames.baseAddress, outputNames.count, &outputs)
+        // withExtendedLifetime 保活：inputNameHolders/outputNameHolders 持有 strdup
+        // 的 C 串内存，deinit 会 free。Release（-O）下 ARC 会在 inputNamePtrs 计算后
+        // 提前释放 holder（后续只引用裸指针数组），导致 Run 读到已 free 的空名
+        // （业主实测「input name cannot be empty」，Debug 测不出——ARC 优化只在
+        // Release 提前释放）。保活到 runFn 返回。
+        let runStatus = withExtendedLifetime(inputNameHolders) {
+            withExtendedLifetime(outputNameHolders) {
+                inputNamePtrs.withUnsafeBufferPointer { inNames in
+                    inputValues.withUnsafeBufferPointer { inVals in
+                        outputNamePtrs.withUnsafeBufferPointer { outNames in
+                            runFn(session, nil, inNames.baseAddress, inVals.baseAddress,
+                                  inputValues.count, outNames.baseAddress, outputNames.count, &outputs)
+                        }
+                    }
                 }
             }
         }

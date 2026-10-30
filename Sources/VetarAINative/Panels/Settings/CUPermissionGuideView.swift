@@ -66,7 +66,9 @@ struct CUPermissionGuideView: View {
             }
 
             if missingItems.isEmpty {
-                Text("✓ 三项权限均已授予，Computer Use 可正常使用。")
+                // 方向2 波次2：「✓」字符当状态图标改 SF Symbol + 颜色双编码
+                // （原版 :52；文字保留）
+                Label("三项权限均已授予，Computer Use 可正常使用。", systemImage: "checkmark.circle.fill")
                     .font(VTheme.Typo.caption)
                     .foregroundStyle(VTheme.okText)
                     .accessibilityIdentifier("settings.cuGuideAllGranted")
@@ -88,18 +90,29 @@ struct CUPermissionGuideView: View {
 
     private func statusLine(_ p: CUPermission) -> some View {
         let state = statuses[p] ?? .unknown
-        let suffix: String
+        let icon: String
+        let stateText: String
         let color: Color
         switch state {
-        case .granted: suffix = "✓ 已授予"; color = VTheme.okText
-        case .denied: suffix = "✗ 未授予"; color = VTheme.dangerText
-        case .unknown: suffix = "？ 无法探测"; color = VTheme.textTertiary
+        case .granted: icon = "checkmark.circle.fill"; stateText = "已授予"; color = VTheme.okText
+        case .denied: icon = "xmark.circle"; stateText = "未授予"; color = VTheme.dangerText
+        case .unknown: icon = "questionmark.circle"; stateText = "无法探测"; color = VTheme.textTertiary
         }
-        return (Text(CUPermissionGuide.title(for: p) + "：").foregroundStyle(VTheme.textTertiary)
-                + Text(suffix).foregroundStyle(color))
-            .font(.system(size: 12, design: .monospaced))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("settings.cuGuideStatus.\(p.rawValue)")
+        // 方向2 波次2：✓/✗/？ 字符当状态图标改 SF Symbols + 颜色双编码（原版
+        // :77-79，文字保留）；整行 12 mono 改界面字 Typo.caption（原版 :83——
+        // 本行是权限名+状态词，无端口/路径/参数值等真数据段，mono 全退）
+        return HStack(spacing: VTheme.Space.s1) {
+            Text(CUPermissionGuide.title(for: p) + "：")
+                .foregroundStyle(VTheme.textTertiary)
+            Image(systemName: icon)
+                .foregroundStyle(color)
+            Text(stateText)
+                .foregroundStyle(color)
+            Spacer(minLength: 0)
+        }
+        .font(VTheme.Typo.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("settings.cuGuideStatus.\(p.rawValue)")
     }
 
     private func guideCard(_ item: CUPermissionGuideItem) -> some View {
@@ -109,9 +122,11 @@ struct CUPermissionGuideView: View {
                     .font(VTheme.Typo.caption)
                     .foregroundStyle(VTheme.dangerText)
                 if item.needsRestart {
+                    // 方向2 波次2：行尾 micro+textTertiary 提为 warnText（原版 :94-98——
+                    // 「授权后须重启」是关键操作后果，弱三级灰不足以承警示）
                     Text("授权后须重启本应用生效")
                         .font(VTheme.Typo.micro)
-                        .foregroundStyle(VTheme.textTertiary)
+                        .foregroundStyle(VTheme.warnText)
                 }
             }
             Text("用途：\(item.purpose)")
@@ -149,8 +164,10 @@ struct CUPermissionGuideView: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // 方向2 波次2：描边 dangerText.opacity(0.35) 手写调色收编语义令牌
+        // dangerBorder（原版 :135-136；VTheme 已有 danger 族边框令牌，不再 opacity 调）
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s)
-            .stroke(VTheme.dangerText.opacity(0.35)))
+            .stroke(VTheme.dangerBorder))
         .accessibilityIdentifier("settings.cuGuideCard.\(item.permission.rawValue)")
     }
 }

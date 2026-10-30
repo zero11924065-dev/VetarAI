@@ -196,15 +196,26 @@ public final class VoiceInputController: ObservableObject {
             let text = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty { onText(text) }
         } catch {
+            // 日志留痕：转写失败的完整错误（alert 常被用户只截图标题——日志是远程
+            // 诊断根因的唯一来源；ORT/解码错误的明细 message 在此全量落盘）
+            AppLogger.shared.error("语音转写失败：\(Self.errorDetail(error))")
             alertSink("语音转写失败", Self.errorDetail(error))
         }
     }
 
-    /// 转写失败文案：HTTP 错误取后端 detail（409/422/400 中文明细直达用户）。
+    /// 转写失败文案：HTTP 错误取后端 detail（409/422/400 中文明细直达用户）；
+    /// 其余错误优先读 CustomStringConvertible（NativeOnnxRuntimeError /
+    /// NativeAsrPackUnavailableError 的中文明细）——Swift struct Error 的
+    /// localizedDescription 会丢明细只剩「(Module.Error error 1.)」（业主实测踩坑）。
     static func errorDetail(_ error: Error) -> String {
         if case .httpError(_, let detail) = error as? SidecarError, !detail.isEmpty {
             return detail
         }
+        // Swift struct Error 的中文明细须按具体类型显式读 message——
+        // `any Error as? CustomStringConvertible` 的 existential 动态转换不可靠
+        //（装箱丢符合性，实测回退 localizedDescription 只剩「(…错误1.)」占位）。
+        if let e = error as? NativeOnnxRuntimeError { return e.message }
+        if let e = error as? NativeAsrPackUnavailableError { return e.message }
         return error.localizedDescription
     }
 

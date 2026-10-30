@@ -24,9 +24,10 @@
 //    顶部：错误/成功提示条 + 打开日志/数据目录（不依赖配置加载状态）
 //    基础            默认模型（下拉/手动回退）/ max_tool_rounds（1-1000）
 //                    （0.5.1 R1：data_root 字段移出——曾由「关于」页承接；
-//                     0.7.1 Bug 7 起数据根显示与修改收编本页底部「诊断」区）
+//                     0.7.1 Bug 7 起数据根显示与修改收编本页底部「诊断」区；
+//                     1.0.1 起数据根路径与编辑框对用户隐藏，仅留风险提示）
 //    诊断（底部）    0.7.1 Bug 7：原「关于」页诊断能力平移——运行时状态 /
-//                    数据根显示与修改 / 日志与数据根目录入口 / 调试 mock（id 不变）
+//                    数据根风险提示（1.0.1 收拢）/ 日志与数据根目录入口 / 调试 mock（id 不变）
 //    稳定性          重连(1-10) / 心跳(5-60) / 权限确认等待(0-86400，0=无限) / auth_grants 只读清单+逐条移除
 //    并发与调度      model_parallel / task_concurrency / delegation_model_swap（勾选即存）
 //    报错分析        error_analysis_model（下拉，空=跟随默认，切换即存）
@@ -95,6 +96,12 @@ private struct SettingsPanelBody: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // 方向2 波次2：补分区名页标题（设置壳统一 Typo.pageTitle 16pt
+                // semibold；文案对齐左侧导航项「基础设置」）
+                Text("基础设置")
+                    .font(VTheme.Typo.pageTitle)
+                    .foregroundStyle(VTheme.textPrimary)
+
                 // ── 保存结果反馈（tsx calloutStyle error/success）──
                 if let err = vm.errorMessage {
                     VCallout(.error, err)
@@ -126,14 +133,20 @@ private struct SettingsPanelBody: View {
                     ContextSection(vm: vm)
                     MultiAgentSection(vm: vm)
                     ExportSection(vm: vm)
-                    bottomBar
                 }
 
                 // 0.7.1 Bug 7（业主拍板方案 A）：原「关于」页的诊断能力收编为基础设置
-                // 底部「诊断」区（运行时状态 / 数据根显示与修改 / 日志与数据根目录入口 /
-                // 调试 mock）。AX id 全部保留不变（冒烟脚本与测试引用）；不依赖配置
-                // 加载状态，与目录按钮同口径恒渲染。
+                // 底部「诊断」区（运行时状态 / 数据根风险提示（1.0.1 起路径与编辑框
+                // 对用户隐藏）/ 日志与数据根目录入口 / 调试 mock）。AX id 保留不变
+                // （冒烟脚本与测试引用）；不依赖配置加载状态，与目录按钮同口径恒渲染。
                 DiagnosticsSection(runtime: appState.runtime)
+
+                // 方向2 波次2：保存栏沉到页面最底收尾（原版 :113/:120 渲染顺序为
+                // bottomBar→诊断区，保存栏应是整页最后一个操作区；渲染条件不变——
+                // 仅配置加载成功才显示，bottomBar 本体未动）
+                if vm.config != nil {
+                    bottomBar
+                }
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,7 +180,9 @@ private struct SettingsPanelBody: View {
                 }
                 .buttonStyle(.vSecondary)
                 .accessibilityIdentifier("settings.openDataDirButton")
-                HintText("应用数据根目录（应用隔离数据根）：项目与会话数据库、知识仓库索引与全局知识、已下载的模型（如语义检索用的 bge-m3）、技能与插件、config.json 配置。⚠️ 这里是核心数据不是缓存，删除会丢失项目、会话与知识库，请勿随意清理。")
+                // 方向2 波次2：去 ⚠️ emoji 字符（本条主体是目录内容说明、风险为附带
+                // 提醒，保持 HintText 轻处理；诊断区独立成行的同款风险提示升 VCallout）
+                HintText("应用数据根目录（应用隔离数据根）：项目与会话数据库、知识仓库索引与全局知识、已下载的模型（如语义检索用的 bge-m3）、技能与插件、config.json 配置。这里是核心数据不是缓存，删除会丢失项目、会话与知识库，请勿随意清理。")
             }
         }
     }
@@ -285,6 +300,8 @@ struct ListRow: View {
             .buttonStyle(.vGhost)
             .controlSize(.small)
             .foregroundStyle(VTheme.textTertiary)
+            // 方向2 波次4：AX 补账
+            .accessibilityLabel("移除")
         }
         .padding(.bottom, 4)
     }
@@ -385,6 +402,9 @@ private struct BasicSection: View {
             TextField("", text: $vm.draftMaxToolRounds)
                 .textFieldStyle(.plain)
                 .vInputStyle()
+                // 方向2 波次2：数值短输入框限宽 220（原版 :369-372 撑满整卡；
+                // 对齐同页 proxyPort/compactKeepRecent 口径）
+                .frame(maxWidth: 220, alignment: .leading)
                 .accessibilityIdentifier("settings.maxToolRoundsField")
             HintText("默认 200，范围 1-1000。轮次越大，Agent 可执行越复杂的任务，但也消耗更多 token。无效空转有独立防护（连续失败自动停止、重复搜索自动拦截），无需靠轮次上限兜底")
         }
@@ -443,7 +463,9 @@ private struct StabilitySection: View {
                     ForEach(grants) { g in
                         HStack(spacing: 8) {
                             Text("\(g.tool) · \(g.action)")
-                                .font(.system(size: 12.5, design: .monospaced))
+                                // 方向2 波次2：12.5 半号手写 mono 收编 Typo.mono
+                                // 令牌（原版 :430；工具/动作名是数据身份段）
+                                .font(VTheme.Typo.mono)
                                 .foregroundStyle(VTheme.textPrimary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -555,7 +577,9 @@ private struct AppControlSection: View {
                     get: { (vm.config?.appControlConfirm ?? []).contains(action) },
                     set: { vm.setAppControlConfirm(action, on: $0) }))
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 12.5, design: .monospaced))
+                    // 方向2 波次2：12.5 半号手写 mono 收编 Typo.mono 令牌
+                    // （原版 :542；注册表动作名是数据身份段）
+                    .font(VTheme.Typo.mono)
                     .padding(.bottom, 2)
                     .accessibilityIdentifier("settings.appControlConfirm.\(action)")
             }
@@ -610,6 +634,7 @@ private struct ModelStrengthsSection: View {
                             .controlSize(.small)
                             .foregroundStyle(VTheme.textTertiary)
                             .help("删除该模型的特长记录")
+                            .accessibilityLabel("删除特长记录")
                         }
                         Spacer(minLength: 0)
                     }
@@ -632,15 +657,8 @@ private struct ModelStrengthsSection: View {
             if allModels.isEmpty {
                 HintText("当前推理后端没有可用模型（或未连接）。连上后即可在此填写特长。")
             }
-
-            Button {
-                Task { await vm.saveStrengths() }
-            } label: {
-                Text("保存模型特长")
-            }
-            .buttonStyle(.vPrimary)
-            .padding(.top, 6)
-            .accessibilityIdentifier("settings.saveStrengthsButton")
+            // 方向2 波次3：分区保存按钮撤除（原版 :641-648「保存模型特长」）——
+            // 特长草稿改由底部「保存全部」统一提交（saveAll 已并入 strengthsDraft）。
         }
     }
 }
@@ -779,15 +797,9 @@ private struct ContextSection: View {
                 .vInputStyle()
                 .frame(maxWidth: 220, alignment: .leading)
                 .accessibilityIdentifier("settings.compactKeepField")
-
-            Button {
-                Task { await vm.saveContextSection() }
-            } label: {
-                Label("保存上下文管理", systemImage: "square.and.arrow.down")
-            }
-            .buttonStyle(.vPrimary)
-            .padding(.top, 10)
-            .accessibilityIdentifier("settings.saveContextButton")
+            // 方向2 波次3：分区保存按钮撤除（原版 :788-795「保存上下文管理」）——
+            // 归档目录/保留条数草稿改由底部「保存全部」统一提交（两键本就在
+            // saveAll 整包回写与数值草稿键集内）；「允许自动压缩」勾选即存不变。
 
             compactLogBlock
         }
@@ -808,11 +820,22 @@ private struct ContextSection: View {
                         .font(VTheme.Typo.caption)
                         .foregroundStyle(VTheme.textTertiary)
                     ForEach(logs) { entry in
-                        HStack(spacing: 0) {
-                            Text("\(entry.ts) · \(entry.beforeTokens.map { String($0) } ?? "?")→\(entry.afterTokens.map { String($0) } ?? "?") tok · \(entry.archivePath ?? "无归档")")
+                        // 方向2 波次2：中点串拆固定槽位 HStack（原版 :796
+                        // 「ts · before→after tok · path」单串；archivePath/error
+                        // 缺省时整槽不渲染——原 archivePath 缺省显示「无归档」随之取消）
+                        HStack(spacing: VTheme.Space.s2) {
+                            Text(entry.ts)
                                 .foregroundStyle(VTheme.textTertiary)
+                            Text("\(entry.beforeTokens.map { String($0) } ?? "?")→\(entry.afterTokens.map { String($0) } ?? "?") tok")
+                                .foregroundStyle(VTheme.textTertiary)
+                            if let archivePath = entry.archivePath {
+                                Text(archivePath)
+                                    .foregroundStyle(VTheme.textTertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
                             if let error = entry.error {
-                                Text(" · \(error)")
+                                Text(error)
                                     .foregroundStyle(VTheme.dangerText)
                             }
                         }
@@ -840,15 +863,8 @@ private struct MultiAgentSection: View {
                 .toggleStyle(.checkbox)
                 .accessibilityIdentifier("settings.autoSubAgentsToggle")
             HintText("开启后，委派目标不存在且任务书带\"建议角色\"时，系统会自动新建该角色的子 Agent 并执行；关闭后，委派目标不存在时将转述给你手动决定。")
-
-            Button {
-                Task { await vm.saveMultiAgentSection() }
-            } label: {
-                Label("保存多 Agent 设置", systemImage: "square.and.arrow.down")
-            }
-            .buttonStyle(.vPrimary)
-            .padding(.top, 10)
-            .accessibilityIdentifier("settings.saveMultiAgentButton")
+            // 方向2 波次3：分区保存按钮撤除（原版 :860-867「保存多 Agent 设置」）——
+            // 本区唯一字段是上方 Toggle（勾选即存），按钮本为重发同键的冗余通道。
         }
     }
 }
@@ -878,25 +894,21 @@ private struct ExportSection: View {
                 .padding(.top, 10)
                 .accessibilityIdentifier("settings.visionParseToggle")
             HintText("开启后上传的图片附件会经视觉模型识别为文字参与讨论（需视觉模型）；关闭则图片仅作为材料标注。")
-
-            Button {
-                Task { await vm.saveExportSection() }
-            } label: {
-                Label("保存导出与附件设置", systemImage: "square.and.arrow.down")
-            }
-            .buttonStyle(.vPrimary)
-            .padding(.top, 10)
-            .accessibilityIdentifier("settings.saveExportButton")
+            // 方向2 波次3：分区保存按钮撤除（原版 :898-905「保存导出与附件设置」）——
+            // 默认导出目录草稿改由底部「保存全部」统一提交（该键本就在 saveAll
+            // 整包回写内）；视觉识别 Toggle 勾选即存不变。
         }
     }
 }
 
 // MARK: - 诊断（0.7.1 Bug 7：自 AboutPanel 平移——设置「关于」项撤除后的能力承接区）
 
-/// 诊断小区块：原生运行时状态 / 数据根显示与修改 / 日志与数据根目录入口 / 调试 mock。
-/// ⚠️ accessibilityIdentifier 全部保留 AboutPanel 原值（about.dataRootField /
-/// about.openLogsButton / about.openDataRootButton / connectionStatusLabel /
+/// 诊断小区块：原生运行时状态 / 数据根风险提示（1.0.1 起路径与编辑框对用户隐藏）/
+/// 日志与数据根目录入口 / 调试 mock。
+/// ⚠️ accessibilityIdentifier 保留 AboutPanel 原值（about.openLogsButton /
+/// about.openDataRootButton / connectionStatusLabel /
 /// mockAuthButton / mockAuthNetInstallButton）——冒烟脚本与测试按 id 引用。
+/// （about.dataRootField 已于 1.0.1 随编辑框移除——移除前全仓搜索确认零引用。）
 private struct DiagnosticsSection: View {
     @EnvironmentObject private var appState: AppState
     /// 直接观察 NativeRuntime（@Published 绑定可写且状态实时；经 AppState 中转均不可）。
@@ -906,8 +918,11 @@ private struct DiagnosticsSection: View {
         SectionCard(title: "诊断") {
             // ── 运行时状态（内核是进程内对象，init 同步建成即恒就绪）──
             HStack(spacing: 6) {
+                // 方向2 波次3：指示灯不再恒绿——随 runtime.nativeReady 切换
+                // （未就绪=灰），与同行「已就绪/初始化中」两态文字同口径
+                // （范式参照 InferencePanelView 三态圆点）。
                 Circle()
-                    .fill(VTheme.ok)
+                    .fill(runtime.nativeReady ? VTheme.ok : VTheme.borderStrong)
                     .frame(width: 9, height: 9)
                 Text(runtime.nativeReady ? "已就绪（原生内核）" : "初始化中")
                     .font(VTheme.Typo.caption)
@@ -916,13 +931,17 @@ private struct DiagnosticsSection: View {
                 Spacer()
             }
 
-            // ── 数据根（显示与修改；冒烟脚本 -sidecar.dataRoot 注入命根，键名不变）──
-            FormLabel("数据根")
-            TextField("VETARAI_DATA_ROOT", text: $runtime.dataRootPath)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("about.dataRootField")
-            // 提示按生产口径写全内容与风险（tsx C1：核心数据不是缓存）
-            HintText("应用数据根目录（默认 ~/.subagent，与 0.4.x 生产线同根）：项目与会话数据库、知识仓库索引与全局知识、已下载的模型、技能与插件、config.json 配置。修改将于下次启动生效。⚠️ 这里是核心数据不是缓存，删除会丢失项目、会话与知识库，请勿随意清理。")
+            // ── 数据根（1.0.1 业主拍板收拢：路径与编辑框对用户隐藏——开发者级
+            //    信息不进用户面板、也不提供修改入口；修改通道保留给开发/支持场景：
+            //    UserDefaults 键 sidecar.dataRoot / 命令行 -sidecar.dataRoot 注入，
+            //    见 NativeRuntime；已持久化的自定义值不受影响照常生效）──
+            // 仅保留风险提示（tsx C1：核心数据不是缓存）
+            // 方向2 波次2：⚠️ emoji 提示升 VCallout(.warn) 承载——本条是 1.0.1 收拢后
+            // 数据根区独立成行的关键后果提示，够警示层级；VCallout 自带 warn 图标，
+            // 渲染文案去 emoji 留字（原版 :910 为 HintText 内嵌 emoji 形态）。
+            // SettingsDiagnosticsDataRootTests.testWarningHintRetained 钉桩断言已
+            // 同步收编为无 emoji 文案主体。
+            VCallout(.warn, "这里是核心数据不是缓存，删除会丢失项目、会话与知识库，请勿随意清理。")
 
             // ── 目录入口（AX id 保留 about.* 原值）──
             HStack(spacing: 10) {

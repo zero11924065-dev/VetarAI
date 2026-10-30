@@ -618,21 +618,35 @@ public final class NativeDatabase: @unchecked Sendable {
     // ════════════════════════════════════════════════════════════
 
     /// save_message（C8：stopped 落库为权威字段；写后 touch sessions.updated_at）。
+    /// C3（联调批二 Part B）：citationBlockIds = .vmodel 引用块 id 数组（JSON TEXT 列；
+    /// 明文纪律——只存 id，原文/来源名绝不落盘；nil/空 → 列 NULL）。
+    /// C2（联调批二 Part C）：toolCards = .vmodel 工具调用段卡片数组
+    ///（[{"name","arguments"}] JSON TEXT 列；nil/空 → 列 NULL）。
     public func saveMessage(projectId: String, sessionId: String, agentId: String,
                             role: String, content: String,
                             images: [String]? = nil, modelUsed: String? = nil,
                             toolSteps: JSONValue? = nil, truncated: Bool = false,
-                            promptEvalCount: Int64? = nil, stopped: Bool = false) throws {
+                            promptEvalCount: Int64? = nil, stopped: Bool = false,
+                            citationBlockIds: [String]? = nil,
+                            toolCards: [JSONValue]? = nil) throws {
+        let idsJSON: String? = citationBlockIds.flatMap { ids in
+            ids.isEmpty ? nil : Self.dumpsASCII(.array(ids.map { .string($0) }))
+        }
+        let cardsJSON: String? = toolCards.flatMap { cards in
+            cards.isEmpty ? nil : Self.dumpsUTF8(.array(cards))
+        }
         try withWriteConn(global: false, projectId: projectId) { conn in
             try conn.execute(
-                "INSERT INTO session_messages (session_id, agent_id, project_id, role, content, images, model_used, tool_steps, truncated, prompt_eval_count, stopped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO session_messages (session_id, agent_id, project_id, role, content, images, model_used, tool_steps, truncated, prompt_eval_count, stopped, citation_block_ids, tool_cards) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [.text(sessionId), .text(agentId), .text(projectId), .text(role), .text(content),
                  images.map { .text(Self.dumpsASCII(.array($0.map { .string($0) }))) } ?? .null,
                  strOrNull(modelUsed),
                  toolSteps.map { .text(Self.dumpsUTF8($0)) } ?? .null,
                  .integer(truncated ? 1 : 0),
                  promptEvalCount.map { .integer($0) } ?? .null,
-                 .integer(stopped ? 1 : 0)])
+                 .integer(stopped ? 1 : 0),
+                 idsJSON.map { .text($0) } ?? .null,
+                 cardsJSON.map { .text($0) } ?? .null])
             try conn.execute("UPDATE sessions SET updated_at = datetime('now') WHERE id = ?",
                              [.text(sessionId)])
         }
@@ -651,12 +665,16 @@ public final class NativeDatabase: @unchecked Sendable {
         public let promptEvalCount: Int64?     // 列非 NULL 才非 nil（W5b 口径：NULL≠0）
         public let archived: Bool
         public let stopped: Bool
+        /// C3：引用块 id 数组（列 JSON 解析成功才非 nil；明文纪律——只有 id）
+        public let citationBlockIds: [String]?
+        /// C2：工具调用段卡片（列 JSON 解析成功才非 nil；[{"name","arguments"}]）
+        public let toolCards: [JSONValue]?
     }
 
     public func loadMessages(projectId: String, sessionId: String) throws -> [MessageRow] {
         try withReadConn(global: false, projectId: projectId) { conn in
             try conn.query(
-                "SELECT id, role, content, images, model_used, created_at, tool_steps, truncated, prompt_eval_count, COALESCE(archived, 0), COALESCE(stopped, 0) FROM session_messages WHERE session_id = ? ORDER BY id",
+                "SELECT id, role, content, images, model_used, created_at, tool_steps, truncated, prompt_eval_count, COALESCE(archived, 0), COALESCE(stopped, 0), citation_block_ids, tool_cards FROM session_messages WHERE session_id = ? ORDER BY id",
                 [.text(sessionId)]).map { r in
                 var images: [JSONValue]?
                 if case .text(let t) = r[3], !t.isEmpty,   // Python `if r[3]:`（NULL/空串都跳）
@@ -664,6 +682,14 @@ public final class NativeDatabase: @unchecked Sendable {
                 var toolSteps: [JSONValue]?
                 if case .text(let t) = r[6], !t.isEmpty,
                    case .array(let arr) = Self.tolerantJSON(t) { toolSteps = arr }
+                var citationIds: [String]?
+                if case .text(let t) = r[11], !t.isEmpty,
+                   case .array(let arr) = Self.tolerantJSON(t) {
+                    citationIds = arr.compactMap { $0.string }
+                }
+                var toolCards: [JSONValue]?
+                if case .text(let t) = r[12], !t.isEmpty,
+                   case .array(let arr) = Self.tolerantJSON(t) { toolCards = arr }
                 return MessageRow(
                     id: Self.int(r[0]) ?? 0,
                     role: Self.str(r[1]) ?? "",
@@ -675,7 +701,9 @@ public final class NativeDatabase: @unchecked Sendable {
                     truncated: (Self.int(r[7]) ?? 0) != 0,
                     promptEvalCount: Self.int(r[8]),
                     archived: (Self.int(r[9]) ?? 0) != 0,
-                    stopped: (Self.int(r[10]) ?? 0) != 0
+                    stopped: (Self.int(r[10]) ?? 0) != 0,
+                    citationBlockIds: citationIds,
+                    toolCards: toolCards
                 )
             }
         }

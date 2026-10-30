@@ -20,9 +20,9 @@
 //
 
 //  逐字段移植 subagent/sidecar/config/store.py（唯一事实源，⛔ 只读）：
-//    · DEFAULT_CONFIG 55 键（前 54 键顺序 = Python dict 插入序，写盘字节可比；
-//      末位 error_analysis_timeout_s 为 0.7.5 W13 原生新增键——Python 侧无对应，
-//      排最末不影响既有键序与双跑字节比对）
+//    · DEFAULT_CONFIG 56 键（前 54 键顺序 = Python dict 插入序，写盘字节可比；
+//      error_analysis_timeout_s / model_residency 为原生新增键——Python 侧无对应，
+//      追加在末位不影响既有键序与双跑字节比对）
 //    · data_root() 解析链：VETARAI_DATA_ROOT > 已载配置 data_root > 默认 ~/.subagent
 //    · getConfig() = get_config()：defaults+disk 合并 / 缺键补写 / network_switch
 //      on/off→proxy/auto 遗留迁移 / plugins_enabled·skills_enabled·egress_allowlist 清除
@@ -181,6 +181,8 @@ public final class NativeConfigStore: @unchecked Sendable {
         "model_pack_boot_timeout_s",
         // 0.7.5 W13 原生新增（Python 侧无对应）：报错分析调用超时，隐藏键不进设置页 UI
         "error_analysis_timeout_s",
+        // A1 原生新增：按模型精确匹配的常驻名单；默认空集，不改变服务端全局策略
+        "model_residency",
     ]
 
     public static let defaultConfig: [String: JSONValue] = [
@@ -239,6 +241,7 @@ public final class NativeConfigStore: @unchecked Sendable {
         "confirm_model_pack_download": .bool(true),
         "model_pack_boot_timeout_s": .int(600),
         "error_analysis_timeout_s": .int(60),
+        "model_residency": .array([]),
     ]
 
     /// 已废弃键（checkpoint-047 + B11）：get_config 幂等清除并触发写盘。
@@ -649,6 +652,10 @@ public final class NativeConfigStore: @unchecked Sendable {
             guard let f = PySem.asNumberNoBool(v), (5...600).contains(f) else {
                 throw NativeCoreError.invalidConfig("error_analysis_timeout_s 必须是 5-600 的秒数")
             }
+        }
+        // model_residency（A1 原生新增）：模型名数组；默认空集，null 兼容旧磁盘读取。
+        if let v = Self.pyGet(cur, NativeModelResidency.configKey), !PySem.isStrList(v) {
+            throw NativeCoreError.invalidConfig("model_residency 必须是字符串数组")
         }
     }
 

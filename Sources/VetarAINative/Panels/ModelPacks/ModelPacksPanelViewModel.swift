@@ -58,6 +58,13 @@ public enum ModelPackFormat {
         return "\(n) B"
     }
 
+    /// 方向2 波次3：可选重载——size_bytes 缺失（nil）显示「—」，不再把
+    /// 「缺失」画成真实的「0 B」；真 0 字节仍走非可选版输出「0 B」。
+    public static func formatSize(_ n: Int64?) -> String {
+        guard let n else { return "—" }
+        return formatSize(n)
+    }
+
     /// 从源 URL 取 host；file:// 本地目录返回空串（对齐 TSX hostOf）。
     public static func hostOf(_ src: String) -> String {
         let s = src.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -311,7 +318,8 @@ public final class ModelPacksPanelViewModel: ObservableObject {
         var lines = "将从外部来源下载并安装模型包："
         lines += "\n名称：\(p.name.isEmpty ? p.pack_id : p.name)"
         lines += "\n版本：v\(p.version.isEmpty ? "?" : p.version)"
-        lines += "\n大小：\(ModelPackFormat.formatSize(p.size_bytes ?? 0))"
+        // 方向2 波次3：size_bytes 缺失（nil）显示「—」（可选重载），不再落成「0 B」
+        lines += "\n大小：\(ModelPackFormat.formatSize(p.size_bytes))"
         let sha = p.files?.first?.sha256 ?? ""
         if !sha.isEmpty {
             lines += "\nSHA256：\(sha.prefix(12))…"
@@ -556,6 +564,11 @@ public final class ModelPacksPanelViewModel: ObservableObject {
     @Published public private(set) var msResolving = false
     /// 选中档位 id（默认第一档）
     @Published public var msSelectedVariant = ""
+    /// A0 分流产品化（2026-10-27）：解析期 MLX 支持性探测结果（variant.id → 是否
+    /// 支持；无键 = 未知/非 MLX 档），驱动档位徽标与引导文案
+    @Published public private(set) var msVariantSupport: [String: Bool] = [:]
+    /// A0：推荐档位 id（存在探测「支持」的 MLX 档时指过去；nil = 不推荐，维持第一档）
+    @Published public private(set) var msRecommendedVariant: String?
     /// 下载进度（nil = 未在下载；NativeModelDownloader 快照含滚动速率）
     @Published public private(set) var msProgress: DownloadProgress?
     @Published public private(set) var msError: String?
@@ -565,29 +578,52 @@ public final class ModelPacksPanelViewModel: ObservableObject {
         NativeModelScopeInstaller(store: appState.runtime.kernel.modelPackStore)
     }
 
+    /// A0：档位推荐决策——存在探测「支持」的 MLX 档则推荐它（秒级加载）；
+    /// 无 MLX 档 / 探测未知 / 探测不支持 → 不推荐（维持第一档，GGUF 兜底）。
+    static func msRecommend(variants: [ModelScopeVariant], support: [String: Bool]) -> String? {
+        for v in variants where v.format == .mlx && support[v.id] == true {
+            return v.id
+        }
+        return nil
+    }
+
     /// 解析输入并拉取仓库快照（文件列表+license；格式不支持在此报错）
     public func msResolve() {
         guard !msResolving, msProgress == nil else { return }
         msResolving = true
         msError = nil
         msSnapshot = nil
+        msVariantSupport = [:]        // A0：起手清推荐态（防脏态残留）
+        msRecommendedVariant = nil
         let installer = msInstaller
         let input = msInput
         Task { [weak self] in
             do {
                 let snap = try await installer.resolve(input)
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.msSnapshot = snap
-                    self.msSelectedVariant = snap.variants.first?.id ?? ""
-                    self.msResolving = false
+                // 先按现状上屏：快照 + 默认第一档
+                guard let self else { return }
+                self.msSnapshot = snap
+                self.msSelectedVariant = snap.variants.first?.id ?? ""
+                self.msResolving = false
+                // A0 分流产品化（2026-10-27）：解析即探测——逐 MLX 档拉 config.json
+                //（几 KB，不动大权重）查本机架构支持表；未知/不支持均不阻断选择
+                var support: [String: Bool] = [:]
+                for v in snap.variants where v.format == .mlx {
+                    if let ok = await installer.probeMLXSupport(ref: snap.ref, files: v.files) {
+                        support[v.id] = ok
+                    }
                 }
+                // 探测期间用户可能已重新解析——旧快照的结论丢弃，防脏态覆盖
+                guard self.msSnapshot == snap else { return }
+                self.msVariantSupport = support
+                let rec = Self.msRecommend(variants: snap.variants, support: support)
+                self.msRecommendedVariant = rec
+                if let rec { self.msSelectedVariant = rec }   // 推荐非空 → 默认改到推荐档
             } catch {
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.msError = error.localizedDescription
-                    self.msResolving = false
-                }
+                self?.msError = error.localizedDescription
+                self?.msVariantSupport = [:]        // A0：错误分支同样清推荐态
+                self?.msRecommendedVariant = nil
+                self?.msResolving = false
             }
         }
     }
@@ -612,6 +648,8 @@ public final class ModelPacksPanelViewModel: ObservableObject {
                     self.msProgress = nil
                     self.msSnapshot = nil
                     self.msInput = ""
+                    self.msVariantSupport = [:]        // A0：安装成功收尾清推荐态
+                    self.msRecommendedVariant = nil
                     self.flash("魔塔模型已安装（\(pid)），可在会话/委派/工作室全场景选用", ttl: 5)
                     Task { await self.fetchLists() }
                 }

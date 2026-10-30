@@ -130,7 +130,8 @@ private final class RecordingConn: NativeChatConnector, @unchecked Sendable {
     var reply = "好的"
 
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         calls += 1
         lastTools = tools
@@ -191,7 +192,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: nil))
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events, [
             .contentDelta("你"), .contentDelta("好"), .contentDelta("！"),
             .done(promptEvalCount: 123, evalCount: 45),
@@ -214,6 +215,47 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         XCTAssertNil(body["tools"], "tools=nil 不出现在 payload")
     }
 
+    // ══ 思考深度档位（参数分层：会话级临时覆盖 → reasoning_effort 顶层字段） ══
+
+    func testThinkingModeMapping() {
+        // fast → low、deep → high（Ollama think 与 llama.cpp reasoning_effort 同值域）
+        XCTAssertEqual(NativeThinkingMode.fast.ollamaThink, "low")
+        XCTAssertEqual(NativeThinkingMode.fast.reasoningEffort, "low")
+        XCTAssertEqual(NativeThinkingMode.deep.ollamaThink, "high")
+        XCTAssertEqual(NativeThinkingMode.deep.reasoningEffort, "high")
+        // rawValue 解析：合法档位命中，未知值回落 nil
+        XCTAssertEqual(NativeThinkingMode(rawValue: "fast"), .fast)
+        XCTAssertEqual(NativeThinkingMode(rawValue: "deep"), .deep)
+        XCTAssertNil(NativeThinkingMode(rawValue: "xxx"))
+    }
+
+    func testThinkingModeDeepInjectsReasoningEffort() async throws {
+        let t = FakeTransport([.stream(200, ["data: [DONE]"])])
+        let conn = makeConnector(cfg: baseCfg, transport: t)
+        _ = try await collect(conn.chatStream(
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: .deep))
+        let body = try XCTUnwrap(t.recorded[0].body)
+        XCTAssertEqual(body["reasoning_effort"], .string("high"), "深度 → reasoning_effort=high")
+    }
+
+    func testThinkingModeFastInjectsReasoningEffortLow() async throws {
+        let t = FakeTransport([.stream(200, ["data: [DONE]"])])
+        let conn = makeConnector(cfg: baseCfg, transport: t)
+        _ = try await collect(conn.chatStream(
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: .fast))
+        let body = try XCTUnwrap(t.recorded[0].body)
+        XCTAssertEqual(body["reasoning_effort"], .string("low"), "快速 → reasoning_effort=low")
+    }
+
+    func testThinkingModeNilOmitsReasoningEffort() async throws {
+        let t = FakeTransport([.stream(200, ["data: [DONE]"])])
+        let conn = makeConnector(cfg: baseCfg, transport: t)
+        _ = try await collect(conn.chatStream(
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
+        let body = try XCTUnwrap(t.recorded[0].body)
+        XCTAssertNil(body["reasoning_effort"], "未选档 → 不注入，回落引擎默认")
+    }
+
     func testDoneCountsAbsentUsage() async throws {
         let t = FakeTransport([.stream(200, [
             #"data: {"choices":[{"delta":{"content":"x"}}]}"#,
@@ -221,7 +263,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: nil))
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events, [.contentDelta("x"), .done(promptEvalCount: 0, evalCount: 0)],
                        "缺 usage → counts 全 0（L266 初始值）")
     }
@@ -235,7 +277,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: nil))
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events, [.contentDelta("x"), .done(promptEvalCount: 99, evalCount: 7)],
                        "空 usage 假值跳过；后到 usage 覆盖先到（L323-326）")
     }
@@ -252,7 +294,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: nil))
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events, [
             .thinkingDelta("想"), .thinkingDelta("退路"), .thinkingDelta("直出"),
             .done(promptEvalCount: 0, evalCount: 0),
@@ -272,7 +314,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: nil))
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events.count, 2)
         guard case .toolCalls(let tcs) = events[0] else {
             return XCTFail("首事件应为 tool_calls 整体产出: \(events)")
@@ -296,7 +338,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: nil))
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events.count, 2)
         guard case .toolCalls(let tcs) = events[0] else {
             return XCTFail("残留工具调用应在 done 前产出: \(events)")
@@ -323,7 +365,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: nil))
+            model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events, [.contentDelta("正"), .done(promptEvalCount: 0, evalCount: 0)],
                        "非 data 行/坏 JSON/空 choices 跳过；[DONE] 终止（L313-318）")
     }
@@ -337,7 +379,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
             model: "m", messages: userHi,
-            tools: [.object(["type": .string("function")])], images: nil))
+            tools: [.object(["type": .string("function")])], images: nil, thinkingMode: nil))
         XCTAssertEqual(events, [.streamError(
             "当前推理后端不支持工具调用（This model does not support tools）。"
             + "可在设置面板关闭工具支持，或换用支持工具的后端/模型。")],
@@ -353,7 +395,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
             model: "m", messages: userHi,
-            tools: [.object(["type": .string("function")])], images: nil))
+            tools: [.object(["type": .string("function")])], images: nil, thinkingMode: nil))
         guard case .streamError(let msg) = events.first, events.count == 1 else {
             return XCTFail("function 关键词同样命中降级: \(events)")
         }
@@ -368,7 +410,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         do {
             _ = try await collect(conn.chatStream(
                 model: "m", messages: userHi,
-                tools: [.object(["type": .string("function")])], images: nil))
+                tools: [.object(["type": .string("function")])], images: nil, thinkingMode: nil))
             XCTFail("关键词不命中应抛业务错误")
         } catch let e as NativeChatConnectorError {
             XCTAssertEqual(e, .openAI(status: 400,
@@ -386,7 +428,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         do {
             _ = try await collect(conn.chatStream(
-                model: "m", messages: userHi, tools: nil, images: nil))
+                model: "m", messages: userHi, tools: nil, images: nil, thinkingMode: nil))
             XCTFail("未传 tools 不触发降级")
         } catch let e as NativeChatConnectorError {
             XCTAssertEqual(e, .openAI(status: 400,
@@ -405,7 +447,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         do {
             _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                                  tools: nil, images: nil))
+                                                  tools: nil, images: nil, thinkingMode: nil))
             XCTFail("401 应抛服务拒绝访问")
         } catch let e as NativeChatConnectorError {
             guard case .openAI(let status, let message, let detail) = e else {
@@ -424,7 +466,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         do {
             _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                                  tools: nil, images: nil))
+                                                  tools: nil, images: nil, thinkingMode: nil))
             XCTFail("403 应抛服务拒绝访问")
         } catch let e as NativeChatConnectorError {
             guard case .openAI(let status, let message, _) = e else {
@@ -453,7 +495,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ]
         let events = try await collect(conn.chatStream(
             model: "m", messages: messages, tools: nil,
-            images: ["data:image/png;base64,QUJD", b64]))
+            images: ["data:image/png;base64,QUJD", b64], thinkingMode: nil))
         XCTAssertEqual(events, [.contentDelta("看见了"),
                                 .done(promptEvalCount: 0, evalCount: 0)])
         // 合入【最后一条 user 消息】（_merge_images_into_messages L166-179）
@@ -485,7 +527,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
             model: "m", messages: userHi,
-            tools: [.object(["type": .string("function")])], images: [b64]))
+            tools: [.object(["type": .string("function")])], images: [b64], thinkingMode: nil))
         XCTAssertEqual(events, [
             .contentDelta("纯文本答复" + multimodalNote),
             .done(promptEvalCount: 0, evalCount: 0),
@@ -517,7 +559,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ])
         let conn = makeConnector(cfg: baseCfg, transport: t)
         let events = try await collect(conn.chatStream(
-            model: "m", messages: userHi, tools: nil, images: [b64]))
+            model: "m", messages: userHi, tools: nil, images: [b64], thinkingMode: nil))
         XCTAssertEqual(events, [
             .contentDelta("拼接" + multimodalNote),
             .done(promptEvalCount: 0, evalCount: 0),
@@ -533,7 +575,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         do {
             _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                                  tools: nil, images: [b64]))
+                                                  tools: nil, images: [b64], thinkingMode: nil))
             XCTFail("重试失败应抛错")
         } catch let e as NativeChatConnectorError {
             guard case .openAI(let status, let message, let detail) = e else {
@@ -555,7 +597,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: baseCfg, transport: t)
         do {
             _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                                  tools: nil, images: [b64]))
+                                                  tools: nil, images: [b64], thinkingMode: nil))
             XCTFail("重试 401 应抛服务拒绝访问")
         } catch let e as NativeChatConnectorError {
             guard case .openAI(let status, let message, _) = e else {
@@ -585,7 +627,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let t = FakeTransport([.stream(200, ["data: [DONE]"])])
         let conn = makeConnector(cfg: cfg, transport: t)
         _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                              tools: nil, images: nil))
+                                              tools: nil, images: nil, thinkingMode: nil))
         let body = try XCTUnwrap(t.recorded[0].body)
         XCTAssertEqual(Set(body.keys),
                        ["model", "messages", "stream", "stream_options",
@@ -611,7 +653,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let t = FakeTransport([.stream(200, ["data: [DONE]"])])
         let conn = makeConnector(cfg: cfg, transport: t)
         _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                              tools: nil, images: nil))
+                                              tools: nil, images: nil, thinkingMode: nil))
         let body = try XCTUnwrap(t.recorded[0].body)
         XCTAssertEqual(Set(body.keys), ["model", "messages", "stream", "stream_options"],
                        "该模型未配置 → 完全不注入（键集逐字节不变，铁律）")
@@ -628,7 +670,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: cfg, transport: t)
         do {
             _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                                  tools: nil, images: nil))
+                                                  tools: nil, images: nil, thinkingMode: nil))
             XCTFail("地址未配置应抛错")
         } catch let e as NativeChatConnectorError {
             XCTAssertEqual(e, .openAI(status: 400,
@@ -652,7 +694,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let conn = makeConnector(cfg: cfg, transport: t, guardCfg: guardCfg)
         do {
             _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                                  tools: nil, images: nil))
+                                                  tools: nil, images: nil, thinkingMode: nil))
             XCTFail("guard 拒绝应抛错")
         } catch let e as NativeNetworkGuardError {
             XCTAssertTrue(e.message.contains("example.com"),
@@ -666,7 +708,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let t1 = FakeTransport([.streamThrow(URLError(.timedOut))])
         let conn1 = makeConnector(cfg: baseCfg, transport: t1)
         let events1 = try await collect(conn1.chatStream(model: "m", messages: userHi,
-                                                         tools: nil, images: nil))
+                                                         tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events1, [.streamError("模型响应超时，已停止。已完成部分见上方事件。")],
                        "httpx.TimeoutException 兜底逐字（L361-362）")
         // 流中途超时（已产出的增量保留，超时转 stream_error）
@@ -675,7 +717,7 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         ], URLError(.timedOut))])
         let conn2 = makeConnector(cfg: baseCfg, transport: t2)
         let events2 = try await collect(conn2.chatStream(model: "m", messages: userHi,
-                                                         tools: nil, images: nil))
+                                                         tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(events2, [
             .contentDelta("半"),
             .streamError("模型响应超时，已停止。已完成部分见上方事件。"),
@@ -688,14 +730,14 @@ final class NativeOpenAIChatConnectorTests: XCTestCase {
         let t = FakeTransport([.stream(200, ["data: [DONE]"])])
         let conn = makeConnector(cfg: cfg, transport: t)
         _ = try await collect(conn.chatStream(model: "m", messages: userHi,
-                                              tools: nil, images: nil))
+                                              tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(t.recorded[0].timeout, 10.0,
                        "timeout_stream_reading 钳 10~7200（M11 口径：与 Ollama 连接器一致）")
         cfg["timeout_stream_reading"] = .double(100000)   // 高于上限 → 钳 7200
         let t2 = FakeTransport([.stream(200, ["data: [DONE]"])])
         let conn2 = makeConnector(cfg: cfg, transport: t2)
         _ = try await collect(conn2.chatStream(model: "m", messages: userHi,
-                                               tools: nil, images: nil))
+                                               tools: nil, images: nil, thinkingMode: nil))
         XCTAssertEqual(t2.recorded[0].timeout, 7200.0)
     }
 

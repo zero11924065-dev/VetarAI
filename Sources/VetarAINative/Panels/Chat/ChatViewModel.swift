@@ -51,11 +51,17 @@ public final class ChatViewModel: ObservableObject {
     @Published public private(set) var sessions: [ChatSession] = []
     @Published public var currentSessionId: String? { didSet { currentSessionIdChanged(from: oldValue) } }
     @Published public private(set) var messages: [ChatMessage] = []
+    /// 方向2 波次4b（A 组 P2-12 漏项）：会话消息拉取中标记——切会话先清空 messages
+    /// 再异步拉 DB（reloadMessagesMerging），期间空态会闪显；视图据此分流加载态
+    ///（仿 Roundtable「nil=加载中」三态范式的布尔档实现）。
+    @Published public private(set) var messagesLoading = false
     @Published public private(set) var models: [OllamaModel] = []
     @Published public var selectedModel: String? { didSet {
         if oldValue != selectedModel, selectedModel != nil { Task { await self.fetchContextLimit() } }
     } }
     @Published public var input: String = ""
+    /// 思考深度档位（会话级临时覆盖：fast=快速/deep=深度；nil=平衡，回落引擎默认）。
+    @Published public var thinkingMode: NativeThinkingMode? = nil
     @Published public private(set) var sending = false {
         didSet { refreshChatBusyGuard() }
     }
@@ -129,6 +135,16 @@ public final class ChatViewModel: ObservableObject {
     private let firstTokenStats: FirstTokenStats
     /// W10：每条流只记一次首 token 耗时（segment 段2 不重复采样防拉偏均值）
     private var firstTokenRecorded = false
+    /// 联调批三 Part D：包级首 token 延迟锚点（秒；包内 first_token_delay_seconds
+    /// 按注册表档位取值的出厂估算）。仅当样本库无样本（waitEstimate == nil）且
+    /// 模型为 "vmodel:<slug>" 时就位——优先级：样本实测 > 包级锚点 > 不显示；
+    /// nil = 无锚点（回落现状）。
+    @Published public private(set) var waitAnchorSeconds: Double?
+    /// 联调批三 Part D：锚点供应缝（入参 = 请求模型名，仅 vmodel 池名会被调用；
+    /// 返回秒）。生产 = NativeKernel.vmodelFirstTokenAnchorSecondsProvider
+    /// （ChatPanelView 装配段接线）；测试注入内存桩。缝缺省/旧包缺段/键缺失
+    /// → nil 回落现状。
+    private let vmodelFirstTokenAnchorSecondsProvider: ((String) -> Double?)?
     /// 问题1联动：上下文切换防抖任务（select 连写三字段合并为一次切换）
     private var contextSwitchTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
@@ -141,15 +157,24 @@ public final class ChatViewModel: ObservableObject {
     /// 视觉引导卡：推理后端（ollama 才给「一键拉取 qwen2.5-vl」）
     public private(set) var inferenceBackend = "ollama"
 
-    public init(appState: AppState, firstTokenStats: FirstTokenStats? = nil) {
+    public init(appState: AppState, firstTokenStats: FirstTokenStats? = nil,
+                vmodelFirstTokenAnchorSecondsProvider: ((String) -> Double?)? = nil) {
         self.appState = appState
         self.firstTokenStats = firstTokenStats ?? FirstTokenStats()
+        self.vmodelFirstTokenAnchorSecondsProvider = vmodelFirstTokenAnchorSecondsProvider
         // 纪律①：合帧回调只绑一次，落地目标 = 当前流式消息
         accumulator.onFlush = { [weak self] content, thinking in
             guard let self, let id = self.streamingMessageId else { return }
             self.patchMessage(id) {
                 if !content.isEmpty { $0.content += content }
-                if !thinking.isEmpty { $0.thinkingPreview = appendThinkingPreview($0.thinkingPreview, delta: thinking) }
+                if !thinking.isEmpty {
+                    $0.thinkingPreview = appendThinkingPreview($0.thinkingPreview, delta: thinking)
+                    // C2（联调批二 Part C）：vmodel 思考全文累积（折叠块可展开看
+                    // 实时内容；瞬态——完成即清不落盘；非 vmodel 消息不累积）
+                    if NativeVModelChat.isVModelName($0.modelUsed ?? "") {
+                        $0.thinkingText += thinking
+                    }
+                }
             }
         }
         // P3-W6：就绪门 = nativeReady 单信号（恒原生；历史上 status OR nativeReady
@@ -303,6 +328,11 @@ public final class ChatViewModel: ObservableObject {
     /// 保留（落已有 Agent 不是创建）。0.7.6 实测 Bug1 新口径：项目一个 Agent 都
     /// 没有时**不创建**——会话区空态提示（projectMissingAgent）+ 输入禁用，
     /// 由用户在左侧 Agent 区显式「+ 添加」（项目管理操作不得隐式创建 Agent）。
+    /// DBG-198：两分支同口径采纳 Agent 绑定 model_name——头部显示与发送链路
+    /// 都消费 selectedModel，此前只同步 agentName 导致绑定模型不进会话。
+    /// 口径：trim 后非空才采纳**原值**（不改写、不为匹配列表项而替换：ModelIdentity
+    /// 归一化可解析无 tag 名，vmodel: 前缀直通既有路由）；绑定不在当前 models
+    /// 列表也照样采纳（不静默回落，发送失败显式报错）；nil/空 → 不动 selectedModel。
     private func adoptContext(projectId pid: String, agentId requestedAid: String?) async throws {
         let client = runtime.client
         var aid = requestedAid
@@ -314,7 +344,13 @@ public final class ChatViewModel: ObservableObject {
             if let iaClient = client as? IndependentAgentsPanelClient {
                 names = (try? await iaClient.listIndependentAgents()) ?? []
             }
-            agentName = names.first(where: { $0.id == targetId })?.name ?? ""
+            let target = names.first(where: { $0.id == targetId })
+            agentName = target?.name ?? ""
+            // DBG-198：绑定模型非空 → 采纳原值（见函数注释口径）
+            if let bound = target?.model_name,
+               !bound.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                selectedModel = bound
+            }
             contextScope = "独立 Agent"
         } else {
             let agents = try await client.listAgents(projectId: pid)
@@ -322,7 +358,13 @@ public final class ChatViewModel: ObservableObject {
                 // 只选项目 → 落主 Agent / 列表第一个；空项目 aid 保持 nil（不创建）
                 aid = (agents.first(where: { $0.type_ == "main" }) ?? agents.first)?.id
             }
-            agentName = agents.first(where: { $0.id == aid })?.name ?? ""
+            let target = agents.first(where: { $0.id == aid })
+            agentName = target?.name ?? ""
+            // DBG-198：同独立 Agent 分支口径——绑定模型非空 → 采纳原值
+            if let bound = target?.model_name,
+               !bound.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                selectedModel = bound
+            }
             contextScope = (try? await client.listProjects())?
                 .first(where: { $0.id == pid })?.name ?? ""
         }
@@ -452,7 +494,8 @@ public final class ChatViewModel: ObservableObject {
     /// 重命名会话（现状 handleRenameSession：prompt 弹窗 → PUT）
     public func renameSession(_ sid: String) async {
         let newTitle = await DialogCenter.shared.prompt(
-            title: "重命名会话", defaultValue: "未命名会话", confirmText: "保存", cancelText: "取消")
+            title: "重命名会话", defaultValue: sessions.first(where: { $0.id == sid })?.title ?? "",
+            confirmText: "保存", cancelText: "取消")   // A 组 P1-5：初值取当前会话名，原恒「未命名会话」
         guard let newTitle else { return }
         do {
             try await chatClient?.renameSession(projectId: projectId ?? "", sessionId: sid, title: newTitle)
@@ -480,7 +523,7 @@ public final class ChatViewModel: ObservableObject {
             stashLiveStream(into: oldSid)
         }
         guard let sid = currentSessionId, let pid = projectId else {
-            if currentSessionId == nil { messages = [] }
+            if currentSessionId == nil { messages = []; messagesLoading = false }   // 波次4b：无会话即非加载态
             return
         }
         let client = runtime.client
@@ -511,6 +554,7 @@ public final class ChatViewModel: ObservableObject {
         }
         // 0.7.8 实测 Bug1：加载收口 = DB 权威 + 合并本地未落盘流式气泡
         //（checkpoint-055/H16 mergeDbWithLocal；旧实现 DB 快照整体覆盖丢进行中气泡）
+        messagesLoading = true   // 波次4b（A 组 P2-12）：拉取期间视图分流加载态，不闪空态
         Task { await self.reloadMessagesMerging(sid: sid, pid: pid, client: client) }
     }
 
@@ -549,15 +593,19 @@ public final class ChatViewModel: ObservableObject {
                                        client: SidecarClientProtocol) async {
         do {
             let loaded = try await client.loadMessages(projectId: pid, sessionId: sid)
+            // 过期结果不得覆盖新会话（查虫D 守门保留）；加载态标记亦归新会话自己的
+            // 加载收口——此处 stale 直接返回，不清 messagesLoading
             guard self.currentSessionId == sid else { return }
             let live = self.sending && self.streamingSessionId == sid
             self.messages = mergeDbWithLocal(db: loaded, local: self.messages, live: live)
+            self.messagesLoading = false   // 波次4b：加载收口
             self.restoreTokenIndicator()
             // 后台流期间收到的 compact_required：切回时重放警告条（三选一不丢）
             if let cw = self.pendingCompactBySession.removeValue(forKey: sid) {
                 self.compactWarning = cw
             }
         } catch {
+            if self.currentSessionId == sid { self.messagesLoading = false }   // 波次4b：失败同样收口（仍当前会话才动）
             self.lastError = "加载消息失败：\(SidecarError.describe(error))"
         }
     }
@@ -749,9 +797,10 @@ public final class ChatViewModel: ObservableObject {
         lastError = nil
 
         // 历史（TS-120：已归档不进模型上下文；不含刚追加的占位气泡）
-        var history = messages.dropLast()
-            .filter { ($0.role == "user" || $0.role == "assistant") && !$0.archived }
-            .map { ChatStreamMessage(role: $0.role, content: $0.content) }
+        // B 案（联调批四确认函 2026-10-10 裁定）：assistant 合法 tool_call
+        // 卡片在此重序列化为 <tool_call>{…}</tool_call> 正文文本拼回 content
+        //（口径与留痕见 Self.historyStreamMessages 注释块）。
+        var history = Self.historyStreamMessages(from: messages.dropLast())
         // 附件正文注入（表#6 拉模式 / R-2 退化全额注入；ATTACH_MARK 分隔）
         let sections = AttachmentComposer.injectionSections(files: fileItems)
         if !sections.isEmpty, !history.isEmpty {
@@ -773,8 +822,104 @@ public final class ChatViewModel: ObservableObject {
             // pilot-sandbox 恒真是原生线移植时引入的回归，且该目录位于 ~/.subagent
             // 敏感域内（is_sensitive_path），写入必触发授权拦截。
             sandbox_root: nil,
-            auto_archive_unit: autoArchiveUnit
+            auto_archive_unit: autoArchiveUnit,
+            thinking_mode: thinkingMode?.rawValue
         ))
+    }
+
+    // MARK: - B 案 tool_call 历史重序列化（联调批四确认函 2026-10-10 裁定）
+
+    /// 历史组装（send 唯一消费点）：过滤口径不动（user/assistant 且未归档，
+    /// TS-120）；映射时 assistant 且 toolCards 非空 → 卡片按数组顺序逐张
+    /// 重序列化为 `<tool_call>{…}</tool_call>` 正文文本拼回 content。
+    ///
+    /// B 案背景与裁定：合法 tool_call 段在流式解析层被卡片化（落盘权威 =
+    /// session_messages.tool_cards 列），历史只带 role+content 会让模型在
+    /// 下一轮看不到这些合法 tool_call——而非法 JSON 兜底的原文在正文里
+    /// 反而随历史回填，形成倒挂。对方 0.8 训练语料中 tool_call 以正文文本
+    /// 形态存在（形如 `<tool_call>{"name":"search_knowledge","arguments":{…}}</tool_call>`），
+    /// 故模型历史应与训练形态一致：拼回正文。
+    ///
+    /// 位置口径（确定性）：卡片不持久化原始位置——ChatToolCard 仅
+    /// name/argsText 两字段、tool_cards 列 JSON 为 [{"name","arguments"}]
+    /// 无位置/序号字段（已实查 SidecarModels.swift / NativeDatabase.swift）——
+    /// 故统一拼在（已剥 think 的）正文之后、每张卡一段（\n 分隔；正文空
+    /// 则卡片段即全文，不留前导换行）。
+    ///
+    /// 不重复拼接说明：非法 JSON 的 tool_call 段在解析层已纯文本兜底进
+    /// content（NativeVModelThinkParser 呈现规则②/⑤），而卡片只来自合法
+    /// 解析，两者天然不重叠——此处只拼卡片，content 一律原样承接。
+    nonisolated static func historyStreamMessages<S: Sequence>(
+        from messages: S
+    ) -> [ChatStreamMessage] where S.Element == ChatMessage {
+        messages
+            .filter { ($0.role == "user" || $0.role == "assistant") && !$0.archived }
+            .map { msg in
+                guard msg.role == "assistant", !msg.toolCards.isEmpty else {
+                    return ChatStreamMessage(role: msg.role, content: msg.content)
+                }
+                let block = msg.toolCards.map(toolCallHistoryText(for:))
+                    .joined(separator: "\n")
+                return ChatStreamMessage(
+                    role: msg.role,
+                    content: msg.content.isEmpty ? block : msg.content + "\n" + block)
+            }
+    }
+
+    /// 单卡 → canonical 文本形态（与解析层冻结契约逐字同形——见
+    /// NativeVModelThinkParser.swift 头部格式契约注释：
+    /// `<tool_call>{"name":"工具名","arguments":{...}}</tool_call>`；
+    /// 紧凑无空格、键序 name 先 arguments 后、非 ASCII 原样 UTF-8 不转义）。
+    /// 解析层只校验「JSON 对象 + 非空 name」（toolCardSegment），本产物
+    /// 过正向解析必还原同名同参卡片（往返一致，钉桩见
+    /// NativeVModelToolCallHistoryB4Tests）。
+    nonisolated static func toolCallHistoryText(for card: ChatToolCard) -> String {
+        "<tool_call>{\"name\":\(jsonStringLiteral(card.name)),\"arguments\":\(compactArgumentsJSON(fromArgsText: card.argsText))}</tool_call>"
+    }
+
+    /// arguments 紧凑化：卡片 argsText 是 pretty JSON（ChatToolCard.
+    /// prettyArgsText 口径）→ 解析回 JSON 值后以紧凑/字典序键重序列化
+    /// （确定性输出）。解析失败 = arguments 原为纯字符串（此时 argsText
+    /// 是原文而非 JSON）→ 按 JSON 字符串字面量回落，同名同参语义保留；
+    /// 空串（畸形行防御）→ `{}`，与解析层「arguments 缺省补 {}」同口径。
+    /// 已知边界：arguments 原为「恰为合法 JSON 文本的字符串」时，argsText
+    /// 与对应 object 的展示形态不可区分（展示路径既有有损），按 object
+    /// 承接——不影响主流 object 形态。
+    nonisolated static func compactArgumentsJSON(fromArgsText argsText: String) -> String {
+        let trimmed = argsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "{}" }
+        if let data = trimmed.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data, options: [.allowFragments]),
+           let out = try? JSONSerialization.data(
+               withJSONObject: obj,
+               options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]),
+           let s = String(data: out, encoding: .utf8) {
+            return s
+        }
+        return jsonStringLiteral(argsText)
+    }
+
+    /// JSON 字符串字面量（引号/反斜杠/控制符转义；非 ASCII 原样 UTF-8、
+    /// `/` 不转义，与训练语料 ensure_ascii=False 形态一致）。
+    nonisolated static func jsonStringLiteral(_ s: String) -> String {
+        if let data = try? JSONSerialization.data(
+               withJSONObject: s, options: [.fragmentsAllowed, .withoutEscapingSlashes]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        // 兜底（fragments 写出不可用的极端环境）：最小转义集手工构造
+        var out = "\""
+        for ch in s {
+            switch ch {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default: out.append(ch)
+            }
+        }
+        return out + "\""
     }
 
     /// A5（0.4.16）：思考中插入新消息（乐观追加用户气泡 → POST /inject；无活流则 toast 如实告知）
@@ -857,7 +1002,16 @@ public final class ChatViewModel: ObservableObject {
         startWaitTimer()
         // W10（REQ-FUT-003）：等待阶段机复位 + 预估（有样本才显示，无样本 nil 不编造）
         waitStage = .loading
-        waitEstimate = firstTokenStats.estimate(for: request.model)
+        // 联调批三 Part D 优先级：样本均值（实测）> 包级锚点（出厂估算）> 不显示。
+        // 有样本时供应缝零调用；仅无样本且 vmodel 池名才取包级锚点（非 vmodel
+        // 模型与缝缺省同归 nil，回落现状）。
+        let sampleEstimate = firstTokenStats.estimate(for: request.model)
+        waitEstimate = sampleEstimate
+        if sampleEstimate == nil, NativeVModelChat.isVModelName(request.model) {
+            waitAnchorSeconds = vmodelFirstTokenAnchorSecondsProvider?(request.model)
+        } else {
+            waitAnchorSeconds = nil
+        }
         firstTokenRecorded = false
 
         streamTask = Task { [weak self] in
@@ -872,7 +1026,8 @@ public final class ChatViewModel: ObservableObject {
                             agent_id: req.agent_id, model: req.model, messages: req.messages,
                             images: req.images, project_id: req.project_id, session_id: req.session_id,
                             skip_user_persist: true, sandbox_root: req.sandbox_root,
-                            auto_archive_unit: req.auto_archive_unit)
+                            auto_archive_unit: req.auto_archive_unit,
+                            thinking_mode: req.thinking_mode)
                     }
                     for try await ev in client.chatStream(req) {
                         if Task.isCancelled { break streamLoop }
@@ -945,6 +1100,7 @@ public final class ChatViewModel: ObservableObject {
             $0.waitingSeconds = 0
             // C2 根因③：停止时 running 工具收敛为 interrupted（不谎称成功/失败）
             $0.toolSteps = convergeRunningSteps($0.toolSteps)
+            stripVModelThinkingIfNeeded(&$0)   // C2（联调批二）：vmodel 思考停止即剥离
         }
         sending = false
         stopTimers()
@@ -1005,8 +1161,21 @@ public final class ChatViewModel: ObservableObject {
                 patchMessage(targetId, in: sink) {
                     $0.thinkingPreview = appendThinkingPreview($0.thinkingPreview,
                                                                delta: ev.string("delta") ?? "")
+                    // C2：vmodel 后台流同样累积思考全文（切回时折叠块内容完整）
+                    if NativeVModelChat.isVModelName($0.modelUsed ?? "") {
+                        $0.thinkingText += ev.string("delta") ?? ""
+                    }
                 }
             }
+        case .toolCard:
+            // C2（联调批二 Part C）：.vmodel 工具调用段卡片——可见且保留
+            //（随消息落盘 tool_cards 列；非法 JSON 已在路由解析层纯文本兜底，
+            //  到此即合法结构；⛔ 不进 toolSteps 执行步骤组，语义不相干）
+            if isLive { accumulator.flush() }   // 纪律③：非增量事件先 flush 保序
+            let card = ChatToolCard(
+                name: ev.string("name") ?? "",
+                argsText: ChatToolCard.prettyArgsText(ev.data["arguments"]))
+            patchMessage(targetId, in: sink) { $0.toolCards.append(card) }
         case .toolCall:
             if isLive { accumulator.flush(); closeThinkingPhase() }   // 纪律③：先保序 flush，再分发
             patchMessage(targetId, in: sink) {
@@ -1071,6 +1240,7 @@ public final class ChatViewModel: ObservableObject {
                     if let started = $0.startedAt {
                         $0.completedDuration = Int(Date().timeIntervalSince1970 - started)
                     }
+                    self.stripVModelThinkingIfNeeded(&$0)   // C2：vmodel 思考完成即剥离
                 }
                 // R3（0.4.33）：流式完成顺手重拉上限（懒加载升档后「当前档」才实时）
                 Task { await self.fetchContextLimit() }
@@ -1092,6 +1262,7 @@ public final class ChatViewModel: ObservableObject {
                     if let started = $0.startedAt {
                         $0.completedDuration = Int(Date().timeIntervalSince1970 - started)
                     }
+                    self.stripVModelThinkingIfNeeded(&$0)   // C2：vmodel 思考完成即剥离
                 }
             }
             // 后台 error：终态 → finishStream 丢 stash，切回走 DB 权威（同 done 口径）
@@ -1139,6 +1310,32 @@ public final class ChatViewModel: ObservableObject {
             // 与该事件是否属于当前看的会话无关
             if isLive { accumulator.flush() }
             auth.handle(event: ev)
+        case .citations:
+            // C3（联调批二 Part B）：.vmodel 引用块 id 随流先行到达。载荷只有 id
+            //（明文纪律）——展示数据在此按 id 回查内存库重建；库 nil/失效块 →
+            // citations 空 → 引用区整个不出现（逐像素无残影）。
+            // 查询句取与当前 ids 匹配的 search_knowledge 工具卡；零命中卡不抢占
+            // 预检索来源，无匹配时回退之前最近一条 user（剥离附件注入段）。
+            // live/后台 stash 同一路径，citations 载荷仍只含 id。
+            if isLive { accumulator.flush() }   // 纪律③：非增量事件先 flush 保序
+            let ids = (ev.data["block_ids"] as? [Any])?.compactMap { $0 as? String } ?? []
+            guard !ids.isEmpty else { break }
+            let list = isLive ? messages : (backgroundStreams[streamSid]?.messages ?? [])
+            guard let tIdx = list.firstIndex(where: { $0.id == targetId }) else { break }
+            let rawQuery = list[..<tIdx].last(where: { $0.role == "user" })?.content ?? ""
+            var resolved: [ChatCitation] = []
+            if let slug = list[tIdx].modelUsed.flatMap({ NativeVModelChat.modelId(fromPoolName: $0) }),
+               let library = runtime.kernel.retrievalCenter.library(forModelSlug: slug) {
+                let query = NativeVModelRetrieval.citationQuery(
+                    toolCards: list[tIdx].toolCards, fallbackUserContent: rawQuery,
+                    citationBlockIds: ids, library: library)
+                resolved = NativeVModelRetrieval.presentations(forIDs: ids, query: query,
+                                                               library: library)
+            }
+            patchMessage(targetId, in: sink) {
+                $0.citationBlockIds = ids
+                $0.citations = resolved
+            }
         case .message, nil:
             break   // heartbeat / 未知事件：忽略
         }
@@ -1193,6 +1390,12 @@ public final class ChatViewModel: ObservableObject {
         frozen.thinkingPreview = ""
         frozen.waitingSeconds = 0
         frozen.toolSteps = convergeRunningSteps(frozen.toolSteps)
+        // C2（联调批二 Part C）：vmodel 定格段思考整态剥离（全文+不留定格秒数——
+        // 「可见不保留」；非 vmodel 由 closeThinkingPhase 既有口径定格，不受影响）
+        if NativeVModelChat.isVModelName(frozen.modelUsed ?? "") {
+            frozen.thinkingText = ""
+            frozen.thinkingDuration = nil
+        }
         if let started = frozen.startedAt {
             frozen.completedDuration = Int(Date().timeIntervalSince1970 - started)
         }
@@ -1294,9 +1497,29 @@ public final class ChatViewModel: ObservableObject {
             patchMessage(id) {
                 $0.thinkingActive = false
                 $0.thinkingElapsed = nil
-                if let duration { $0.thinkingDuration = duration }   // D-1：思考定格保留显示
+                // C2（联调批二 Part C）：vmodel 思考「可见不保留」——完成即剥离，
+                // 不留「思考 Ns」定格、清空预览与全文（不落盘不回填，历史无残影）；
+                // 非 vmodel 后端既有定格口径（D-1）逐字保留，不受影响
+                if NativeVModelChat.isVModelName($0.modelUsed ?? "") {
+                    $0.thinkingDuration = nil
+                    $0.thinkingPreview = ""
+                    $0.thinkingText = ""
+                } else if let duration {
+                    $0.thinkingDuration = duration   // D-1：思考定格保留显示
+                }
             }
         }
+    }
+
+    /// C2：vmodel 思考瞬态字段终态清理（closeThinkingPhase 未覆盖的出口共用：
+    /// done/error/手动停止/段分裂——阶段未开启过（空 think 伪影）时也幂等安全）。
+    private func stripVModelThinkingIfNeeded(_ m: inout ChatMessage) {
+        guard NativeVModelChat.isVModelName(m.modelUsed ?? "") else { return }
+        m.thinkingActive = false
+        m.thinkingElapsed = nil
+        m.thinkingDuration = nil
+        m.thinkingPreview = ""
+        m.thinkingText = ""
     }
 
     // MARK: - 收尾与 DB 对齐
@@ -1441,7 +1664,8 @@ public final class ChatViewModel: ObservableObject {
             let r = try await cc.summarizeSession(projectId: pid, agentId: agentId ?? "",
                                                   sessionId: sid, model: selectedModel ?? "")
             let fname = r.savedFile.split(separator: "/").last.map(String.init) ?? ""
-            ToastCenter.shared.show("总结已保存 ✓（\(fname)）", kind: .success, duration: 5)
+            // 方向2 波次4：去字符对勾「 ✓」（ToastCenter kind:.success 已带图标语义）
+            ToastCenter.shared.show("总结已保存（\(fname)）", kind: .success, duration: 5)
         } catch {
             ToastCenter.shared.show("总结失败：\(SidecarError.describe(error))", kind: .error, duration: 5)
         }
@@ -1484,7 +1708,7 @@ public final class ChatViewModel: ObservableObject {
                     messages[i].archived = true
                 }
             }
-            ToastCenter.shared.show("已移入知识仓库 ✓（\(r.title)）", kind: .success, duration: 4)
+            ToastCenter.shared.show("已移入知识仓库（\(r.title)）", kind: .success, duration: 4)
             showTransferModal = false
             selectedDbIds = []
             selectMode = false

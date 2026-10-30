@@ -64,8 +64,9 @@ public final class WorkflowPanelViewModel: ObservableObject {
             if let preview = data["output_preview"] as? String {
                 s += " · \(String(preview.prefix(80)))"
             }
+            // 方向2 波次2：去 💬 装饰符号，回复正文与其他字段同用「 · 」分隔直接上内容
             if event == "workflow_reply", let text = data["text"] as? String {
-                s += " 💬 \(String(text.prefix(120)))"
+                s += " · \(String(text.prefix(120)))"
             }
             return s
         }
@@ -91,6 +92,9 @@ public final class WorkflowPanelViewModel: ObservableObject {
     @Published public private(set) var definition = WorkflowDefinition.startOnly()
     @Published public private(set) var dirty = false
     @Published public private(set) var validateMsg = ""
+    /// 方向2 波次2：连线守卫拒绝原因上屏（原静默 return false，用户无任何反馈）；
+    /// 2.5s 自动消隐（仿 MemoryTab flash 口径），添加成功或再次操作即清除
+    @Published public private(set) var edgeHint: String?
 
     // 运行态
     // W8（0.7.4）：running 翻转即上报 busy 闸（切走模块/关闭窗口前弹确认，
@@ -130,6 +134,7 @@ public final class WorkflowPanelViewModel: ObservableObject {
     private var suppressDirty = false           // selectWorkflow/create 回填表单时不置脏
     private var runTask: Task<Void, Never>?
     private var eventsStreamTask: Task<Void, Never>?
+    private var edgeHintTask: Task<Void, Never>?    // 方向2 波次2：edgeHint 定时消隐
     private var lastSeq = 0                     // 资源变更流游标（断连重连带 since 补发）
     private var started = false
 
@@ -557,16 +562,40 @@ public final class WorkflowPanelViewModel: ObservableObject {
 
     /// 新增连线（对齐 addEdge 守卫：空端点/自环/完全重复（含 when）一律拒绝）。
     /// 返回是否真正添加（供单测断言守卫分支）。
+    /// 方向2 波次2：拒绝分支补原因上屏（edgeHint）——判定逻辑本身不变，只加反馈。
     @discardableResult
     public func addEdge(from: String, to: String, when: String) -> Bool {
-        guard !from.isEmpty, !to.isEmpty, from != to else { return false }
+        guard !from.isEmpty, !to.isEmpty else {
+            flashEdgeHint("请先选择起点和终点节点")
+            return false
+        }
+        guard from != to else {
+            flashEdgeHint("起点终点相同，无法连线")
+            return false
+        }
         let exists = definition.edges.contains {
             $0.from == from && $0.to == to && ($0.when ?? "") == when
         }
-        guard !exists else { return false }
+        guard !exists else {
+            flashEdgeHint("该连线已存在（含分支标签），未重复添加")
+            return false
+        }
         let edge = WorkflowEdge(from: from, to: to, when: when.isEmpty ? nil : when)
         mutateDefinition { $0.edges.append(edge) }
+        edgeHintTask?.cancel()
+        edgeHint = nil
         return true
+    }
+
+    /// 方向2 波次2：连线拒绝提示 2.5s 消隐（仿 MemoryTabViewModel.flash 口径）。
+    private func flashEdgeHint(_ text: String) {
+        edgeHint = text
+        edgeHintTask?.cancel()
+        edgeHintTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.edgeHint = nil
+        }
     }
 
     /// 按索引删连线（对齐 removeEdge(idx)）。

@@ -269,7 +269,13 @@ public actor NativeModelDownloader {
                     try await downloadHTTP(src, to: part, expectedSize: spec.sizeBytes,
                                            progress: &progress)
                 }
+                // 大文件（如 bge-m3 的 weight.bin 1.08GB = 总量 98%）SHA256 校验期间
+                // 无任何进度回调，进度条会冻结在 98% 数秒——上屏「正在校验完整性」提示，
+                // 避免用户误判卡死。note 常态为空，校验结束即清（数据流动由 advance 清、
+                // 新文件 startFile 清；这里显式清保证校验后细节行干净）。
+                progress.setNote("正在校验完整性…")
                 let got = try await sha256File(part)
+                progress.setNote("")
                 if got != spec.sha256 {
                     // 哈希不符 = 源内容不可信（不是网络故障）——删了换源
                     errors.append("\(src)：SHA256 不符（\(got.prefix(12))… ≠ \(spec.sha256.prefix(12))…）")

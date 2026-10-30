@@ -101,11 +101,23 @@ private struct WarehouseManagerBody: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("知识仓库（拉模式）：从会话转移进来的对话/知识，保存为 .md 文件永久存储；只有你在会话框右侧面板显式搜索/勾选时才读取，永不自动注入模型上下文。与「知识库」（自动注入）是不同的东西。项目知识存于项目文件夹的\"知识库\"目录，全局知识存于应用数据目录。在 Finder 删除 .md 文件后，索引会在下次读取时自动对账清除。")
+            // 方向2 波次2：130+ 字说明墙收编——核心口径一句上屏，其余细节收进
+            // 「了解更多」折叠（原版 :87 四件事挤一段）
+            Text("知识仓库是拉模式：只在你于会话右侧面板显式检索/勾选时才读取，永不自动注入模型上下文。")
                 .font(VTheme.Typo.caption)
                 .foregroundStyle(VTheme.textTertiary)
                 .lineSpacing(3)
-                .padding(.bottom, 12)
+            DisclosureGroup("了解更多") {
+                Text("从会话转移进来的对话/知识会保存为 .md 文件永久存储；与「知识库」（自动注入）是不同的东西。项目知识存于项目文件夹的\"知识库\"目录，全局知识存于应用数据目录。在 Finder 删除 .md 文件后，索引会在下次读取时自动对账清除。")
+                    .font(VTheme.Typo.caption)
+                    .foregroundStyle(VTheme.textTertiary)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+            }
+            .font(VTheme.Typo.caption)
+            .foregroundStyle(VTheme.textSecondary)
+            .padding(.bottom, 12)
 
             // 嵌入状态条（TSX embedStatus 缺省不渲染）
             // 0.5.2 A1：真懒加载三态——装载中/装载失败单独文案（另起分支，
@@ -127,14 +139,16 @@ private struct WarehouseManagerBody: View {
                          : "语义嵌入（bge-m3 本地）：不可用（缺少模型文件，检索自动降级为关键词）")
                         .font(VTheme.Typo.caption)
                 }
-                .foregroundStyle(ok ? VTheme.okText : VTheme.textSecondary)
+                // 方向2 波次2：装载失败分支升 dangerText 信号（原版 :113 失败与不可用
+                // 同灰无区分；底色/描边同步 danger 族，对齐 VCallout(.error) 观感）
+                .foregroundStyle(failed ? VTheme.dangerText : (ok ? VTheme.okText : VTheme.textSecondary))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(ok ? VTheme.okBg : VTheme.bgCard,
+                .background(failed ? VTheme.dangerBg : (ok ? VTheme.okBg : VTheme.bgCard),
                             in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
                 .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s)
-                    .stroke(ok ? VTheme.okBorder : VTheme.borderDefault))
+                    .stroke(failed ? VTheme.dangerBorder : (ok ? VTheme.okBorder : VTheme.borderDefault)))
                 .padding(.bottom, 12)
                 .accessibilityIdentifier("warehouseMgr.embedStatus")
             }
@@ -153,7 +167,8 @@ private struct WarehouseManagerBody: View {
             // 头行：知识分组 + 重建索引
             HStack {
                 Text("知识分组")
-                    .font(.system(size: 13, weight: .medium))
+                    // 方向2 波次2：13 medium 手写归 Typo.body 档（原版 :139）
+                    .font(VTheme.Typo.body.weight(.medium))
                     .foregroundStyle(VTheme.textPrimary)
                 Spacer()
                 Button {
@@ -165,7 +180,6 @@ private struct WarehouseManagerBody: View {
                     }
                 }
                 .buttonStyle(.vSecondary)
-                .controlSize(.small)
                 .disabled(vm.loading)
                 .help("扫描知识目录内全部文档（md / docx / pdf / xlsx / pptx / doc / txt 等）重建索引（索引损坏时容灾）")
                 .accessibilityIdentifier("warehouseMgr.rebuild")
@@ -173,10 +187,10 @@ private struct WarehouseManagerBody: View {
             .padding(.bottom, 12)
 
             if vm.groups.isEmpty && !vm.loading {
-                Text("暂无知识分组")
-                    .font(VTheme.Typo.caption)
-                    .foregroundStyle(VTheme.textTertiary)
-                    .frame(maxWidth: .infinity)
+                // 方向2 波次2：手写空态收编 VEmptyStateView，并补「导入文件」引导（原版 :158-164）
+                VEmptyStateView(icon: "shippingbox",
+                                title: "暂无知识分组",
+                                message: "知识分组（全局 / 各项目）出现后，在该行右侧点「导入文件」即可把本机资料复制进知识目录并建立索引。")
                     .padding(.vertical, 20)
             }
 
@@ -188,7 +202,8 @@ private struct WarehouseManagerBody: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 8) {
                             Text(g.project_name)
-                                .font(.system(size: 13, weight: .medium))
+                                // 方向2 波次2：13 medium 手写归 Typo.body 档（原版 :174）
+                                .font(VTheme.Typo.body.weight(.medium))
                                 .foregroundStyle(VTheme.textPrimary)
                             Text("\(g.count) 条")
                                 .font(VTheme.Typo.micro)
@@ -211,7 +226,6 @@ private struct WarehouseManagerBody: View {
                         }
                     }
                     .buttonStyle(.vSecondary)
-                    .controlSize(.small)
                     .disabled(vm.importing == g.dir || g.dir.isEmpty)
                     .help("选择本机文件（pdf / docx / xlsx / pptx / txt / md 等）导入本知识组，复制进知识目录并解析索引，可在会话右侧检索")
                     .accessibilityIdentifier("warehouseMgr.import.\(g.id)")
@@ -225,13 +239,15 @@ private struct WarehouseManagerBody: View {
                         }
                     }
                     .buttonStyle(.vSecondary)
-                    .controlSize(.small)
                     .disabled(vm.opening == g.dir || g.dir.isEmpty)
                     .accessibilityIdentifier("warehouseMgr.openDir.\(g.id)")
                 }
                 .padding(.vertical, 10)
+                // 方向2 波次2：行底 hairline 跳过末行（原版 :216 逐行都画）
                 .overlay(alignment: .bottom) {
-                    Rectangle().fill(VTheme.borderSubtle).frame(height: 1)
+                    if g.id != vm.groups.last?.id {
+                        Rectangle().fill(VTheme.borderSubtle).frame(height: 1)
+                    }
                 }
             }
         }

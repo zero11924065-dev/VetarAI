@@ -61,6 +61,8 @@ public struct WorkflowEditorView: View {
                 }
                 .buttonStyle(.vGhost)
                 .controlSize(.small)
+                // 方向2 波次4：AX 补账
+                .accessibilityLabel("关闭节点配置")
                 .accessibilityIdentifier("workflowEditorClose")
             }
             .padding(.horizontal, 12)
@@ -108,8 +110,16 @@ public struct WorkflowEditorView: View {
             .accessibilityIdentifier("workflowNodeLabel")
 
         fieldLabel("节点类型")
-        Text("\(node.type)（id: \(node.id)）")
+        // 方向2 波次2（原版 :94）：英文 type 不再作主文上屏——中文标签为主，
+        // 英文 type/id 降级括号小字（mono micro textTertiary，数据身份口径）；
+        // 未知类型 meta.label 回落原文，括号只留 id 不重复
+        let typeMeta = WorkflowNodeTypes.meta(for: node.type)
+        Text(typeMeta.label)
             .font(VTheme.Typo.caption)
+            .foregroundStyle(VTheme.textSecondary)
+        + Text(typeMeta.label != node.type
+               ? "（\(node.type) · id: \(node.id)）" : "（id: \(node.id)）")
+            .font(VTheme.Typo.micro.monospaced())
             .foregroundStyle(VTheme.textTertiary)
 
         switch node.type {
@@ -156,6 +166,7 @@ public struct WorkflowEditorView: View {
             ForEach(vm.models, id: \.self) { Text($0).tag($0) }
         }
         .labelsHidden()
+        .accessibilityLabel("模型")
         .accessibilityIdentifier("workflowNodeModel")
 
         fieldLabel("提示词（可用 {{params.名称}}、{{item}} 等变量）")
@@ -226,6 +237,7 @@ public struct WorkflowEditorView: View {
                 ForEach(vm.models, id: \.self) { Text($0).tag($0) }
             }
             .labelsHidden()
+            .accessibilityLabel("裁判模型")
             fieldLabel("判定提示词（输出内容 = 分支 when 标签）")
             textArea(Binding(
                 get: { node.props["prompt"]?.string ?? "" },
@@ -247,6 +259,7 @@ public struct WorkflowEditorView: View {
                 ForEach(WorkflowNodeTypes.conditionOps, id: \.value) { Text($0.label).tag($0.value) }
             }
             .labelsHidden()
+            .accessibilityLabel("运算符")
             if !WorkflowNodeTypes.opsWithoutValue.contains(op) {
                 fieldLabel("匹配值")
                 TextField("", text: Binding(
@@ -307,6 +320,7 @@ public struct WorkflowEditorView: View {
             Text("跳过失败批继续（该批输出为空，继续处理后续批）").tag("skip")
         }
         .labelsHidden()
+        .accessibilityLabel("失败策略")
 
         fieldLabel("允许失败批数上限（0 = 不允许失败；仅\"跳过\"策略生效）")
         numberField(value: node.props["max_failures"]?.int.map(Int.init) ?? 0, range: 0...100) { v in
@@ -460,6 +474,7 @@ public struct WorkflowEditorView: View {
                     ForEach(WorkflowNodeTypes.addOptions, id: \.value) { Text($0.label).tag($0.value) }
                 }
                 .labelsHidden()
+                .accessibilityLabel("节点类型")
                 // U1：macOS Picker 桥接 NSPopUpButton 按最长菜单项定宽、不截断——
                 // 显式限宽使其截断收缩（对齐 TSX select 天然收缩），防溢出右边界
                 .frame(maxWidth: 210)
@@ -485,6 +500,7 @@ public struct WorkflowEditorView: View {
                     ForEach(vm.definition.nodes) { Text($0.label ?? $0.id).tag($0.id) }
                 }
                 .labelsHidden()
+                .accessibilityLabel("起点节点")
                 .font(VTheme.Typo.micro)
                 // U1：菜单项为用户可长命名的节点 label，NSPopUpButton 按最长项
                 // 定宽不截断——显式限宽（两 Picker + 箭头均分 296pt 内容宽）
@@ -495,6 +511,7 @@ public struct WorkflowEditorView: View {
                     ForEach(vm.definition.nodes) { Text($0.label ?? $0.id).tag($0.id) }
                 }
                 .labelsHidden()
+                .accessibilityLabel("终点节点")
                 .font(VTheme.Typo.micro)
                 .frame(maxWidth: 135)
             }
@@ -510,6 +527,13 @@ public struct WorkflowEditorView: View {
                 .buttonStyle(.vPrimary)
                 .controlSize(.small)
                 .accessibilityIdentifier("workflowAddEdge")
+            }
+            // 方向2 波次2：连线守卫拒绝原因上屏（原版静默 return false 无反馈；
+            // VM edgeHint 供文案，2.5s 自消隐，成功/再次操作即清）
+            if let hint = vm.edgeHint {
+                Text(hint)
+                    .font(VTheme.Typo.micro)
+                    .foregroundStyle(VTheme.warnText)
             }
             ForEach(Array(vm.definition.edges.enumerated()), id: \.offset) { idx, e in
                 HStack(spacing: 4) {

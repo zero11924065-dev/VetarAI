@@ -51,7 +51,16 @@ struct RoundtableListContentView: View {
                 VCallout(.error, error).padding(.bottom, 6)
             }
 
-            if vm.roundtables.isEmpty && vm.error == nil {
+            // 方向2 波次2：列表三态（仿 WorkflowSidebarView「加载宏列表…」范式）——
+            // roundtables optional 化：nil = 加载中（修假空闪烁：原 [] 初始值在首轮
+            // 拉取前闪「暂无圆桌讨论」）；空 = 空态；非空 = 列表
+            if vm.roundtables == nil && vm.error == nil {
+                Text("加载圆桌列表…")
+                    .font(VTheme.Typo.micro)
+                    .foregroundStyle(VTheme.textTertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else if (vm.roundtables ?? []).isEmpty && vm.error == nil {
                 VStack(spacing: 8) {
                     Image(systemName: "mic")
                         .font(.system(size: 30))
@@ -64,12 +73,16 @@ struct RoundtableListContentView: View {
                 .padding(.vertical, 24)
             }
 
-            ForEach(vm.roundtables) { rt in
-                RoundtableRowCard(rt: rt, isSelected: vm.selectedId == rt.id)
-                    .contentShape(Rectangle())
-                    .onTapGesture { vm.select(rt.id) }
-                    .padding(.bottom, 8)
-                    .accessibilityIdentifier("rtItem.\(rt.id)")
+            ForEach(vm.roundtables ?? []) { rt in
+                // 方向2 波次2：onTapGesture → Button(.plain)（原版 :50-56；对齐
+                // WorkflowSidebar 行做法——键盘可达/焦点环由系统行为承担；AX id 保留）
+                Button { vm.select(rt.id) } label: {
+                    RoundtableRowCard(rt: rt, isSelected: vm.selectedId == rt.id)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("rtItem.\(rt.id)")
             }
         }
         // 原版手风琴内容 padding: '8px 12px'（RoundtablePanel.tsx:138）
@@ -96,7 +109,9 @@ struct RoundtableListContentView: View {
                         .font(VTheme.Typo.caption)
                         .padding(.horizontal, 10)
                         .frame(height: 22)
-                        .background(selected ? VTheme.accentBg : VTheme.bgHover, in: Capsule())
+                        // 方向2 波次2：chips 选中态统一口径 bgSelected 底+accentText 字
+                        //（原版 :82-83 accentBg 底——与方向2 选中族对齐，今为藏蓝）
+                        .background(selected ? VTheme.bgSelected : VTheme.bgHover, in: Capsule())
                         .foregroundStyle(selected ? VTheme.accentText : VTheme.textSecondary)
                         .contentShape(Capsule())
                         .onTapGesture { vm.toggleAgent(agent.id) }
@@ -104,6 +119,8 @@ struct RoundtableListContentView: View {
                 }
             }
 
+            // 方向2 波次2：控制行拆两行（原版 :90-152 单行 HStack 塞 radio×2+Picker+
+            // Stepper+主钮，236pt 窄栏溢出）——行1 主持人单选+Picker，行2 轮数+主钮
             HStack(spacing: 10) {
                 // 主持人单选（对齐两个 radio label）
                 Button { vm.moderator = "user" } label: {
@@ -138,10 +155,13 @@ struct RoundtableListContentView: View {
                         }
                     } label: { EmptyView() }
                     .labelsHidden()
+                    .accessibilityLabel("选择主持人")
                     .frame(maxWidth: 160)
                     .accessibilityIdentifier("rtModeratorPicker")
                 }
+            }
 
+            HStack(spacing: 10) {
                 Stepper(value: $vm.maxRounds, in: 2...10) {
                     HStack(spacing: 3) {
                         Text("轮数")
@@ -200,6 +220,8 @@ struct RoundtableListContentView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .help("移除附件")
+                                // 方向2 波次4：AX 补账
+                                .accessibilityLabel("移除附件")
                             }
                             .font(VTheme.Typo.caption)
                             .padding(.horizontal, 8)
@@ -212,8 +234,9 @@ struct RoundtableListContentView: View {
             }
             .padding(.top, 6)
             .overlay(alignment: .top) {
+                // 方向2 波次2：分隔线双矩形叠像素 hack（原版 :197-199 borderSubtle 线
+                // 上再叠 bgApp 半像素偏移线）——收单发线 borderSubtle 1pt
                 Rectangle().fill(VTheme.borderSubtle).frame(height: 1)
-                    .overlay(Rectangle().fill(VTheme.bgApp).frame(height: 1).offset(y: 0.5))
             }
         }
         .padding(.bottom, 8)
@@ -260,15 +283,18 @@ private struct RoundtableRowCard: View {
 
             Text(RoundtableFormat.truncatedTopic(rt.topic))
                 .font(VTheme.Typo.body)
-                .foregroundStyle(VTheme.textPrimary)
+                // 方向2 波次2：选中字色统一 accentText（配合下方 bgSelected 底）
+                .foregroundStyle(isSelected ? VTheme.accentText : VTheme.textPrimary)
                 .lineLimit(1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? VTheme.accentBg : VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
+        // 方向2 波次2：卡选中去「底+描边」双通道（原版 :252-254 accentBg 底+accent
+        // 描边）——统一口径 bgSelected 底+accentText 字，描边恒 borderDefault
+        .background(isSelected ? VTheme.bgSelected : VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m)
-            .stroke(isSelected ? VTheme.accent : VTheme.borderDefault))
+            .stroke(VTheme.borderDefault))
     }
 }
 

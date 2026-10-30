@@ -104,68 +104,66 @@ public enum KnowledgeTab: String, CaseIterable {
     }
 }
 
-/// 四标签连排头（对齐 TSX：flex 1 等分、30pt 高、相邻边框重叠 -1、
-/// 选中白底 + 底部 2pt 强调色、两端圆角）。
+/// 四标签连排头（方向2 波次2：手写 -1 间距叠边框 + 选中底条 2pt 连排（无 hover）
+/// → 原生 .pickerStyle(.segmented)，选中/hover/焦点/键盘切换交给系统控件；
+/// AX id 口径 knowledge.tab.<raw> 保留，改挂分段标签）。
+/// 原版 :90-131 口径存档：flex 1 等分、30pt 高、相邻边框重叠 -1、选中白底 +
+/// 底部 2pt 强调色、两端圆角。
 private struct KnowledgeTabBar: View {
     @Binding var tab: KnowledgeTab
-    private let tabs = KnowledgeTab.allCases
 
     var body: some View {
-        HStack(spacing: -1) {
-            ForEach(Array(tabs.enumerated()), id: \.element) { idx, t in
-                let selected = tab == t
-                Button {
-                    tab = t
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: t.icon).font(.system(size: 12))
-                        Text(t.label).font(.system(size: 13, weight: selected ? .medium : .regular))
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .foregroundStyle(selected ? VTheme.accentText : VTheme.textSecondary)
-                    .background(selected ? VTheme.bgCard : VTheme.bgHover)
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(selected ? VTheme.accent : VTheme.borderStrong)
-                            .frame(height: selected ? 2 : 1)
-                    }
-                    .overlay {
-                        UnevenRoundedRectangle(
-                            topLeadingRadius: idx == 0 ? VTheme.Radius.s : 0,
-                            bottomLeadingRadius: 0,
-                            bottomTrailingRadius: 0,
-                            topTrailingRadius: idx == tabs.count - 1 ? VTheme.Radius.s : 0
-                        )
-                        .stroke(VTheme.borderStrong)
-                    }
-                }
-                .buttonStyle(.plain)
-                .frame(height: 30)
-                .zIndex(selected ? 1 : 0)
-                .accessibilityIdentifier("knowledge.tab.\(t.rawValue)")
+        Picker("", selection: $tab) {
+            ForEach(KnowledgeTab.allCases, id: \.self) { t in
+                Label(t.label, systemImage: t.icon)
+                    .tag(t)
+                    .accessibilityIdentifier("knowledge.tab.\(t.rawValue)")
             }
         }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 420)
     }
 }
 
 // MARK: - 共享小件（本面板族内复用）
 
 /// 胶囊状态按钮（对齐 TSX capsuleBtn：22pt 高、11 号字、on=强调底/关=灰底）。
+/// 方向2 波次2（原版 :151 手写 .plain）：视觉/文案结构不变，样式迁入
+/// VCapsuleButtonStyle 补 hover/pressed/disabled 三态（口径对齐 VButtons 族）
 struct VCapsuleButton: View {
     let on: Bool
     let label: String
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(on ? VTheme.accentBg : VTheme.bgHover, in: Capsule())
-                .foregroundStyle(on ? VTheme.accentText : VTheme.textSecondary)
-        }
-        .buttonStyle(.plain)
+        Button(label, action: action)
+            .buttonStyle(VCapsuleButtonStyle(on: on))
+    }
+}
+
+/// 胶囊钮样式（本面板族内专用）：hover 沿族内色阶加深一档
+///（off：bgHover→bgActive；on：accentBg→accentBorder），pressed opacity 0.7，
+/// disabled 0.45——均复用既有令牌，不新增色值。
+private struct VCapsuleButtonStyle: ButtonStyle {
+    let on: Bool
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(VTheme.Typo.micro.weight(.medium))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(
+                on
+                    ? (isHovered && isEnabled ? VTheme.accentBorder : VTheme.accentBg)
+                    : (isHovered && isEnabled ? VTheme.bgActive : VTheme.bgHover),
+                in: Capsule())
+            .foregroundStyle(on ? VTheme.accentText : VTheme.textSecondary)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
+            .onHover { isHovered = $0 }
+            .animation(VTheme.Motion.micro, value: isHovered)
     }
 }
 
@@ -240,10 +238,12 @@ private struct KnowledgeTabBody: View {
                 VStack(spacing: 8) {
                     Image(systemName: "book")
                         .font(.system(size: 36))
-                        .foregroundStyle(VTheme.borderStrong)
+                        // 方向2 波次2（原版 :226）：空态图标 borderStrong → textTertiary
+                        .foregroundStyle(VTheme.textTertiary)
                     Text("请先在主界面选择一个项目，即可管理该项目的知识库（项目文件夹/knowledge/）。")
                         .font(VTheme.Typo.body)
-                        .foregroundStyle(VTheme.textTertiary)
+                        // 方向2 波次2（原版 :229）：空态主句 textTertiary → textSecondary
+                        .foregroundStyle(VTheme.textSecondary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
@@ -291,10 +291,12 @@ private struct KnowledgeTabBody: View {
                         VStack(spacing: 8) {
                             Image(systemName: "doc.text")
                                 .font(.system(size: 36))
-                                .foregroundStyle(VTheme.borderStrong)
+                                // 方向2 波次2（原版 :277）：空态图标 borderStrong → textTertiary
+                                .foregroundStyle(VTheme.textTertiary)
                             Text("暂无知识文件")
                                 .font(VTheme.Typo.body)
-                                .foregroundStyle(VTheme.textTertiary)
+                                // 方向2 波次2（原版 :280）：空态主句 textTertiary → textSecondary
+                                .foregroundStyle(VTheme.textSecondary)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 20)
@@ -599,7 +601,9 @@ private struct SkillsTabBody: View {
                     }
                 }
                 .padding(12)
-                .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
+                // 方向2 波次2（原版 :585）：技能表单卡中卡——外层已是 bgCard 卡片，
+                // 内层再 bgCard 仅靠 1px 描边分层；内层改 bgApp 与外层拉开层级
+                .background(VTheme.bgApp, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
                 .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
                 .padding(.bottom, 12)
             }
@@ -608,10 +612,12 @@ private struct SkillsTabBody: View {
                 VStack(spacing: 8) {
                     Image(systemName: "wrench.and.screwdriver")
                         .font(.system(size: 36))
-                        .foregroundStyle(VTheme.borderStrong)
+                        // 方向2 波次2（原版 :594）：空态图标 borderStrong → textTertiary
+                        .foregroundStyle(VTheme.textTertiary)
                     Text("暂无技能")
                         .font(VTheme.Typo.body)
-                        .foregroundStyle(VTheme.textTertiary)
+                        // 方向2 波次2（原版 :597）：空态主句 textTertiary → textSecondary
+                        .foregroundStyle(VTheme.textSecondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 20)

@@ -170,12 +170,13 @@ public struct TokenIndicatorState: Equatable {
         return t
     }
 
-    /// 悬浮提示（现状 title 逐字+千分位统一）。
+    /// 悬浮提示（方向2 波次4b 压缩为一句人话——原 80+ 字长句；保留关键信息：
+    /// 按未移入仓库对话实时估算、非精确计费、当前档自动升档/移入后下降）。
     public var tooltip: String {
         if ceiling > 0 {
-            return "当前会话上下文估算：约 \(Self.fmt(used)) / 上限 \(Self.fmt(ceiling))（懒加载：当前档 \(Self.fmt(limit))，上下文膨胀自动升档直至上限；按未移入仓库的对话实时估算，非模型精确计费口径）"
+            return "按未移入仓库的对话实时估算（非模型精确计费）：约 \(Self.fmt(used)) / 上限 \(Self.fmt(ceiling))；当前档 \(Self.fmt(limit))，膨胀时自动升档"
         }
-        return "当前会话上下文估算：约 \(Self.fmt(used)) / 上限 \(Self.fmt(limit))（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）"
+        return "按未移入仓库的对话实时估算（非模型精确计费）：约 \(Self.fmt(used)) / 上限 \(Self.fmt(limit))，移入仓库后即下降"
     }
 
     /// limit==0 且 source==error 时显示「上下文：获取失败」。
@@ -420,6 +421,11 @@ public func mergeDbWithLocal(db dbMsgs: [ChatMessage], local: [ChatMessage], liv
             z.waitingSeconds = 0
             z.isStreaming = false
             z.toolSteps = convergeRunningSteps(z.toolSteps)
+            // C2（联调批二 Part C）：vmodel 思考「可见不保留」——僵尸恢复绝不回填
+            // 思考瞬态（thinkingText 非 vmodel 恒空，无条件清零零影响；预览对
+            // vmodel 一并清，历史无残影）
+            z.thinkingText = ""
+            if NativeVModelChat.isVModelName(z.modelUsed ?? "") { z.thinkingPreview = "" }
             if !z.manuallyStopped && z.completedDuration == nil {
                 z.interruptedNote = "已中断执行（应用断开或崩溃，内容为半成品）"
             }

@@ -193,7 +193,12 @@ private struct ModelPacksPanelBody: View {
                     if snap.variants.count > 1 {
                         Picker("档位", selection: $vm.msSelectedVariant) {
                             ForEach(snap.variants, id: \.id) { v in
-                                Text("\(v.title)（\(ModelPackFormat.formatSize(v.totalBytes))）").tag(v.id)
+                                // A0 分流产品化（2026-10-27）：档位文案带「推荐」/
+                                // 「本机暂不支持」徽标（按探测结论追加）
+                                Text("\(v.title)（\(ModelPackFormat.formatSize(v.totalBytes))）"
+                                     + (vm.msRecommendedVariant == v.id ? " · 推荐" : "")
+                                     + (vm.msVariantSupport[v.id] == false ? " · 本机暂不支持" : ""))
+                                    .tag(v.id)
                             }
                         }
                         .pickerStyle(.menu)
@@ -204,6 +209,15 @@ private struct ModelPacksPanelBody: View {
                         Text("档位：\(v.title)（\(ModelPackFormat.formatSize(v.totalBytes))）")
                             .font(VTheme.Typo.caption)
                             .foregroundStyle(VTheme.textSecondary)
+                    }
+
+                    // A0 分流产品化（2026-10-27）：MLX 分流引导文案（按选中态取一，
+                    // 都不满足不显示；单一 Text 挂 AX id——字面量 id 全局唯一审计线）
+                    if let g = msGuidance(snap: snap) {
+                        Text(g.text)
+                            .font(VTheme.Typo.micro)
+                            .foregroundStyle(g.isWarn ? VTheme.warnText : VTheme.textTertiary)
+                            .accessibilityIdentifier("modelPacks.msGuidance")
                     }
 
                     HStack(spacing: 8) {
@@ -241,22 +255,14 @@ private struct ModelPacksPanelBody: View {
 
             // 下载进度（含速率——与必备模型/目录源进度行同口径）
             if let prog = vm.msProgress {
-                VStack(alignment: .leading, spacing: 4) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(VTheme.bgHover)
-                                .frame(height: 6)
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(VTheme.accent)
-                                .frame(width: geo.size.width * msPercent(prog), height: 6)
-                        }
-                    }
-                    .frame(height: 6)
-                    Text("已下载 \(ModelPackFormat.formatSize(prog.receivedBytes)) / \(ModelPackFormat.formatSize(prog.totalBytes))\(prog.totalBytes > 0 ? "（\(Int(msPercent(prog) * 100))%）" : "")\(prog.file.isEmpty ? "" : " · \(prog.file)")\(prog.bytesPerSecond > 0 ? " · \(NativeRequiredModels.fmtSpeed(prog.bytesPerSecond))" : "")")
-                        .font(VTheme.Typo.micro)
-                        .foregroundStyle(VTheme.textTertiary)
-                }
+                // 方向2 波次2：手写进度条收编 VDownloadProgress（文件尾；原此份无动效，
+                // 统一到目录区那份的 .animation 动效版；中点拼串改固定槽位）
+                VDownloadProgress(fraction: msPercent(prog),
+                                  percent: prog.totalBytes > 0 ? Int(msPercent(prog) * 100) : nil,
+                                  receivedBytes: prog.receivedBytes,
+                                  totalBytes: prog.totalBytes,
+                                  file: prog.file,
+                                  bytesPerSecond: prog.bytesPerSecond)
             }
 
             if let msErr = vm.msError {
@@ -276,6 +282,25 @@ private struct ModelPacksPanelBody: View {
         return CGFloat(min(1, Double(p.receivedBytes) / Double(p.totalBytes)))
     }
 
+    /// A0 分流产品化（2026-10-27）：MLX 分流引导决策——选中档=被推荐的 MLX 档 →
+    /// 推荐理由；选中 MLX 且探测不支持 → 拦截预警（warn）；选中 GGUF 且存在被
+    /// 推荐的 MLX 档 → 提示可换档；都不满足 → nil（不显示）。
+    private func msGuidance(snap: ModelScopeRepoSnapshot) -> (text: String, isWarn: Bool)? {
+        guard let sel = snap.variants.first(where: { $0.id == vm.msSelectedVariant })
+        else { return nil }
+        if sel.format == .mlx, vm.msRecommendedVariant == sel.id {
+            return ("已推荐 MLX 版：Apple 芯片原生加速，模型加载实测约 2 秒"
+                    + "（GGUF 版约 84 秒），生成速度相当。", false)
+        }
+        if sel.format == .mlx, vm.msVariantSupport[sel.id] == false {
+            return ("该架构暂不在本机 MLX 支持列表，安装会被拦截；建议改选 GGUF 档。", true)
+        }
+        if sel.format == .gguf, vm.msRecommendedVariant != nil {
+            return ("本机支持 MLX 加速版（加载快约 40 倍），可在档位中选带「推荐」标记的 MLX 档。", false)
+        }
+        return nil
+    }
+
     // MARK: - 标题行
 
     private var titleRow: some View {
@@ -285,7 +310,9 @@ private struct ModelPacksPanelBody: View {
                     .font(.system(size: 14))
                     .foregroundStyle(VTheme.textPrimary)
                 Text("模型包管理")
-                    .font(VTheme.Typo.sectionTitle)
+                    // 方向2 波次2：设置壳页标题统一 Typo.pageTitle（原版 sectionTitle
+                    // 14 升档；本文件仅动此一行）
+                    .font(VTheme.Typo.pageTitle)
                     .foregroundStyle(VTheme.textPrimary)
             }
             Spacer()
@@ -334,29 +361,15 @@ private struct ModelPacksPanelBody: View {
             } else if vm.catalog.isEmpty {
                 if vm.noSources {
                     // 空目录且无源：引导去下方加目录源（文案逐字）
-                    VStack(spacing: 8) {
-                        Image(systemName: "layers")
-                            .font(.system(size: 30))
-                            .foregroundStyle(VTheme.borderStrong)
-                        Text("还没有配置模型包目录源。\n在下方「目录源设置」中添加目录索引地址（http(s):// 或 file:// 本地目录），保存后这里会列出可安装的模型包。")
-                            .font(VTheme.Typo.body)
-                            .foregroundStyle(VTheme.textTertiary)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(3)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+                    // 方向2 波次2：手写空态收编 VEmptyStateView（统一形制）
+                    VEmptyStateView(icon: "layers",
+                                    title: "还没有配置模型包目录源",
+                                    message: "在下方「目录源设置」中添加目录索引地址（http(s):// 或 file:// 本地目录），保存后这里会列出可安装的模型包。")
                 } else {
-                    VStack(spacing: 8) {
-                        Image(systemName: "layers")
-                            .font(.system(size: 30))
-                            .foregroundStyle(VTheme.borderStrong)
-                        Text("目录为空——已配置的源里没有可安装的模型包。")
-                            .font(VTheme.Typo.body)
-                            .foregroundStyle(VTheme.textTertiary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+                    // 方向2 波次2：手写空态收编 VEmptyStateView（统一形制）
+                    VEmptyStateView(icon: "layers",
+                                    title: "目录为空",
+                                    message: "已配置的源里没有可安装的模型包。")
                 }
             } else {
                 VStack(spacing: 12) {
@@ -390,10 +403,15 @@ private struct ModelPacksPanelBody: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(VTheme.accentBg, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-                    Text("v\(p.version.isEmpty ? "?" : p.version)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(VTheme.textTertiary)
-                    Text(ModelPackFormat.formatSize(p.size_bytes ?? 0))
+                    // 方向2 波次2：版本缺失不再显示「v?」——缺省时不渲染版本段
+                    if !p.version.isEmpty {
+                        Text("v\(p.version)")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(VTheme.textTertiary)
+                    }
+                    // 方向2 波次3：size_bytes 缺失（nil）显示「—」（formatSize 可选
+                    // 重载），不再把「缺失」画成真实的「0 B」（原版 :362 为 ?? 0）。
+                    Text(ModelPackFormat.formatSize(p.size_bytes))
                         .font(VTheme.Typo.caption)
                         .foregroundStyle(VTheme.textTertiary)
                     if p.installed == true {
@@ -418,14 +436,7 @@ private struct ModelPacksPanelBody: View {
                     .buttonStyle(.vDanger)
                     .controlSize(.small)
                     .accessibilityIdentifier("modelPacks.cancel.\(p.pack_id)")
-                } else if p.installed == true {
-                    Text("已安装")
-                        .font(VTheme.Typo.caption)
-                        .foregroundStyle(VTheme.textTertiary)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
-                        .background(VTheme.bgHover, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-                } else {
+                } else if p.installed != true {
                     Button {
                         vm.install(p)
                     } label: {
@@ -443,6 +454,9 @@ private struct ModelPacksPanelBody: View {
                     .disabled(busy)
                     .accessibilityIdentifier("modelPacks.install.\(p.pack_id)")
                 }
+                // 方向2 波次2：「已安装」一行双标收敛——保留名字旁带版本后缀的 okBg
+                // 徽标（上面 :382 区域），右侧重复灰色 chip 删除（已安装且无下载任务时
+                // 右侧不再渲染任何件，app-screens「One status mark per row」）
             }
 
             if let desc = p.description, !desc.isEmpty {
@@ -451,30 +465,27 @@ private struct ModelPacksPanelBody: View {
                     .foregroundStyle(VTheme.textSecondary)
                     .lineSpacing(2)
             }
-            Text("来源：\(host.isEmpty ? "本地目录" : host)\(p.format.isEmpty ? "" : " · \(p.format)")\(p.license.map { " · \($0)" } ?? "")")
-                .font(VTheme.Typo.micro)
-                .foregroundStyle(VTheme.textTertiary)
+            // 方向2 波次2：来源行中点拼串改固定槽位 HStack（来源/格式/许可各就其位，
+            // 缺省字段整槽不渲染，不留悬空「·」分隔符）
+            HStack(spacing: VTheme.Space.s2) {
+                Text("来源：\(host.isEmpty ? "本地目录" : host)")
+                if !p.format.isEmpty { Text(p.format) }
+                if let license = p.license, !license.isEmpty { Text(license) }
+            }
+            .font(VTheme.Typo.micro)
+            .foregroundStyle(VTheme.textTertiary)
 
             // 下载中：进度条（SSE download_progress 驱动）
             if let prog {
-                VStack(alignment: .leading, spacing: 4) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(VTheme.bgHover)
-                                .frame(height: 6)
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(VTheme.accent)
-                                .frame(width: geo.size.width * CGFloat(prog.percent) / 100, height: 6)
-                                .animation(.easeOut(duration: 0.3), value: prog.percent)
-                        }
-                    }
-                    .frame(height: 6)
-                    Text("已下载 \(ModelPackFormat.formatSize(prog.received)) / \(ModelPackFormat.formatSize(prog.total))\(prog.total > 0 ? "（\(prog.percent)%）" : "")\(prog.file.map { " · \($0)" } ?? "")\(prog.bytesPerSecond > 0 ? " · \(NativeRequiredModels.fmtSpeed(prog.bytesPerSecond))" : "")")
-                        .font(VTheme.Typo.micro)
-                        .foregroundStyle(VTheme.textTertiary)
-                }
-                .padding(.top, 2)
+                // 方向2 波次2：手写进度条收编 VDownloadProgress（文件尾；本份原有
+                // .animation 动效随组件统一保留；中点拼串改固定槽位）
+                VDownloadProgress(fraction: CGFloat(prog.percent) / 100,
+                                  percent: prog.total > 0 ? prog.percent : nil,
+                                  receivedBytes: prog.received,
+                                  totalBytes: prog.total,
+                                  file: prog.file,
+                                  bytesPerSecond: prog.bytesPerSecond)
+                    .padding(.top, 2)
             }
             // 下载/安装错误：显示在卡片上
             if let dlErr {
@@ -506,16 +517,10 @@ private struct ModelPacksPanelBody: View {
                 .foregroundStyle(VTheme.textPrimary)
 
             if vm.installed.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 30))
-                        .foregroundStyle(VTheme.borderStrong)
-                    Text("尚未安装任何模型包。从上方目录选择安装。")
-                        .font(VTheme.Typo.body)
-                        .foregroundStyle(VTheme.textTertiary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
+                // 方向2 波次2：手写空态收编 VEmptyStateView（统一形制）
+                VEmptyStateView(icon: "arrow.down.circle",
+                                title: "尚未安装任何模型包",
+                                message: "从上方目录选择安装。")
             } else {
                 VStack(spacing: 12) {
                     ForEach(vm.installed) { p in
@@ -544,9 +549,12 @@ private struct ModelPacksPanelBody: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(VTheme.accentBg, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-                    Text("v\(p.version.isEmpty ? "?" : p.version)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(VTheme.textTertiary)
+                    // 方向2 波次2：版本缺失不再显示「v?」——缺省时不渲染版本段
+                    if !p.version.isEmpty {
+                        Text("v\(p.version)")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(VTheme.textTertiary)
+                    }
                     if !p.format.isEmpty {
                         Text(p.format)
                             .font(VTheme.Typo.caption)
@@ -584,18 +592,16 @@ private struct ModelPacksPanelBody: View {
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
                     // 启用/禁用开关（禁用保留文件，推理侧按 enabled 过滤）
-                    Button {
-                        vm.toggle(p)
-                    } label: {
-                        Text(p.enabled ? "禁用" : "启用")
-                            .font(VTheme.Typo.caption)
-                            .foregroundStyle(p.enabled ? VTheme.accentText : VTheme.textSecondary)
-                            .padding(.horizontal, 8)
-                            .frame(height: 22)
-                            .background(p.enabled ? VTheme.accentBg : VTheme.bgHover,
-                                        in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+                    // 方向2 波次2：手写 22px pill 按钮换原生 Toggle(.switch)——开关类状态
+                    // 用开关表达（标签语义不变：启用=本包参与推理）；回调 vm.toggle 不变
+                    Toggle(isOn: Binding(
+                        get: { p.enabled },
+                        set: { _ in vm.toggle(p) }
+                    )) {
+                        Text("启用").font(VTheme.Typo.caption)
                     }
-                    .buttonStyle(.plain)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
                     .help(p.enabled ? "点击禁用此模型包" : "点击启用此模型包")
                     .accessibilityIdentifier("modelPacks.toggle.\(p.pack_id)")
                     Button {
@@ -633,7 +639,8 @@ private struct ModelPacksPanelBody: View {
         .padding(12)
         .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
-        .opacity(p.enabled ? 1 : 0.7)
+        // 方向2 波次2：整卡 .opacity(p.enabled ? 1 : 0.7) 删除——禁用只由名称行
+        // textTertiary 文字级表达（上面已做），警示文字（校验未通过/缺失文件）恢复全浓度
     }
 
     // MARK: - VetarModel 模型（.vmodel）区卡（.vmodel 集成批）
@@ -674,18 +681,10 @@ private struct ModelPacksPanelBody: View {
             }
 
             if vm.vmodels.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "cube")
-                        .font(.system(size: 30))
-                        .foregroundStyle(VTheme.borderStrong)
-                    Text("还没有安装 VetarModel 模型。在 VetarModel 完成训练并导出 .vmodel 文件后，点上方按钮安装。")
-                        .font(VTheme.Typo.body)
-                        .foregroundStyle(VTheme.textTertiary)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(3)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
+                // 方向2 波次2：手写空态收编 VEmptyStateView（统一形制）
+                VEmptyStateView(icon: "cube",
+                                title: "还没有安装 VetarModel 模型",
+                                message: "在 VetarModel 完成训练并导出 .vmodel 文件后，点上方按钮安装。")
             } else {
                 VStack(spacing: 12) {
                     ForEach(vm.vmodels, id: \.id) { m in
@@ -732,30 +731,22 @@ private struct ModelPacksPanelBody: View {
                         .truncationMode(.middle)
                         .frame(maxWidth: 180)
                         .help(m.sourceFile)
-                    // MLX 推理徽标（0.7.3 起正式可分派：LoRA 叠加底座本机推理）
-                    HStack(spacing: 3) {
-                        Image(systemName: "cpu").font(.system(size: 9))
-                        Text("MLX 可推理").font(VTheme.Typo.micro)
-                    }
-                    .foregroundStyle(VTheme.accentText)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(VTheme.accentBg, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+                    // 方向2 波次2：恒显「MLX 可推理」徽标删除（无条件恒显=零信息量，
+                    // 区卡副标题已声明「本机 MLX 推理」）；原版 :718-726。
+                    // installed 卡的条件徽标（task==chat 且 driver==mlxswift）保留不动。
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
-                    Button {
-                        vm.toggleVModel(m)
-                    } label: {
-                        Text(m.enabled ? "禁用" : "启用")
-                            .font(VTheme.Typo.caption)
-                            .foregroundStyle(m.enabled ? VTheme.accentText : VTheme.textSecondary)
-                            .padding(.horizontal, 8)
-                            .frame(height: 22)
-                            .background(m.enabled ? VTheme.accentBg : VTheme.bgHover,
-                                        in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+                    // 方向2 波次2：手写 22px pill 按钮换原生 Toggle(.switch)（同已安装卡；
+                    // 标签语义不变：启用=进入工作室模型池）；回调 vm.toggleVModel 不变
+                    Toggle(isOn: Binding(
+                        get: { m.enabled },
+                        set: { _ in vm.toggleVModel(m) }
+                    )) {
+                        Text("启用").font(VTheme.Typo.caption)
                     }
-                    .buttonStyle(.plain)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
                     .help(m.enabled ? "点击禁用（工作室模型池不再列出）" : "点击启用")
                     .accessibilityIdentifier("modelPacks.vmodel.toggle.\(m.id)")
                     Button {
@@ -789,7 +780,8 @@ private struct ModelPacksPanelBody: View {
         .padding(12)
         .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
-        .opacity(m.enabled ? 1 : 0.7)
+        // 方向2 波次2：整卡 .opacity(m.enabled ? 1 : 0.7) 删除——禁用只由名称行
+        // textTertiary 文字级表达（上面已做）
     }
 
     /// 缓存预设原文 → 黑盒文案（0短/1标准/2长；非法回落标准——SDK 同款口径）
@@ -855,7 +847,8 @@ private struct ModelPacksPanelBody: View {
                 .help("选择包含 catalog.json 的本地目录，以 file:// 目录源加入")
                 .accessibilityIdentifier("modelPacks.pickLocalDir")
                 if vm.savedURLs {
-                    Text("已保存 ✓")
+                    // 方向2 波次2：去字符对勾「 ✓」（符号图标交给 SF Symbol/VCallout 体系，文案留字）
+                    Text("已保存")
                         .font(VTheme.Typo.caption)
                         .foregroundStyle(VTheme.okText)
                 }
@@ -883,7 +876,8 @@ private struct ModelPacksPanelBody: View {
                 .controlSize(.small)
                 .accessibilityIdentifier("modelPacks.savePacksDir")
                 if vm.savedDir {
-                    Text("已保存 ✓")
+                    // 方向2 波次2：去字符对勾「 ✓」（同上）
+                    Text("已保存")
                         .font(VTheme.Typo.caption)
                         .foregroundStyle(VTheme.okText)
                 }
@@ -909,6 +903,55 @@ private struct ModelPacksPanelBody: View {
             vm.catalogDraft = line
         } else {
             vm.catalogDraft += "\n" + line
+        }
+    }
+}
+
+/// 方向2 波次2：目录区/魔塔区下载进度条同源组件（原 :226-243 与 :441-461 同屏手写
+/// 两份、动效不一——统一到有 .animation 动效版；元信息中点「·」拼串改固定槽位
+/// HStack：大小/百分比/文件/速率各就其位，缺省字段整槽不渲染，不留悬空分隔符）。
+private struct VDownloadProgress: View {
+    /// 进度条填充比（0~1；total 未知时 0）
+    let fraction: CGFloat
+    /// 百分比槽（nil = 整槽不渲染；两处调用点各自保留原百分比口径）
+    let percent: Int?
+    let receivedBytes: Int64
+    let totalBytes: Int64
+    /// 当前文件名（nil/空串 = 槽位不渲染）
+    let file: String?
+    /// 字节/秒（≤0 = 槽位不渲染）
+    let bytesPerSecond: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(VTheme.bgHover)
+                        .frame(height: 6)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(VTheme.accent)
+                        .frame(width: geo.size.width * fraction, height: 6)
+                        .animation(.easeOut(duration: 0.3), value: fraction)
+                }
+            }
+            .frame(height: 6)
+            HStack(spacing: VTheme.Space.s2) {
+                Text("已下载 \(ModelPackFormat.formatSize(receivedBytes)) / \(ModelPackFormat.formatSize(totalBytes))")
+                if let percent {
+                    Text("\(percent)%")
+                }
+                if let file, !file.isEmpty {
+                    Text(file)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if bytesPerSecond > 0 {
+                    Text(NativeRequiredModels.fmtSpeed(bytesPerSecond))
+                }
+            }
+            .font(VTheme.Typo.micro)
+            .foregroundStyle(VTheme.textTertiary)
         }
     }
 }

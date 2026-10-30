@@ -225,7 +225,7 @@ final class NativeMPChatConnectorTests: XCTestCase {
         for try await ev in conn.chatStream(model: "qwen-mp",
                                             messages: [["role": .string("user"),
                                                         "content": .string("hi")]],
-                                            tools: nil, images: nil) {
+                                            tools: nil, images: nil, thinkingMode: nil) {
             events.append(ev)
         }
 
@@ -245,7 +245,7 @@ final class NativeMPChatConnectorTests: XCTestCase {
             for try await _ in conn.chatStream(model: "ghost",
                                                messages: [["role": .string("user"),
                                                            "content": .string("hi")]],
-                                               tools: nil, images: nil) {}
+                                               tools: nil, images: nil, thinkingMode: nil) {}
             XCTFail("应抛 openAI 400")
         } catch let NativeChatConnectorError.openAI(status, message, detail) {
             XCTAssertEqual(status, 400)

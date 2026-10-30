@@ -53,7 +53,8 @@ private final class ScriptConn: NativeChatConnector, @unchecked Sendable {
     init(_ rounds: [Round]) { self.rounds = rounds }
 
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         let i = min(calls, rounds.count - 1)
         calls += 1
@@ -82,7 +83,8 @@ private final class ScriptConn: NativeChatConnector, @unchecked Sendable {
 /// 永不产出的 connector（取消硬停止专例：模拟 prefill 期间的在飞请求）。
 private final class HangingConn: NativeChatConnector, @unchecked Sendable {
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         AsyncThrowingStream { cont in
             let t = Task { try? await Task.sleep(nanoseconds: 600_000_000_000) }
@@ -284,6 +286,49 @@ final class NativeChatEndpointsTests: XCTestCase {
         XCTAssertEqual(plan8.heartbeatBase, 5, "心跳下限钳 5")
         // ⑦ max_tool_rounds 缺省 200
         XCTAssertEqual(plan1.maxRounds, 200)
+    }
+
+    // ══ 联调批六：.vmodel 宿主包装契约与普通模型对照 ══
+
+    func testVModelBuildPlanOmitsHostSystemAndDisablesTemplateTools() async throws {
+        let (pid, aid, sid) = try makeProjectAgentSession()
+        let history = [
+            ChatStreamMessage(role: "user", content: "查资料"),
+            ChatStreamMessage(role: "assistant", content:
+                "<tool_call>{\"name\":\"search_knowledge\",\"arguments\":{\"query\":\"穗金麦\"}}</tool_call>"),
+            ChatStreamMessage(role: "user", content: "继续"),
+        ]
+        let request = ChatStreamRequest(
+            agent_id: aid, model: "vmodel:sample-full", messages: history,
+            project_id: pid, session_id: sid, sandbox_root: base.path,
+            auto_archive_unit: true)
+        let plan = try await kernel.chatEndpoints.buildPlan(request)
+        let expected: [[String: JSONValue]] = history.map {
+            ["role": .string($0.role), "content": .string($0.content)]
+        }
+        XCTAssertEqual(plan.messages, expected,
+                       "仅移除宿主自动包装；历史角色、正文与 tool_call 文本逐字保留")
+        XCTAssertEqual(plan.systemPrompt, "")
+        XCTAssertFalse(plan.toolsEnabled)
+        XCTAssertFalse(plan.messages.contains { $0["role"]?.string == "system" },
+                       "包内身份由 Router 注入，此处不得混入任何宿主 system")
+        XCTAssertTrue(plan.canDelegate, "本批不改既有会话状态或正文工具回路")
+        XCTAssertTrue(plan.knowledgeOn)
+        XCTAssertTrue(plan.archiveOn)
+    }
+
+    func testVModelBuildPlanOrdinaryModelStillUsesHostPromptAndCapabilities() async throws {
+        let (pid, aid, sid) = try makeProjectAgentSession()
+        let request = ChatStreamRequest(
+            agent_id: aid, model: "qwen3.8",
+            messages: [ChatStreamMessage(role: "user", content: "hi")],
+            project_id: pid, session_id: sid, sandbox_root: base.path)
+        let plan = try await kernel.chatEndpoints.buildPlan(request)
+        XCTAssertTrue(plan.systemPrompt.contains("【委派纪律】"))
+        XCTAssertTrue(plan.toolsEnabled)
+        XCTAssertEqual(plan.messages.first?["role"], .string("system"))
+        XCTAssertEqual(plan.messages.first?["content"], .string(plan.systemPrompt))
+        XCTAssertEqual(plan.messages.last?["content"], .string("hi"))
     }
 
     // ══ 端点前置校验（422 原文案；首字节前 finish(throwing:)）══

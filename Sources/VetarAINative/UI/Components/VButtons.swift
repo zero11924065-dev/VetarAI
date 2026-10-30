@@ -22,6 +22,14 @@
 //  按钮 / 输入框样式库（对齐 theme.ts 的 btnPrimary/btnSecondary/btnDanger/btnGhost/input）。
 //  面板统一用这套 ButtonStyle / 修饰器，不要散落自定义样式。
 //
+//  方向2 波次1（2026-10-19 拍板，蓝本 §3.5）：三态补齐——
+//    · hover：primary ink→inkHover、secondary bgCard→bgHover、ghost/rowAction 浮出 bgHover 浅底；
+//    · pressed：沿用 opacity 档位，外包 Motion.micro 动效；
+//    · disabled：读 \.isEnabled，opacity 0.45 单通道（禁 hover 反馈）；
+//    · 焦点环：依赖系统默认行为（macOS 全键盘访问下 SwiftUI 对可聚焦视图自动绘环）；
+//      ⚠️VERIFY 真机确认自定义 ButtonStyle 下系统环是否被背景吞掉，若被吞再评估自绘
+//      （注：本 SDK 不提供 onFocusChange 的 macOS 可用性，勿走该路）。
+//
 
 import SwiftUI
 
@@ -31,44 +39,69 @@ import SwiftUI
 public struct VPrimaryButtonStyle: ButtonStyle {
     public var danger: Bool = false
     public init(danger: Bool = false) { self.danger = danger }
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
 
     public func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let base = danger ? VTheme.danger : VTheme.ink
+        let hovered = danger ? VTheme.danger.opacity(0.85) : VTheme.inkHover
+        return configuration.label
             .font(VTheme.Typo.body.weight(.medium))
             .padding(.horizontal, 14)
             .frame(height: 28)
-            .background(danger ? VTheme.danger : VTheme.ink,
+            .background(isHovered && isEnabled ? hovered : base,
                         in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
             .foregroundStyle(danger ? Color.white : VTheme.onInk)
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.45)
+            .onHover { isHovered = $0 }
+            .animation(VTheme.Motion.micro, value: isHovered)
+            .animation(VTheme.Motion.micro, value: configuration.isPressed)
     }
 }
 
 /// 次按钮：白底灰框。
 public struct VSecondaryButtonStyle: ButtonStyle {
     public init() {}
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(VTheme.Typo.body)
             .padding(.horizontal, 14)
             .frame(height: 28)
-            .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+            .background(isHovered && isEnabled ? VTheme.bgHover : VTheme.bgCard,
+                        in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
             .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s).stroke(VTheme.borderStrong))
             .foregroundStyle(VTheme.textPrimary)
-            .opacity(configuration.isPressed ? 0.75 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
+            .onHover { isHovered = $0 }
+            .animation(VTheme.Motion.micro, value: isHovered)
     }
 }
 
-/// 幽灵按钮：无边无底（行内/工具栏操作）。
+/// 幽灵按钮：无边无底（行内/工具栏操作）；hover 浮出 bgHover 浅底。
+/// danger=true 时字色 dangerText、hover 浮 dangerBg（方向2 波次2：原消费侧在
+/// 样式外叠 .foregroundStyle(dangerText) 被内层 textSecondary 覆盖成死代码，
+/// 危险意图实际不渲染——染色收进样式本体）。
 public struct VGhostButtonStyle: ButtonStyle {
-    public init() {}
+    public var danger: Bool = false
+    public init(danger: Bool = false) { self.danger = danger }
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(VTheme.Typo.body)
             .padding(.horizontal, 10)
             .frame(height: 28)
-            .foregroundStyle(VTheme.textSecondary)
-            .opacity(configuration.isPressed ? 0.6 : 1)
+            .background(isHovered && isEnabled
+                            ? (danger ? VTheme.dangerBg : VTheme.bgHover) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+            .foregroundStyle(danger ? VTheme.dangerText : VTheme.textSecondary)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.45)
+            .onHover { isHovered = $0 }
+            .animation(VTheme.Motion.micro, value: isHovered)
     }
 }
 
@@ -81,6 +114,36 @@ public extension ButtonStyle where Self == VSecondaryButtonStyle {
 }
 public extension ButtonStyle where Self == VGhostButtonStyle {
     static var vGhost: VGhostButtonStyle { VGhostButtonStyle() }
+    /// 危险幽灵钮（删除/卸载类行级操作；染色在样式本体生效）
+    static var vGhostDanger: VGhostButtonStyle { VGhostButtonStyle(danger: true) }
+}
+
+// MARK: - 圆形图标钮（composer 发送/停止/插话专用）
+
+/// 28×28 正圆主钮（方向2 波次2 修 A 组 P1-3：vPrimary 横 padding 14 高 28 非方形，
+/// 被 clipShape(Circle()) 裁成椭圆——composer 三枚圆钮专用本样式，勿再 clip 矩形样式）。
+public struct VCircleButtonStyle: ButtonStyle {
+    public var danger: Bool = false
+    public init(danger: Bool = false) { self.danger = danger }
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    public func makeBody(configuration: Configuration) -> some View {
+        let base = danger ? VTheme.danger : VTheme.ink
+        let hovered = danger ? VTheme.danger.opacity(0.85) : VTheme.inkHover
+        return configuration.label
+            .frame(width: 28, height: 28)
+            .background(isHovered && isEnabled ? hovered : base, in: Circle())
+            .foregroundStyle(danger ? Color.white : VTheme.onInk)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.45)
+            .contentShape(Circle())
+            .onHover { isHovered = $0 }
+            .animation(VTheme.Motion.micro, value: isHovered)
+    }
+}
+
+public extension ButtonStyle where Self == VCircleButtonStyle {
+    static var vCircle: VCircleButtonStyle { VCircleButtonStyle() }
 }
 
 // MARK: - 行内操作小图标钮
@@ -90,19 +153,32 @@ public extension ButtonStyle where Self == VGhostButtonStyle {
 /// ButtonStyle 不响应 controlSize(.small)），opacity(0) 隐藏时仍占布局宽度，
 /// 5 个即吃掉 ~183pt 把同行名称 Text 挤成「…」（DBG-146 项目名省略号事件）。
 public struct VRowActionButtonStyle: ButtonStyle {
-    public init() {}
+    /// danger=true 时字色 dangerText、hover 浮 dangerBg（方向2 波次2：同 vGhost
+    /// danger——外层叠色被内层覆盖的死代码收进样式本体）
+    public var danger: Bool = false
+    public init(danger: Bool = false) { self.danger = danger }
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12))
             .frame(width: 20, height: 20)
-            .foregroundStyle(VTheme.textSecondary)
-            .opacity(configuration.isPressed ? 0.6 : 1)
+            .background(isHovered && isEnabled
+                            ? (danger ? VTheme.dangerBg : VTheme.bgHover) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 4))
+            .foregroundStyle(danger ? VTheme.dangerText : VTheme.textSecondary)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.45)
             .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .animation(VTheme.Motion.micro, value: isHovered)
     }
 }
 
 public extension ButtonStyle where Self == VRowActionButtonStyle {
     static var vRowAction: VRowActionButtonStyle { VRowActionButtonStyle() }
+    /// 危险行内钮（删除类；染色在样式本体生效）
+    static var vRowActionDanger: VRowActionButtonStyle { VRowActionButtonStyle(danger: true) }
 }
 
 // MARK: - 图标钮命中目标
@@ -122,14 +198,21 @@ public extension View {
 // MARK: - 输入框样式
 
 /// 统一输入框外观（白底、1px 强边框、6 圆角、13 号字）。
+/// 波次1 新增焦点态：聚焦时边框换 accentBorder 并加粗（输入框惯例，不外加环）。
 public struct VTextFieldModifier: ViewModifier {
+    @FocusState private var isFocused: Bool
+
     public func body(content: Content) -> some View {
         content
             .font(VTheme.Typo.body)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-            .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s).stroke(VTheme.borderStrong))
+            .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s)
+                .stroke(isFocused ? VTheme.accentBorder : VTheme.borderStrong,
+                        lineWidth: isFocused ? 2 : 1))
+            .focused($isFocused)
+            .animation(VTheme.Motion.micro, value: isFocused)
     }
 }
 

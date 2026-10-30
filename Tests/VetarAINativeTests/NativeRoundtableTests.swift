@@ -66,7 +66,8 @@ private final class RTScriptConn: NativeChatConnector, @unchecked Sendable {
     }
 
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         AsyncThrowingStream { $0.finish() }   // 圆桌全走 chat 非流式
     }

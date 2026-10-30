@@ -83,87 +83,95 @@ struct RoundtableDetailView: View {
     // MARK: - 顶栏（§8.13）
 
     private func header(_ detail: Roundtable) -> some View {
-        HStack(spacing: 8) {
-            // W8（0.7.4）：讨论进行中返回先弹确认（后台继续口径，防误关）
-            Button { vm.requestExitDetail() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.left")
-                    Text("返回")
+        // 方向2 波次2：原版 :68-153 单行 48pt 顶栏塞 9 组元素（窄窗必挤压截断）——
+        // 主持人+参与者名单挪第二行副标行；主行只留 返回/议题/徽标/轮次/耗时/导出/删除
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                // W8（0.7.4）：讨论进行中返回先弹确认（后台继续口径，防误关）
+                Button { vm.requestExitDetail() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.left")
+                        Text("返回")
+                    }
+                    .font(VTheme.Typo.caption)
                 }
-                .font(VTheme.Typo.caption)
-            }
-            .buttonStyle(.vGhost)
-            .controlSize(.small)
-            .help("返回对话")
-            .accessibilityIdentifier("rtBackButton")
+                .buttonStyle(.vGhost)
+                .controlSize(.small)
+                .help("返回对话")
+                .accessibilityIdentifier("rtBackButton")
 
-            Image(systemName: "mic")
-                .foregroundStyle(VTheme.textPrimary)
-            Text(detail.topic)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(VTheme.textPrimary)
-                .lineLimit(1)
+                Image(systemName: "mic")
+                    .foregroundStyle(VTheme.textPrimary)
+                Text(detail.topic)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(VTheme.textPrimary)
+                    .lineLimit(1)
 
-            RTStatusBadge(status: detail.status)
-            Text("第 \(detail.round)/\(detail.max_rounds) 轮")
-                .font(VTheme.Typo.caption)
-                .foregroundStyle(VTheme.textSecondary)
+                RTStatusBadge(status: detail.status)
+                Text("第 \(detail.round)/\(detail.max_rounds) 轮")
+                    .font(VTheme.Typo.caption)
+                    .foregroundStyle(VTheme.textSecondary)
 
-            if let elapsed = vm.elapsedLabel {
-                HStack(spacing: 4) {
-                    Image(systemName: "clock")
-                    Text("已耗时 \(elapsed)")
+                if let elapsed = vm.elapsedLabel {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                        Text("已耗时 \(elapsed)")
+                    }
+                    .font(VTheme.Typo.micro)
+                    .foregroundStyle(VTheme.textTertiary)
+                    .accessibilityIdentifier("rtElapsed")
                 }
-                .font(VTheme.Typo.micro)
-                .foregroundStyle(VTheme.textTertiary)
-                .accessibilityIdentifier("rtElapsed")
+
+                Spacer(minLength: 8)
+
+                Button { vm.exportDiscussion() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("保存为文件")
+                    }
+                    .font(VTheme.Typo.caption)
+                }
+                .buttonStyle(.vSecondary)
+                .controlSize(.small)
+                .disabled(vm.detailBusy)
+                .help("把整场讨论保存为 Markdown 文件")
+                .accessibilityIdentifier("rtExportButton")
+
+                Button { vm.deleteDiscussion() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "trash")
+                        Text("删除")
+                    }
+                    .font(VTheme.Typo.caption)
+                }
+                .buttonStyle(.vSecondary)
+                .controlSize(.small)
+                .tint(VTheme.dangerText)
+                .disabled(vm.detailBusy || detail.status == "running")
+                // 方向2 波次2：去 .opacity(0.5) 双重降效（原版 :144）——disabled
+                // 降效由 VSecondaryButtonStyle 三态（opacity 0.45 单通道）承担
+                .help(detail.status == "running" ? "讨论进行中不能删除" : "删除这场讨论")
+                .accessibilityIdentifier("rtDeleteButton")
             }
 
-            Spacer(minLength: 8)
-
-            // 主持人（用户验收反馈：主持人应显示在右侧）
-            HStack(spacing: 4) {
-                Image(systemName: "crown")
-                Text(vm.moderatorLabel)
+            // 副标行：主持人 + 参与者名单（自主行挪入）
+            // 方向2 波次2：主持人标签整串 warn 琥珀（原版 :108-113）→ 仅 crown 图标
+            // 留 warn，文案降 textSecondary
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    Image(systemName: "crown")
+                        .foregroundStyle(VTheme.warn)
+                    Text(vm.moderatorLabel)
+                        .foregroundStyle(VTheme.textSecondary)
+                }
+                Text("参与者：\(detail.participants.map(\.name).joined(separator: "、"))")
+                    .foregroundStyle(VTheme.textTertiary)
+                    .lineLimit(1)
             }
             .font(VTheme.Typo.caption)
-            .foregroundStyle(VTheme.warn)
-
-            Text("参与者：\(detail.participants.map(\.name).joined(separator: "、"))")
-                .font(VTheme.Typo.caption)
-                .foregroundStyle(VTheme.textTertiary)
-                .lineLimit(1)
-
-            Button { vm.exportDiscussion() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.and.arrow.down")
-                    Text("保存为文件")
-                }
-                .font(VTheme.Typo.caption)
-            }
-            .buttonStyle(.vSecondary)
-            .controlSize(.small)
-            .disabled(vm.detailBusy)
-            .help("把整场讨论保存为 Markdown 文件")
-            .accessibilityIdentifier("rtExportButton")
-
-            Button { vm.deleteDiscussion() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "trash")
-                    Text("删除")
-                }
-                .font(VTheme.Typo.caption)
-            }
-            .buttonStyle(.vSecondary)
-            .controlSize(.small)
-            .tint(VTheme.dangerText)
-            .disabled(vm.detailBusy || detail.status == "running")
-            .opacity(detail.status == "running" ? 0.5 : 1)
-            .help(detail.status == "running" ? "讨论进行中不能删除" : "删除这场讨论")
-            .accessibilityIdentifier("rtDeleteButton")
         }
         .padding(.horizontal, 16)
-        .frame(height: 48)
+        .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
             Rectangle().fill(VTheme.borderSubtle).frame(height: 1)
         }
@@ -323,14 +331,16 @@ struct RoundtableDetailView: View {
     }
 
     private func messageRow(_ m: RTMessage, moderatorAgentId: String?) -> some View {
+        // 方向2 波次2：avatarColors 改 adaptive 双态 Color 直出（原返回 hex 由
+        // 此处包 Color(hex:)，深色下浅底刺眼）
         let palette = RoundtableFormat.avatarColors(m.agent_id)
         return HStack(alignment: .top, spacing: 10) {
             // 头像（名字首字 + 角色稳定配色）
             Text(String(m.agent_name.prefix(1)))
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color(hex: palette.fg))
+                .foregroundStyle(palette.fg)
                 .frame(width: 36, height: 36)
-                .background(Color(hex: palette.bg), in: Circle())
+                .background(palette.bg, in: Circle())
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
@@ -344,7 +354,8 @@ struct RoundtableDetailView: View {
                         .fontWeight(.medium)
                         .foregroundStyle(VTheme.textPrimary)
                     if !m.ok {
-                        Text("·发言失败")
+                        // 方向2 波次2：中点补空格（原版 :330「·发言失败」连排）
+                        Text("· 发言失败")
                             .font(VTheme.Typo.caption)
                             .foregroundStyle(VTheme.dangerText)
                     }

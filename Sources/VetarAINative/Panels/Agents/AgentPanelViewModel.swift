@@ -47,6 +47,14 @@ public final class AgentPanelViewModel: ObservableObject {
     @Published public var editingId: String?
     @Published public var editText = ""
     @Published public private(set) var savingPrompt = false
+    /// 方向2 波次2：列表拉取失败上屏错误态（原只 logger.warn 静默假空——
+    /// 用户看到空列表以为没数据；照 ProjectPanelViewModel 错误条口径：
+    /// error 文案 + retry() 手动重试入口，8s 轮询成功也会自动清除）
+    @Published public private(set) var error: String?
+
+    /// 列表拉取失败文案（照 Projects connectError 口径：恒原生架构下失败 =
+    /// 内核/数据根读取异常）
+    public static let listError = "Agent 列表读取失败，请检查数据根是否可写"
 
     // ── 依赖与注入缝 ──
     private let appState: AppState
@@ -120,15 +128,28 @@ public final class AgentPanelViewModel: ObservableObject {
         modelCatalogBusTask = nil
     }
 
-    // MARK: - 拉取（失败静默记日志，对齐前端 console.error 分支——列表面板不弹错）
+    // MARK: - 拉取（失败上屏错误条 + 记日志——方向2 波次2：原静默记日志假空收编，
+    //  前端 console.error 分支语义由「错误条 + 手动重试 + 轮询自愈」承接）
 
     public func fetchAgents() async {
-        guard let client, let pid = appState.currentProjectId else { return }
+        // 未选项目属正常空态（侧栏无项目上下文），不是错误
+        guard let pid = appState.currentProjectId else { return }
+        guard let client else {
+            error = Self.listError
+            return
+        }
         do {
             agents = try await client.listAgents(projectId: pid)
+            error = nil
         } catch {
+            self.error = Self.listError
             logger.warn("Agent 列表加载失败：\(SidecarError.describe(error))")
         }
+    }
+
+    /// 错误条上的手动「重试」（方向2 波次2 新增；照 ProjectPanelViewModel.retry 口径）
+    public func retry() {
+        Task { await self.fetchAgents() }
     }
 
     public func fetchModels() async {

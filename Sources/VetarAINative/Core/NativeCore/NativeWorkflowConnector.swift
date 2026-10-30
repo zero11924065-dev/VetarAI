@@ -181,6 +181,8 @@ public final class NativeWorkflowHTTPConnector: NativeWorkflowConnector {
             "messages": .array(messages.map { .object($0) }),
             "stream": .bool(false),
         ]
+        payload = NativeModelResidency.applyingOllamaKeepAlive(
+            payload, model: model, config: config())
         // A2/A4：model_options 注入（空 dict 绝不注入——部分服务端空 options 报 400）
         for (k, v) in Self.modelOptions(model: model, backend: "ollama", config: config()) {
             payload[k] = v
@@ -341,7 +343,7 @@ public final class NativeWorkflowHTTPConnector: NativeWorkflowConnector {
         return String(decoding: body, as: UTF8.self)
     }
 
-    // MARK: - unload_model（connector.py L432-447：keep_alive:0 空消息，失败静默 False）
+    // MARK: - unload_model（keep_alive:0 空消息，失败静默 False；A1 常驻豁免）
 
     @discardableResult
     public func unloadModel(_ model: String) async -> Bool {
@@ -351,6 +353,9 @@ public final class NativeWorkflowHTTPConnector: NativeWorkflowConnector {
         case "model_package":
             return false  // 偏差①：MP 驱动未接管
         default:
+            // 工作流/委派收尾也走此出口：常驻模型不得紧接着被 keep_alive:0 卸掉。
+            guard NativeModelResidency.shouldAutomaticallyUnloadOllama(
+                model: model, config: config()) else { return true }
             let base = (config()["ollama_base_url"]?.string ?? "http://localhost:11434")
                 .trimmingCharacters(in: .whitespaces)
                 .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)

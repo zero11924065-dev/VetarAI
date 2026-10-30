@@ -217,8 +217,9 @@ final class TokenIndicatorTests: XCTestCase {
         s.used = 120; s.limit = 1000; s.ceiling = 0
         XCTAssertEqual(s.displayText, "上下文 ≈120 / 1,000")
         XCTAssertEqual(s.divisor, 1000)
+        // 方向2 波次4b 同步收编：tooltip 压缩为一句人话（对应 ChatModels.tooltip）
         XCTAssertEqual(s.tooltip,
-                       "当前会话上下文估算：约 120 / 上限 1,000（按未移入仓库的对话实时估算，移入仓库后即下降；非模型精确计费口径）")
+                       "按未移入仓库的对话实时估算（非模型精确计费）：约 120 / 上限 1,000，移入仓库后即下降")
     }
 
     func testLazyCeilingDisplay() {
@@ -227,8 +228,9 @@ final class TokenIndicatorTests: XCTestCase {
         s.used = 9000; s.limit = 12288; s.ceiling = 131072
         XCTAssertEqual(s.displayText, "上下文 ≈9,000 / 131,072（当前档 12,288）")
         XCTAssertEqual(s.divisor, 131072)
+        // 方向2 波次4b 同步收编：tooltip 压缩为一句人话（对应 ChatModels.tooltip）
         XCTAssertEqual(s.tooltip,
-                       "当前会话上下文估算：约 9,000 / 上限 131,072（懒加载：当前档 12,288，上下文膨胀自动升档直至上限；按未移入仓库的对话实时估算，非模型精确计费口径）")
+                       "按未移入仓库的对话实时估算（非模型精确计费）：约 9,000 / 上限 131,072；当前档 12,288，膨胀时自动升档")
     }
 
     func testBarLevels() {
@@ -445,8 +447,9 @@ final class ChatRequestEncodingTests: XCTestCase {
 // MARK: - ViewModel 集成（脚本化 SSE 事件）
 
 /// 会话面板 mock 客户端（实现 ChatPanelClient 全协议；chatStream 播脚本事件）。
+/// DBG-198 起追加 IndependentAgentsPanelClient（adoptContext 双分支绑定模型钉桩）。
 @MainActor
-final class ChatMockClient: ChatPanelClient {
+final class ChatMockClient: ChatPanelClient, IndependentAgentsPanelClient {
     let baseURL = URL(string: "http://127.0.0.1:1/api")!
     var streamEvents: [SSEEvent] = []
     var streamError: Error?
@@ -470,7 +473,15 @@ final class ChatMockClient: ChatPanelClient {
     func listModels() async throws -> [OllamaModel] { modelList }
     func listProjects() async throws -> [SidecarProject] { [] }
     func createProject(name: String, workingDir: String) async throws -> String { "p1" }
-    func listAgents(projectId: String) async throws -> [SidecarAgent] { [] }
+    /// DBG-198 钉桩用：可配置项目 Agent 列表（默认空 = 历史行为不变）
+    var agentList: [SidecarAgent] = []
+    func listAgents(projectId: String) async throws -> [SidecarAgent] { agentList }
+    /// DBG-198 钉桩用：可配置独立 Agent 列表（默认空 = 历史行为不变）
+    var independentAgents: [IndependentAgent] = []
+    func listIndependentAgents() async throws -> [IndependentAgent] { independentAgents }
+    func createIndependentAgent(name: String, modelName: String?, systemPrompt: String?) async throws -> String { "ia1" }
+    func updateIndependentAgent(agentId: String, update: IndependentAgentUpdateRequest) async throws {}
+    func deleteIndependentAgent(agentId: String) async throws {}
     func createAgent(projectId: String, name: String, type: String, modelName: String?) async throws -> String { "a1" }
     func listSessions(projectId: String, agentId: String) async throws -> [ChatSession] {
         // 0.7.8 Bug1 测试：会话列表按项目归属（p1 之外返回空，模拟切换到别的上下文）

@@ -533,7 +533,7 @@ final class RoundtablePanelViewModelTests: XCTestCase {
         await fillValidForm(vm, client: client)
         vm.create()
         await assertEventually { vm.error != nil }
-        XCTAssertEqual(vm.error, "创建失败: HTTP 400：至少选择 2 个参与者")
+        XCTAssertEqual(vm.error, "创建失败：HTTP 400：至少选择 2 个参与者")   // 方向2 波次2：随 VM 错误串全角冒号同步
         XCTAssertNil(vm.selectedId)
         XCTAssertFalse(vm.creating)
     }
@@ -651,7 +651,7 @@ final class RoundtablePanelViewModelTests: XCTestCase {
         await assertEventually { vm.detail != nil }
         vm.continueDiscussion()
         await assertEventually { vm.error != nil }
-        XCTAssertEqual(vm.error, "继续失败: HTTP 400：当前状态（running）不允许继续")
+        XCTAssertEqual(vm.error, "继续失败：HTTP 400：当前状态（running）不允许继续")   // 方向2 波次2：随 VM 错误串全角冒号同步
         XCTAssertFalse(vm.detailBusy)
     }
 

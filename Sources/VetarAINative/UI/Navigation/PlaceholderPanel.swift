@@ -31,16 +31,10 @@ public struct PlaceholderPanel: View {
 
     public var body: some View {
         VStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(VTheme.bgCard)
-                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(VTheme.borderSubtle))
-                    .shadow(color: .black.opacity(0.04), radius: 1.5, y: 1)
-                    .frame(width: 64, height: 64)
-                Image(systemName: panel.icon)
-                    .font(.system(size: 26))
-                    .foregroundStyle(VTheme.textTertiary)
-            }
+            // 方向2 波次2：去 icon-in-box 反模式（64×64 圆角盒 + 描边 + 手写阴影全删），纯图标
+            Image(systemName: panel.icon)
+                .font(.system(size: 36))
+                .foregroundStyle(VTheme.textTertiary)
             VStack(spacing: 6) {
                 HStack(spacing: 8) {
                     Text(panel.title)

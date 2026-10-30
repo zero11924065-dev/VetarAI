@@ -541,7 +541,8 @@ public struct NativeChatStreamPlan {
     public var sandboxRoot: String = ""
     public var agent: NativeDatabase.AgentConfigRow?
     public var systemPrompt: String = ""
-    public var messages: [[String: JSONValue]] = []     // system + req.messages
+    /// 普通模型 = 宿主 system + 请求历史；.vmodel = 原请求历史，身份在 Router 注入。
+    public var messages: [[String: JSONValue]] = []
     public var canDelegate = false
     public var appControlOn = false
     public var computerUseOn = false
@@ -555,8 +556,8 @@ public struct NativeChatStreamPlan {
     public var model = ""
     public var images: [String]?
     public var skipUserPersist = false
-    /// M6（TS-112）工具能力降级标记（app.py L1259-1264）：后端能力表 tools=false →
-    /// 降级系统消息已追加到 messages 末尾，streamMain 据此把 toolsSpec 置空。
+    /// 普通模型：M6 能力降级会追加 system 并把 toolsSpec 置空。
+    /// .vmodel：恒 false；Router 将通用循环产生的空数组归一为模板 tools=nil。
     public var toolsEnabled = true
 }
 
@@ -729,38 +730,50 @@ public final class NativeChatEndpointAssembly: @unchecked Sendable {
         plan.archiveOn = req.auto_archive_unit && !req.project_id.isEmpty && !req.session_id.isEmpty
         plan.knowledgeOn = !req.project_id.isEmpty
 
-        let strengths = await modelStrengthsText(canDelegate: plan.canDelegate)
+        // 联调批六：.vmodel 仅按后端标识走包内身份／裸模板 tools 契约，
+        // 不叠加宿主全局 Agent system，也不追加宿主工具降级 system。
+        // 请求历史原样保留；包内 effectiveIdentity 仍由 Router 统一前置。
+        let isVModel = NativeVModelChat.isVModelName(plan.model)
+        let history: [[String: JSONValue]] = req.messages.map {
+            ["role": .string($0.role), "content": .string($0.content)]
+        }
+        if isVModel {
+            plan.systemPrompt = ""
+            plan.messages = history
+            plan.toolsEnabled = false
+        } else {
+            let strengths = await modelStrengthsText(canDelegate: plan.canDelegate)
+            plan.systemPrompt = NativeAgentLoop.buildSystemPrompt(
+                agentName: plan.agent?.name ?? "SubAgent",
+                agentRole: plan.agent?.role ?? nil,
+                sandboxRoot: sandbox,
+                networkSwitch: netSwitch,
+                systemPrompt: plan.agent?.systemPrompt ?? nil,
+                canDelegate: plan.canDelegate,
+                knowledgeText: knowledgeText,
+                memoryText: memoryText,
+                prohibitions: prohibitions,
+                skillsListText: skillsListText,
+                modelStrengthsText: strengths,
+                archiveEnabled: plan.archiveOn,
+                moduleCatalogText: moduleCatalogText,
+                computerUseEnabled: plan.computerUseOn)
+            plan.messages = [["role": .string("system"), "content": .string(plan.systemPrompt)]]
+                + history
 
-        plan.systemPrompt = NativeAgentLoop.buildSystemPrompt(
-            agentName: plan.agent?.name ?? "SubAgent",
-            agentRole: plan.agent?.role ?? nil,
-            sandboxRoot: sandbox,
-            networkSwitch: netSwitch,
-            systemPrompt: plan.agent?.systemPrompt ?? nil,
-            canDelegate: plan.canDelegate,
-            knowledgeText: knowledgeText,
-            memoryText: memoryText,
-            prohibitions: prohibitions,
-            skillsListText: skillsListText,
-            modelStrengthsText: strengths,
-            archiveEnabled: plan.archiveOn,
-            moduleCatalogText: moduleCatalogText,
-            computerUseEnabled: plan.computerUseOn)
-        plan.messages = [["role": .string("system"), "content": .string(plan.systemPrompt)]]
-            + req.messages.map { ["role": .string($0.role), "content": .string($0.content)] }
-
-        // M6（TS-112）工具能力降级（app.py L1259-1264）：后端能力表 tools=false →
-        // 降级系统消息追加到 msgs【末尾】+ toolsSpec 置空（确定性降级）。
-        // 能力表唯一事实源 = NativeInferenceEndpointAssembly.capabilities（P3-W2a 逐字
-        // 移植：ollama 恒真；openai_compatible 读 openai_compat_supports_tools 缺省 true）。
-        let backend = NativeInferenceEndpointAssembly.backendStripped(cfg)
-        plan.toolsEnabled = NativeInferenceEndpointAssembly.capabilities(
-            backend: backend, cfg: cfg).tools
-        if !plan.toolsEnabled {
-            plan.messages.append([
-                "role": .string("system"),
-                "content": .string("当前推理后端不支持工具调用，本轮仅直接对话，不可读写文件或搜索。"),
-            ])
+            // M6（TS-112）工具能力降级（app.py L1259-1264）：后端能力表 tools=false →
+            // 降级系统消息追加到 msgs【末尾】+ toolsSpec 置空（确定性降级）。
+            // 能力表唯一事实源 = NativeInferenceEndpointAssembly.capabilities（P3-W2a 逐字
+            // 移植：ollama 恒真；openai_compatible 读 openai_compat_supports_tools 缺省 true）。
+            let backend = NativeInferenceEndpointAssembly.backendStripped(cfg)
+            plan.toolsEnabled = NativeInferenceEndpointAssembly.capabilities(
+                backend: backend, cfg: cfg).tools
+            if !plan.toolsEnabled {
+                plan.messages.append([
+                    "role": .string("system"),
+                    "content": .string("当前推理后端不支持工具调用，本轮仅直接对话，不可读写文件或搜索。"),
+                ])
+            }
         }
 
         // M5（TS-111）：心跳基础值 = clamp(config heartbeat_interval, 5, 60)，默认 15
@@ -886,9 +899,38 @@ extension NativeChatEndpointAssembly {
                                    role: "user", content: last.content, images: plan.images)
             }
 
+            // ── C3 原文引用检索（联调批二 Part B；与生成并行/先行——本侧先行）──
+            // 仅自家 .vmodel 引擎（其他后端永不出现引用区）；库 nil/库空/零命中
+            // → stateCitationIds 空 → 无事件、无落盘列、无引用区（静默降级不崩会话）。
+            // 检索口径 = 导出方同款纯逻辑 NativeVModelRetrieval；查询句剥离附件注入段
+            //（ATTACH_MARK 之后是注入指令/原文，非提问本体）。明文只活内存（红线）。
+            var stateCitationIds: [String] = []
+            if NativeVModelChat.isVModelName(plan.model),
+               let slug = NativeVModelChat.modelId(fromPoolName: plan.model),
+               let rawQuery = body.messages.last?.content {
+                let query = NativeVModelRetrieval.queryText(fromUserContent: rawQuery)
+                // X1（联调批三 Part A）：端点热路径走 async 完整解析——v2 重开经
+                // resolvingKeysWith: 标准变体（密钥缓存命中不触网，未命中联网领取
+                // 并回填中心进程内缓存，面板/历史重建的同步调用随后自然命中）
+                if let library = await kernel.retrievalCenter.libraryAsync(forModelSlug: slug) {
+                    stateCitationIds = NativeVModelRetrieval
+                        .retrieve(query: query, blocks: library.blocks)
+                        .map { $0.block.id.uuidString }
+                }
+                // 联调批三 Part B 留痕：vmodel 生成参数包（C1 编辑器已存值）不经
+                // 本端点显式传递——NativeChatConnector 协议无 params 形参，改协议
+                // 破坏面违背批一「零破坏」纪律；实际通路 = 本流 connector（生产 =
+                // kernel.vmodelRoutingConnector）的 paramsProvider 实时读
+                // model_options[vmodel:<slug>] 映射透传（NativeVModelModelOptionsMapper
+                // + 包级 context_limit 截断），编辑器保存即生效、委派/圆桌同链生效。
+            }
+
             // ── 双落库状态（_state / _exec_state 同构）──
             var stateText = ""
             var stateSteps: [JSONValue] = []
+            /// C2（联调批二 Part C）：.vmodel 工具调用段卡片（可见且保留——随
+            /// 消息落盘 tool_cards 列；仅 vmodel 路径的解析器产出该事件）
+            var stateToolCards: [JSONValue] = []
             var stateSaved = false
             var statePromptEval: Int64?
             var execState: [String: JSONValue] = [
@@ -921,7 +963,9 @@ extension NativeChatEndpointAssembly {
                     projectId: pid, sessionId: sid, agentId: aid,
                     role: "assistant", content: stateText, modelUsed: plan.model,
                     toolSteps: stepsFinal.isEmpty ? nil : .array(stepsFinal),
-                    truncated: truncated, promptEvalCount: statePromptEval, stopped: stopped)
+                    truncated: truncated, promptEvalCount: statePromptEval, stopped: stopped,
+                    citationBlockIds: stateCitationIds.isEmpty ? nil : stateCitationIds,
+                    toolCards: stateToolCards.isEmpty ? nil : stateToolCards)
             }
 
             flushExecState()   // 流开始即写初始状态（running）
@@ -965,7 +1009,7 @@ extension NativeChatEndpointAssembly {
                     withArchive: plan.archiveOn,
                     withAppControl: plan.appControlOn,
                     withComputerUse: plan.computerUseOn)
-                : []   // M6 能力降级：后端 tools=false → 不传工具（app.py L1296）
+                : []   // 普通模型为 M6 降级；.vmodel 由 Router 将此空数组归一为 nil
 
             let loopStream = NativeAgentLoop.runToolLoop(
                 model: plan.model, messages: plan.messages,
@@ -990,7 +1034,8 @@ extension NativeChatEndpointAssembly {
                 configProvider: { [kernel] in
                     (try? kernel.config.getConfig()) ?? NativeConfigStore.defaultConfig
                 },
-                lazyTiers: tiers)
+                lazyTiers: tiers,
+                thinkingMode: body.thinking_mode.flatMap(NativeThinkingMode.init(rawValue:)))
 
             var autoCompactDone = false
             var autoCompactFailed = false
@@ -1026,6 +1071,14 @@ extension NativeChatEndpointAssembly {
             // 此刻断开也能走 cleanup 的完整 interrupted 落盘）
             yield(continuation, "state",
                   ["step": .int(0), "max": .int(Int64(plan.maxRounds)), "tokens_used": .int(0)])
+
+            // C3（联调批二 Part B）：引用块 id 随流先行透出（载荷只有 id 数组——
+            // 明文纪律：原文/来源名不进事件线，UI 按 id 回查内存库重建展示；
+            // 零命中不发事件，引用区整个不出现）
+            if !stateCitationIds.isEmpty {
+                yield(continuation, "citations",
+                      ["block_ids": .array(stateCitationIds.map { .string($0) })])
+            }
 
             // gen() try 块等价（L1355-1523）：错误分支各自 persist + flush 后再收尾
             do {
@@ -1106,6 +1159,38 @@ extension NativeChatEndpointAssembly {
                                 "status": .string("running"),
                             ]))
                             flushExecState()
+                        case "tool_card":
+                            // C2（联调批二 Part C）：.vmodel 工具调用段卡片——
+                            // 随消息落盘 tool_cards 列（可见且保留）。
+                            stateToolCards.append(.object([
+                                "name": .string(d["name"]?.string ?? ""),
+                                "arguments": d["arguments"] ?? .object([:]),
+                            ]))
+                            // 批五 C3：search_knowledge 的检索词以模型工具卡为准，
+                            // 不能只做用户原问预检索。先透卡再发 citations，UI 可同序
+                            // 重建；仅查当前 .vmodel 包内密文库，原文不回注模型、
+                            // 绝不改走应用知识仓库或通用工具执行回路。
+                            yield(continuation, e, d)
+                            if d["name"]?.string == "search_knowledge",
+                               let slug = NativeVModelChat.modelId(fromPoolName: plan.model),
+                               let args = d["arguments"]?.object,
+                               let rawQuery = args["query"]?.string {
+                                let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !query.isEmpty,
+                                   let library = await kernel.retrievalCenter.libraryAsync(
+                                       forModelSlug: slug) {
+                                    let hits = NativeVModelRetrieval.retrieve(
+                                        query: query, blocks: library.blocks)
+                                    if !hits.isEmpty {
+                                        // 零命中不清空已透出的预检索，避免 UI 与最终落库分叉。
+                                        stateCitationIds = hits.map { $0.block.id.uuidString }
+                                        yield(continuation, "citations", [
+                                            "block_ids": .array(stateCitationIds.map { .string($0) }),
+                                        ])
+                                    }
+                                }
+                            }
+                            continue   // 本分支已透原始 tool_card，跳过 switch 后统一 yield
                         case "tool_result":
                             // B06 收尾：补 status，并保留对应 tool_call 的 args
                             var entry: [String: JSONValue] = [

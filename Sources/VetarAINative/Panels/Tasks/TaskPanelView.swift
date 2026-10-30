@@ -20,12 +20,16 @@
 //
 
 //  任务队列面板（对标 subagent/renderer/src/panels/TaskPanel.tsx，446 行）：
-//    · 标题行：「委派任务（最近30条）」+ 实时流连接指示圆点 + 手动刷新
+//    · 标题行：「委派任务（最近30条）」+ 实时流连接指示圆点（方向2 波次2 起旁补
+//      「已连接/未连接」文字态）+ 手动刷新
 //    · 提示条：错误 / 重试结果 / 停止结果（后两者 6s 自动消隐）
 //    · 任务卡：状态徽标（等待中/进行中/完成/异常）+ 目标 Agent + 已耗时 +
-//      停止（running）/ 重试（failed）/ 查看（跳转委派会话）+ 任务摘要 +
-//      实时进度（工具调用/轮次/字数，仅进行中显示）+ 失败原因 / 完成摘要 / 上下文用量
+//      停止（running，方向2 波次2 起红底 .vDanger）/ 重试（failed）/ 查看（跳转委派会话）+
+//      任务摘要 + 实时进度（工具调用/轮次/字数，仅进行中显示）+ 失败原因 /
+//      完成摘要（60 字截断补「…」）/ 上下文用量
 //  文案与数值逐字对齐现状实现；视觉用 VTheme 近似（接入指南 §3）。
+//  方向2 波次2：主区标题 sectionTitle/textPrimary；加载中 VLoadingView；
+//  空态 VEmptyStateView。
 //
 
 import SwiftUI
@@ -84,15 +88,22 @@ private struct TaskPanelBody: View {
             VStack(alignment: .leading, spacing: 0) {
                 // ── 面板标题行 ──
                 HStack(spacing: 6) {
+                    // 方向2 波次2：主区面板标题规格统一 sectionTitle(14)/textPrimary
+                    // （原 panelTitle(12)/textSecondary；对照 WarehouseManagerView /
+                    // CuMacroPanelView / PluginsPanelView 主区标题）
                     Text("委派任务（最近30条）")
-                        .font(VTheme.Typo.panelTitle)
-                        .foregroundStyle(VTheme.textSecondary)
+                        .font(VTheme.Typo.sectionTitle)
+                        .foregroundStyle(VTheme.textPrimary)
                     // 实时流连接指示（绿=实时进度已连接；灰=未连接，点刷新兜底）
                     Circle()
                         .fill(vm.streamOn ? VTheme.ok : VTheme.borderStrong)
                         .frame(width: 6, height: 6)
                         .help(vm.streamOn ? "实时进度已连接" : "实时流未连接，请点击刷新")
                         .accessibilityIdentifier("taskStreamIndicator")
+                    // 方向2 波次2：圆点旁补文字态（连接态不能只靠颜色/图标传达）
+                    Text(vm.streamOn ? "已连接" : "未连接")
+                        .font(VTheme.Typo.micro)
+                        .foregroundStyle(VTheme.textTertiary)
                     Spacer()
                     Button { vm.reload() } label: {
                         HStack(spacing: 4) {
@@ -106,7 +117,7 @@ private struct TaskPanelBody: View {
                         .font(VTheme.Typo.caption)
                     }
                     .buttonStyle(.vGhost)
-                    .controlSize(.small)
+                    // 方向2 波次2：controlSize(.small) 挂自定义 VButtons 样式上是死代码（库不响应），删
                     .disabled(vm.loading)
                     .accessibilityIdentifier("taskRefreshButton")
                 }
@@ -125,25 +136,16 @@ private struct TaskPanelBody: View {
 
                 // ── 加载中 / 空态 ──
                 if vm.loading && vm.tasks.isEmpty {
-                    VStack(spacing: 8) {
-                        ProgressView().controlSize(.regular)
-                        Text("加载中…")
-                            .font(VTheme.Typo.caption)
-                            .foregroundStyle(VTheme.textTertiary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+                    // 方向2 波次2：手写 ProgressView+「加载中…」收编 VLoadingView
+                    VLoadingView("加载中…")
                 } else if vm.tasks.isEmpty && vm.error == nil {
-                    VStack(spacing: 8) {
-                        Image(systemName: "clipboard")
-                            .font(.system(size: 30))
-                            .foregroundStyle(VTheme.borderStrong)
-                        Text("暂无委派任务")
-                            .font(VTheme.Typo.body)
-                            .foregroundStyle(VTheme.textTertiary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+                    // 方向2 波次2：手写空态收编 VEmptyStateView 三件套
+                    // （原空态图标 borderStrong 一并由组件内 textDisabled 口径承接）
+                    VEmptyStateView(
+                        icon: "clipboard",
+                        title: "暂无委派任务",
+                        message: "在会话中把任务委派给子 Agent 后，进度与结果会显示在这里。"
+                    )
                 }
 
                 // ── 任务卡列表 ──
@@ -237,9 +239,9 @@ private struct TaskCardView: View {
                         }
                         .font(VTheme.Typo.caption)
                     }
-                    .buttonStyle(.vSecondary)
-                    .controlSize(.small)
-                    .tint(VTheme.dangerText)
+                    // 方向2 波次2：vSecondary 外叠 .tint(dangerText) 是死代码（自定义样式
+                    // 不响应 tint），危险停止钮直接用红底变体 .vDanger
+                    .buttonStyle(.vDanger)
                     .disabled(vm.stoppingId != nil)
                     .help("停止该委派任务")
                     .accessibilityIdentifier("taskStopButton.\(task.id)")
@@ -257,7 +259,6 @@ private struct TaskCardView: View {
                         .font(VTheme.Typo.caption)
                     }
                     .buttonStyle(.vSecondary)
-                    .controlSize(.small)
                     .disabled(vm.retryingId != nil)
                     .accessibilityIdentifier("taskRetryButton.\(task.id)")
                 }
@@ -270,7 +271,6 @@ private struct TaskCardView: View {
                         .font(VTheme.Typo.caption)
                     }
                     .buttonStyle(.vGhost)
-                    .controlSize(.small)
                     .help("打开该子 Agent 的委派会话")
                     .accessibilityIdentifier("taskJumpButton.\(task.id)")
                 }
@@ -305,7 +305,7 @@ private struct TaskCardView: View {
                         Text("已生成 \(chars) 字")
                     }
                 }
-                .font(.system(size: 11))
+                .font(VTheme.Typo.micro)     // 方向2 波次2：.system(size:11) 归 Typo 档
                 .foregroundStyle(VTheme.textTertiary)
                 .accessibilityIdentifier("taskLiveProgress.\(task.id)")
             }
@@ -316,13 +316,14 @@ private struct TaskCardView: View {
                     .foregroundStyle(VTheme.dangerText)
             }
             if task.status == "done", let summary = task.report?.summary, !summary.isEmpty {
-                Text("摘要：\(String(summary.prefix(60)))")
+                // 方向2 波次2：60 字截断补省略号（原截而不标，用户看不出被截）
+                Text(summary.count > 60 ? "摘要：\(summary.prefix(60))…" : "摘要：\(summary)")
                     .font(VTheme.Typo.caption)
                     .foregroundStyle(VTheme.okText)
             }
             if task.status == "done", let n = task.report?.prompt_eval_count, n > 0 {
                 Text("上下文用量：\(n) tokens")
-                    .font(.system(size: 11))
+                    .font(VTheme.Typo.micro)     // 方向2 波次2：.system(size:11) 归 Typo 档
                     .foregroundStyle(VTheme.textTertiary)
             }
         }

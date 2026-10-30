@@ -39,8 +39,8 @@
 //
 //  0.7.1 Bug 7（业主拍板方案 A）：「关于」导航项撤除——菜单栏「关于 VetarAI」
 //  恢复 macOS 标准关于弹窗（VetarAINativeApp.swift）；原 AboutPanel 的诊断能力
-//  （运行时状态/数据根显示与修改/日志与数据根目录入口/调试 mock）收进
-//  「基础设置」底部「诊断」区，accessibilityIdentifier 全部保留不变。
+//  （运行时状态/数据根风险提示（1.0.1 起路径与编辑框对用户隐藏）/日志与数据根
+//  目录入口/调试 mock）收进「基础设置」底部「诊断」区，accessibilityIdentifier 保留不变。
 //
 //  打开/关闭：rail 底部齿轮（AppState.toggleSettings）/
 //  深链 `-ui.panel settings`（启动兜底打开，AppState.init）；返回应用 = 关闭回来源处。
@@ -182,7 +182,9 @@ private struct SettingsNavRow: View {
                 Image(systemName: section.icon)
                     .frame(width: 16)
                 Text(section.title)
-                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
+                    // 方向2 波次2：去 active 字重差（原版 :168 regular→medium 切换
+                    // 会字形宽度抖动；bgSelected+accentText 双编码已足够）
+                    .font(.system(size: 13))
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)

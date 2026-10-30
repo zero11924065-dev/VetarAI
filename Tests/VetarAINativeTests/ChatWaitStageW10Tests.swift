@@ -45,8 +45,9 @@ final class ChatWaitStageW10Tests: XCTestCase {
     // MARK: - 阶段机文案
 
     func testBannerTextStages() {
+        // 方向2 波次4b 同步收编：「装载/装填」→「加载」（对应 ChatWaitStage.bannerText）
         XCTAssertEqual(ChatWaitStage.loading.bannerText(waitedSeconds: 9),
-                       "模型装载/装填中，较久属正常（本地模型）…已等待 9s")
+                       "模型加载中，较久属正常（本地模型）…已等待 9s")
         XCTAssertEqual(ChatWaitStage.generating.bannerText(waitedSeconds: 12),
                        "生成中…已等待 12s")
     }

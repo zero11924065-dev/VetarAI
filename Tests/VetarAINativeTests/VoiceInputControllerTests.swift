@@ -310,6 +310,10 @@ final class VoiceInputControllerTests: XCTestCase {
         XCTAssertEqual(VoiceInputController.errorDetail(http), "尚未安装语音识别模型包。")
         let other = NSError(domain: "x", code: 1, userInfo: [NSLocalizedDescriptionKey: "通用失败"])
         XCTAssertEqual(VoiceInputController.errorDetail(other), "通用失败")
+        // Swift struct Error 读 description 中文明细（修复「(NativeOnnxRuntimeError 错误 1.)」
+        // 明细被吞——localizedDescription 对 struct Error 只产类型占位符）
+        let onnx = NativeOnnxRuntimeError("ONNX 推理输出形状异常（期望 ctc_logits 三维）")
+        XCTAssertEqual(VoiceInputController.errorDetail(onnx), "ONNX 推理输出形状异常（期望 ctc_logits 三维）")
     }
 
     // MARK: - ⑦ insertTranscribedText 拼接规则

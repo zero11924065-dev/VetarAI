@@ -79,38 +79,53 @@ public struct ModelOptionsEditorView: View {
         let count = vm.configuredCount(model: name)
         return VStack(alignment: .leading, spacing: 0) {
             // 头部行（点击展开/收起）
+            // 方向2 波次2：整行 onTapGesture 改 Button(.plain) 承载（进 Tab 键序、
+            // 带 button trait，原头部行无 accessibilityIdentifier，新增 toggle 一枚；
+            // 垃圾桶保持独立按钮不嵌套）；chevron(10px)/垃圾桶(11px) 裸图标
+            // 套 vIconHitTarget(20) 扩命中区
             HStack(spacing: 6) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 11))
-                    .foregroundStyle(VTheme.textTertiary)
-                Text(name)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(VTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                Text(count > 0 ? "\(count) 项已设" : "全部默认")
-                    .font(VTheme.Typo.micro)
-                    .foregroundStyle(count > 0 ? VTheme.textSecondary : VTheme.textTertiary)
-                Image(systemName: open ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10))
-                    .foregroundStyle(VTheme.textTertiary)
+                Button {
+                    vm.expandedModel = open ? nil : name
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 11))
+                            .foregroundStyle(VTheme.textTertiary)
+                        Text(name)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(VTheme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        Text(count > 0 ? "\(count) 项已设" : "全部默认")
+                            .font(VTheme.Typo.micro)
+                            .foregroundStyle(count > 0 ? VTheme.textSecondary : VTheme.textTertiary)
+                        Image(systemName: open ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10))
+                            .foregroundStyle(VTheme.textTertiary)
+                            .vIconHitTarget(20)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("modelOptions.toggle.\(name)")
                 Button {
                     vm.removeModel(name)
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 11))
                         .foregroundStyle(VTheme.textTertiary)
+                        .vIconHitTarget(20)
                 }
                 .buttonStyle(.plain)
                 .disabled(vm.busy)
                 .help("移除该模型的全部参数配置")
+                // 方向2 波次4：AX 补账
+                .accessibilityLabel("移除该模型的参数配置")
                 .accessibilityIdentifier("modelOptions.remove.\(name)")
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .contentShape(Rectangle())
-            .onTapGesture { vm.expandedModel = open ? nil : name }
 
             if open {
                 Divider().overlay(VTheme.borderSubtle)
@@ -140,7 +155,9 @@ public struct ModelOptionsEditorView: View {
             HStack(spacing: 6) {
                 Text(def.label)
                     .font(VTheme.Typo.caption)
-                    .foregroundStyle(VTheme.textPrimary)
+                    // 方向2 波次2：禁用只降标签/输入控件（原整行 opacity(0.5) 退役），
+                    // 「该后端不支持」解释文字保持 warnText 全浓度不压暗
+                    .foregroundStyle(disabled ? VTheme.textTertiary : VTheme.textPrimary)
                 if let min = def.min, let max = def.max {
                     Text("（\(ModelOptionsEditorViewModel.formatBound(min))~\(ModelOptionsEditorViewModel.formatBound(max))）")
                         .font(VTheme.Typo.micro)
@@ -164,6 +181,8 @@ public struct ModelOptionsEditorView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 12, design: .monospaced))
             .vInputStyle()
+            // 方向2 波次2：不支持参数仅输入控件降色（标签已在上方降 textTertiary）
+            .foregroundStyle(disabled ? VTheme.textDisabled : VTheme.textPrimary)
             .disabled(vm.busy || disabled)
             .focused($focusedKey, equals: key)
             .onSubmit { vm.commit(model: model, def: def) }
@@ -182,6 +201,7 @@ public struct ModelOptionsEditorView: View {
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .opacity(disabled ? 0.5 : 1)
+        // 方向2 波次2：整行 .opacity(disabled ? 0.5 : 1) 删除——禁用表达收敛为
+        // 标签 textTertiary + 输入框 .disabled/降色，解释文字不再被压暗
     }
 }

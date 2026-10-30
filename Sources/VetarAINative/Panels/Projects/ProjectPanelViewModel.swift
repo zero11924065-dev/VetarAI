@@ -50,8 +50,26 @@ public final class ProjectPanelViewModel: ObservableObject {
     @Published public private(set) var projects: [SidecarProject] = []
     @Published public private(set) var loading = false
     @Published public private(set) var error: String?
-    /// 工作组导出结果闪示通知（6s 自动消隐；「导出失败」前缀 = error 样式）
+    /// 方向2 波次2：错误条 kind 结构化——View 按 kind 决定附不附「重试」钮，
+    /// 替代原 error.contains("无法连接") 文案判定（实际文案 connectError 为
+    /// 「项目数据读取失败…」永不命中，重试钮原是永不渲染的死代码）。
+    @Published public private(set) var errorKind: ErrorKind?
+    /// 方向2 波次2：首启退避进度单列 info 通道（原借用 error 通道播「正在读取…
+    /// （第 i 次重试）」，红色错误样式承载正常进度；且 error!=nil 会顺带禁用新建钮）。
+    @Published public private(set) var progress: String?
+    /// 工作组导出结果闪示通知（6s 自动消隐）
     @Published public private(set) var notice: String?
+    /// 方向2 波次2：通知条 kind 结构化——替代 View 侧 notice.hasPrefix("导出失败")
+    /// 文案驱动样式（TS-121 语义由本字段承载）。
+    @Published public private(set) var noticeKind: VCalloutKind = .success
+
+    /// 错误条种类（方向2 波次2 新增，见 errorKind）
+    public enum ErrorKind: Equatable {
+        /// 列表读取失败（checkpoint-064 连接错误）——错误条附手动「重试」
+        case fetch
+        /// 操作失败（创建/改名/打开根目录）——只展示不附重试
+        case operation
+    }
     /// 手动目录输入模式（目录选择器不可用时的内联 fallback）
     @Published public var manualMode = false
     @Published public var manualPath = ""
@@ -135,37 +153,47 @@ public final class ProjectPanelViewModel: ObservableObject {
     }
 
     /// checkpoint-064：首启退避重试（现状 delays=[0,800,1500,2500,3500,5000]ms，最多 ~30s 窗口）。
-    /// 每次重试前先上屏「正在读取项目数据…（第 i 次重试，内核启动中）」；成功即清错误并返回；
+    /// 每次重试前先上屏「正在读取项目数据…（第 i 次重试，内核启动中）」（方向2 波次2：
+    /// 进度改走 info 通道 progress，不再占用 error 错误样式）；成功即清错误并返回；
     /// 全部失败则保留最后的连接错误（错误条上有手动「重试」入口）。
     private func initialLoad() async {
         for (i, delay) in retryDelays.enumerated() {
             if Task.isCancelled { return }
             if delay > 0 {
-                error = "正在读取项目数据…（第 \(i) 次重试，内核启动中）"
+                progress = "正在读取项目数据…（第 \(i) 次重试，内核启动中）"
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 if Task.isCancelled { return }
             }
             if await fetchProjects() {
-                error = nil
+                setError(nil)
+                progress = nil
                 return
             }
         }
+        // 全部失败：进度收尾，保留最后的连接错误（errorKind=.fetch → 错误条附手动重试）
+        progress = nil
     }
 
     // MARK: - 拉取（失败上屏连接错误 + 记日志，对齐现状 setError + console.error）
 
+    /// 方向2 波次2：error/errorKind 双字段同步唯一入口（防两通道漂移）
+    private func setError(_ message: String?, kind: ErrorKind? = nil) {
+        error = message
+        errorKind = message == nil ? nil : kind
+    }
+
     @discardableResult
     public func fetchProjects() async -> Bool {
-        error = nil
+        setError(nil)
         guard let client else {
-            error = Self.connectError
+            setError(Self.connectError, kind: .fetch)
             return false
         }
         do {
             projects = try await client.listProjects()
             return true
         } catch {
-            self.error = Self.connectError
+            setError(Self.connectError, kind: .fetch)
             logger.warn("项目列表加载失败：\(SidecarError.describe(error))")
             return false
         }
@@ -182,7 +210,7 @@ public final class ProjectPanelViewModel: ObservableObject {
         // 现状：loading || error 时按钮禁用且直接 return
         guard !loading, error == nil, client != nil else { return }
         loading = true
-        error = nil
+        setError(nil)
         Task { [weak self] in
             guard let self else { return }
             switch await self.pickDirectory() {
@@ -204,7 +232,7 @@ public final class ProjectPanelViewModel: ObservableObject {
     public func createWithDir(_ workingDir: String) async {
         guard let client else { loading = false; return }
         loading = true
-        error = nil
+        setError(nil)
         do {
             _ = try await client.createProject(
                 name: Self.defaultProjectName(forDir: workingDir,
@@ -214,7 +242,7 @@ public final class ProjectPanelViewModel: ObservableObject {
             manualPath = ""
             _ = await fetchProjects()
         } catch {
-            self.error = "创建失败: \(SidecarError.detailText(error))"
+            setError("创建失败: \(SidecarError.detailText(error))", kind: .operation)
             logger.error("创建项目失败：\(SidecarError.describe(error))")
         }
         loading = false
@@ -330,7 +358,7 @@ public final class ProjectPanelViewModel: ObservableObject {
             do {
                 try await client.renameProject(projectId: project.id, name: name)
             } catch {
-                self.error = "改名失败: \(SidecarError.detailText(error))"
+                self.setError("改名失败: \(SidecarError.detailText(error))", kind: .operation)
             }
             self.renamingId = nil
             self.renameValue = ""
@@ -344,7 +372,7 @@ public final class ProjectPanelViewModel: ObservableObject {
         guard openingDirId == nil else { return }
         guard let client else { return }
         openingDirId = project.id
-        error = nil
+        setError(nil)
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -354,7 +382,7 @@ public final class ProjectPanelViewModel: ObservableObject {
                     self.logger.warn("打开工作目录软失败：\(r.detail ?? "未知原因")（\(r.dir)）")
                 }
             } catch {
-                self.error = "打开工作目录失败: \(SidecarError.detailText(error))"
+                self.setError("打开工作目录失败: \(SidecarError.detailText(error))", kind: .operation)
             }
             self.openingDirId = nil
         }
@@ -372,18 +400,20 @@ public final class ProjectPanelViewModel: ObservableObject {
                 let r = try await client.exportWorkgroup(projectId: project.id)
                 // 现状展示导出文件所在目录（path 去末段）
                 let dir = (r.path as NSString).deletingLastPathComponent
-                self.flashNotice("工作组已导出：\(r.name)（目录：\(dir)）")
+                self.flashNotice("工作组已导出：\(r.name)（目录：\(dir)）", kind: .success)
             } catch {
-                self.flashNotice("导出失败：\(SidecarError.detailText(error))")
+                self.flashNotice("导出失败：\(SidecarError.detailText(error))", kind: .error)
             }
             self.exportingId = nil
         }
     }
 
-    /// 闪示通知：立即上屏，TTL 后清除（新通知取消旧清除计时，避免新消息被旧定时器提前抹掉）
-    private func flashNotice(_ text: String) {
+    /// 闪示通知：立即上屏，TTL 后清除（新通知取消旧清除计时，避免新消息被旧定时器提前抹掉）。
+    /// 方向2 波次2：kind 随通知一并落位（替代 View 侧 hasPrefix("导出失败") 文案判定）。
+    private func flashNotice(_ text: String, kind: VCalloutKind) {
         noticeClearTask?.cancel()
         notice = text
+        noticeKind = kind
         noticeClearTask = Task { [weak self, noticeTTL] in
             try? await Task.sleep(nanoseconds: UInt64(noticeTTL * 1_000_000_000))
             guard !Task.isCancelled else { return }

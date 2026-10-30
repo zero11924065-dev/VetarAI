@@ -202,6 +202,17 @@ public enum NativeDatabaseSchema {
         if !msgCols.contains("stopped") {
             try conn.execScript("ALTER TABLE session_messages ADD COLUMN stopped INTEGER DEFAULT 0")
         }
+        // C3（联调批二 Part B）：引用块 id 列——明文纪律只存 id 数组（JSON TEXT），
+        // 原文/来源名一律不落盘；历史打开时按 id 回查内存库重建展示
+        if !msgCols.contains("citation_block_ids") {
+            try conn.execScript("ALTER TABLE session_messages ADD COLUMN citation_block_ids TEXT")
+        }
+        // C2（联调批二 Part C）：工具调用段卡片列——.vmodel answer 内嵌
+        // <tool_call> 段的结构化留存（JSON 数组 [{"name","arguments"}]；
+        // 可见且保留；思考段则从不落盘——可见不保留）
+        if !msgCols.contains("tool_cards") {
+            try conn.execScript("ALTER TABLE session_messages ADD COLUMN tool_cards TEXT")
+        }
         // H18-3：圆桌附件列（旧库补齐；rt_cols 空集 = 表不存在时不动作——对齐 Python `if rt_cols`）
         let rtCols = try conn.columnNames(of: "roundtables")
         if !rtCols.isEmpty && !rtCols.contains("attachments") {
@@ -263,7 +274,8 @@ public enum NativeDatabaseSchema {
         "sessions": ["id", "agent_id", "project_id", "title", "created_at", "updated_at"],
         "session_messages": ["id", "session_id", "agent_id", "project_id", "role", "content",
                              "images", "model_used", "created_at",
-                             "tool_steps", "truncated", "prompt_eval_count", "archived", "stopped"],
+                             "tool_steps", "truncated", "prompt_eval_count", "archived", "stopped",
+                             "citation_block_ids", "tool_cards"],
         "session_summaries": ["id", "session_id", "agent_id", "project_id", "summary_text", "saved_at"],
         "compact_log": ["id", "session_id", "project_id", "ts", "before_tokens",
                         "after_tokens", "archive_path", "summary", "error"],

@@ -100,8 +100,12 @@ public final class NativeMPChatConnector: NativeChatConnector, @unchecked Sendab
 
     /// MLX 支路出口（0.7.7 W3）：起手先停 llama-server 还内存（换装对称①，
     /// best-effort 与 preSwapToActive 同纪律），再交本支路连接器真流。
+    /// 排雷 2026-10-26：thinkingMode 会话档位透传——原实现硬编码 nil 死链，
+    /// 1.0.9 自称「放开 MLX 仓思考」实际从未传到连接器。仅动 MLX 仓（mlxswift）
+    /// 支路；.vmodel 思考闸（NativeVModelRouter 一刀切 enable_thinking=false）
+    /// 红线不波及。
     private func mlxChatStream(model: String, messages: [[String: JSONValue]],
-                               tools: [JSONValue]?)
+                               tools: [JSONValue]?, thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -114,7 +118,8 @@ public final class NativeMPChatConnector: NativeChatConnector, @unchecked Sendab
                     }
                     _ = await self.driver.stopServer()   // 换装对称①（还统一内存）
                     for try await ev in mlx.chatStream(model: model, messages: messages,
-                                                       tools: tools, images: nil) {
+                                                       tools: tools, images: nil,
+                                                       thinkingMode: thinkingMode) {
                         continuation.yield(ev)
                     }
                     continuation.finish()
@@ -154,10 +159,13 @@ public final class NativeMPChatConnector: NativeChatConnector, @unchecked Sendab
     /// 0.7.7 W3：driver=mlxswift 的包分派 MLX 支路（进程内 mlx-swift-lm 推理）；
     /// GGUF 支路起手先卸 MLX 驻留引擎（换装对称②，best-effort 不阻断）。
     public func chatStream(model: String, messages: [[String: JSONValue]],
-                           tools: [JSONValue]?, images: [String]?)
+                           tools: [JSONValue]?, images: [String]?,
+                           thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         if isMLXPack(model) {
-            return mlxChatStream(model: model, messages: messages, tools: tools)
+            // 排雷 2026-10-26：会话思考档一并传入 MLX 支路（原漏传致透传死链）
+            return mlxChatStream(model: model, messages: messages, tools: tools,
+                                 thinkingMode: thinkingMode)
         }
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -166,7 +174,8 @@ public final class NativeMPChatConnector: NativeChatConnector, @unchecked Sendab
                     try await ensureRunning(model)
                     let inner2 = self.inner
                     for try await ev in inner2.chatStream(model: model, messages: messages,
-                                                          tools: tools, images: images) {
+                                                          tools: tools, images: images,
+                                                          thinkingMode: thinkingMode) {
                         continuation.yield(ev)
                     }
                     continuation.finish()
@@ -379,6 +388,7 @@ public final class NativeModelPackRouter: @unchecked Sendable {
 
     /// 方向①（L124-146）：即将 ensure_server 加载数 GB 权重前，先卸活动后端
     /// 驻留模型。degraded（活动侧即 MP）跳过；list 失败/空跳过；逐个 safeUnload。
+    /// A1：精确匹配的常驻 Ollama 模型豁免此次自动释放，其余模型原行为不变。
     public func preSwapToPack() async {
         if degraded() { return }   // 退化模式：驱动自己管换装
         let loaded: [String]
@@ -387,11 +397,13 @@ public final class NativeModelPackRouter: @unchecked Sendable {
         } catch {
             return
         }
-        guard !loaded.isEmpty else { return }
-        for name in loaded {
+        let candidates = NativeModelResidency.ollamaAutomaticUnloadCandidates(
+            loaded: loaded, config: configProvider())
+        guard !candidates.isEmpty else { return }
+        for name in candidates {
             _ = await safeUnload(name)   // 卸载只是内存优化，失败不阻塞对话
         }
-        log("换装编排：路由至模型包前已请求卸载活动后端驻留模型 \(loaded)")
+        log("换装编排：路由至模型包前已请求卸载活动后端驻留模型 \(candidates)")
     }
 
     /// 方向②（L148-162）：路由命中活动后端，llama-server 在跑则先停（还内存）
@@ -427,7 +439,8 @@ public struct NativeRoutingChatConnector: NativeChatConnector {
     }
 
     public func chatStream(model: String, messages: [[String: JSONValue]],
-                           tools: [JSONValue]?, images: [String]?)
+                           tools: [JSONValue]?, images: [String]?,
+                           thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         let toPack = router.routeToPack(model)
         return AsyncThrowingStream { continuation in
@@ -438,13 +451,15 @@ public struct NativeRoutingChatConnector: NativeChatConnector {
                     if toPack {
                         await router.preSwapToPack()
                         for try await ev in mp.chatStream(model: model, messages: messages,
-                                                          tools: tools, images: images) {
+                                                          tools: tools, images: images,
+                                                          thinkingMode: thinkingMode) {
                             continuation.yield(ev)
                         }
                     } else {
                         await router.preSwapToActive()
                         for try await ev in active.chatStream(model: model, messages: messages,
-                                                              tools: tools, images: images) {
+                                                              tools: tools, images: images,
+                                                              thinkingMode: thinkingMode) {
                             continuation.yield(ev)
                         }
                     }

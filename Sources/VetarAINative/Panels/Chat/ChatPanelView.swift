@@ -89,7 +89,14 @@ public struct ChatPanelView: View {
 final class ChatViewModelBox: ObservableObject {
     @Published var vm: ChatViewModel?
     func attach(appState: AppState) {
-        if vm == nil { vm = ChatViewModel(appState: appState) }
+        // 联调批三 Part D：包级首 token 锚点供应缝接 Kernel 懒缝
+        // （不走 vmodel 会话零副作用；缝内同步冷路径绝不触网）
+        if vm == nil {
+            vm = ChatViewModel(
+                appState: appState,
+                vmodelFirstTokenAnchorSecondsProvider:
+                    appState.runtime.kernel.vmodelFirstTokenAnchorSecondsProvider)
+        }
     }
 }
 
@@ -112,6 +119,7 @@ private struct ChatDetailView: View {
     @ObservedObject var vm: ChatViewModel
     @State private var composerHeight: CGFloat = 38
     @State private var showMoreMenu = false
+    @State private var showThinkingPicker = false
     @State private var showWarehouse = false
     @State private var autoFollow = true
     @State private var showBackToBottom = false
@@ -141,7 +149,7 @@ private struct ChatDetailView: View {
                     .foregroundStyle(VTheme.warnText)
                 }
                 messageArea
-                Divider()
+                // 方向2 D4：composer 悬浮化后分隔线退役（阴影承担分层，防「卡片上方悬孤线」）
                 pendingArea
                 composer
             }
@@ -177,7 +185,9 @@ private struct ChatDetailView: View {
                     moreMenu
                         .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
                         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
-                        .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+                        // 方向2 波次4b：浮层菜单阴影收编 Shadow.popover（原版 :170 手写 0.12/10/3，alpha 同档）
+                        .shadow(color: VTheme.Shadow.popover.color, radius: VTheme.Shadow.popover.radius,
+                                y: VTheme.Shadow.popover.y)
                         .padding(.top, ChatMoreMenuSpec.topOffset)
                         .padding(.trailing, ChatMoreMenuSpec.trailingInset)
                 }
@@ -247,7 +257,9 @@ private struct ChatDetailView: View {
                         Text("无会话").tag("")
                     }
                     ForEach(vm.sessions) { s in
-                        Text("\(s.title ?? s.id) (\(s.message_count ?? 0)条)").tag(s.id)
+                        // 方向2 波次4b（A 组 P2-13）：半角括号 → 全角（原版 :240；
+                        // 与 ChatModels「（当前档 N）」全角口径同屏统一）
+                        Text("\(s.title ?? s.id) （\(s.message_count ?? 0)条）").tag(s.id)
                     }
                 }
                 .labelsHidden()
@@ -260,6 +272,8 @@ private struct ChatDetailView: View {
                 } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.vGhost).controlSize(.small)
                 .help("刷新会话列表")
+                // 方向2 波次4：AX 补账
+                .accessibilityLabel("刷新会话列表")
                 .disabled(!appState.runtime.nativeReady)
                 .accessibilityIdentifier("refreshSessionsButton")
                 Button {
@@ -267,6 +281,7 @@ private struct ChatDetailView: View {
                 } label: { Image(systemName: "plus") }
                 .buttonStyle(.vGhost).controlSize(.small)
                 .help("新建会话")
+                .accessibilityLabel("新建会话")
                 .disabled(!appState.runtime.nativeReady)
                 .accessibilityIdentifier("newSessionButton")
 
@@ -361,6 +376,7 @@ private struct ChatDetailView: View {
                     }
                     .buttonStyle(.vGhost).controlSize(.small)
                     .help("勾选消息 → 移入知识仓库")
+                    .accessibilityLabel("勾选消息")
                     .accessibilityIdentifier("selectModeButton")
                     // TS-120：知识仓库面板开关（U3：右端内嵌 300pt 窄栏，原版 ChatPanel.tsx:2619-2625 同位）
                     Button { showWarehouse.toggle() } label: {
@@ -370,6 +386,7 @@ private struct ChatDetailView: View {
                     }
                     .buttonStyle(.vGhost).controlSize(.small)
                     .help("知识仓库（检索/注入）")
+                    .accessibilityLabel("知识仓库")
                     .accessibilityIdentifier("warehouseToggle")
                     // A12：⋯ 更多操作（补充三 0.7.6 实测修复：下拉从 NSPopover 改为
                     // 窗口内 overlay——① NSPopover 只避让屏幕边界不避让窗口边界，
@@ -383,6 +400,7 @@ private struct ChatDetailView: View {
                     }
                     .buttonStyle(.vGhost).controlSize(.small)
                     .help("更多操作")
+                    .accessibilityLabel("更多操作")
                     .accessibilityIdentifier("moreMenuButton")
                     }
                     .fixedSize()   // F1：三按钮恒足额——最小宽=理想宽，永不溢出命中界
@@ -405,23 +423,25 @@ private struct ChatDetailView: View {
 
     private var moreMenu: some View {
         VStack(alignment: .leading, spacing: 2) {
-            menuItem("生成会话总结", icon: "doc.text",
+            // 方向2 波次4b（A 组 P2-16）：五行菜单钮补 AX id（字面量唯一 + 只挂叶子钮）
+            menuItem("生成会话总结", icon: "doc.text", axid: "moreMenu.summarize",
                      tip: "生成会话总结并保存（Markdown + 记录）") {
                 Task { await vm.summarizeSession() }
             }
-            menuItem("导出会话", icon: "square.and.arrow.down", tip: "导出会话为 Markdown") {
+            menuItem("导出会话", icon: "square.and.arrow.down", axid: "moreMenu.export",
+                     tip: "导出会话为 Markdown") {
                 Task { await vm.exportSession() }
             }
-            menuItem("单元归档", icon: "archivebox",
+            menuItem("单元归档", icon: "archivebox", axid: "moreMenu.autoArchive",
                      tip: "单元归档：开启后 Agent 每完成一个工作单元（批量任务）会把该段对话移入知识仓库，防止上下文膨胀。默认关闭，需手动开启",
                      active: vm.autoArchiveUnit) {
                 vm.autoArchiveUnit.toggle()
             }
             Divider().padding(.vertical, 2)
-            menuItem("重命名", icon: "pencil", tip: "重命名") {
+            menuItem("重命名", icon: "pencil", axid: "moreMenu.rename", tip: "重命名") {
                 if let sid = vm.currentSessionId { Task { await vm.renameSession(sid) } }
             }
-            menuItem("删除", icon: "trash", tip: "删除", danger: true) {
+            menuItem("删除", icon: "trash", axid: "moreMenu.delete", tip: "删除", danger: true) {
                 if let sid = vm.currentSessionId { Task { await vm.deleteSession(sid) } }
             }
         }
@@ -429,27 +449,47 @@ private struct ChatDetailView: View {
         .frame(width: ChatMoreMenuSpec.menuWidth)
     }
 
-    private func menuItem(_ label: String, icon: String, tip: String,
+    private func menuItem(_ label: String, icon: String, axid: String, tip: String,
                           danger: Bool = false, active: Bool = false,
                           action: @escaping () -> Void) -> some View {
-        Button {
+        MoreMenuItem(label: label, icon: icon, axid: axid, danger: danger, active: active) {
             showMoreMenu = false
             action()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .frame(width: 14)
-                    .foregroundStyle(danger ? VTheme.dangerText : VTheme.textTertiary)
-                Text(label).font(VTheme.Typo.caption)
-                Spacer()
-                if active { Image(systemName: "checkmark").foregroundStyle(VTheme.accent) }
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 10).padding(.vertical, 7)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(danger ? VTheme.dangerText : VTheme.textPrimary)
         .help(tip)
+    }
+
+    /// ⋯ 更多菜单行（方向2 波次2 修 A 组 P1-8：.plain 无 hover 反馈 → hover 浮出 bgHover 圆角底）
+    private struct MoreMenuItem: View {
+        let label: String
+        let icon: String
+        let axid: String   // 方向2 波次4b：AX id（挂叶子 Button）
+        var danger: Bool = false
+        var active: Bool = false
+        let action: () -> Void
+        @State private var isHovered = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    Image(systemName: icon)
+                        .frame(width: 14)
+                        .foregroundStyle(danger ? VTheme.dangerText : VTheme.textTertiary)
+                    Text(label).font(VTheme.Typo.caption)
+                    Spacer()
+                    if active { Image(systemName: "checkmark").foregroundStyle(VTheme.accent) }
+                }
+                .contentShape(Rectangle())
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(isHovered ? VTheme.bgHover : Color.clear,
+                            in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(danger ? VTheme.dangerText : VTheme.textPrimary)
+            .accessibilityIdentifier(axid)
+            .onHover { isHovered = $0 }
+            .animation(VTheme.Motion.micro, value: isHovered)
+        }
     }
 
     // MARK: M2 压缩警告条（三选一，现状文案逐字）
@@ -502,8 +542,11 @@ private struct ChatDetailView: View {
                                     value: g.frame(in: .named("chatScroll")).maxY - geo.size.height)
                             })
                     }
-                    .padding(.horizontal, 24).padding(.vertical, 16)
-                    .frame(maxWidth: 820, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+                    // 方向2 D4：悬浮 composer 不占布局，底部留白防末行钻到卡片阴影下（覆盖常态卡高）
+                    .padding(.bottom, 120)
+                    .frame(maxWidth: 720, alignment: .leading)   // 方向2 D4：消息流限宽 720 居中（原 820），气泡上限同步 640→562（78% 口径）
                     .frame(maxWidth: .infinity)
                 }
                 .coordinateSpace(name: "chatScroll")
@@ -527,10 +570,13 @@ private struct ChatDetailView: View {
                                 .frame(width: 36, height: 36)
                                 .background(VTheme.bgCard, in: Circle())
                                 .overlay(Circle().stroke(VTheme.borderDefault))
-                                .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
+                                // 方向2 波次4b：小型悬浮常驻控件归 Shadow.sticky 最近档（原版 :520 手写 0.08/3/1，alpha 同档）
+                                .shadow(color: VTheme.Shadow.sticky.color, radius: VTheme.Shadow.sticky.radius,
+                                        y: VTheme.Shadow.sticky.y)
                         }
                         .buttonStyle(.plain)
                         .help("回到底部")
+                        .accessibilityLabel("回到底部")
                         .padding(.bottom, 8)
                         .accessibilityIdentifier("backToBottomButton")
                     }
@@ -547,11 +593,26 @@ private struct ChatDetailView: View {
                     title: "该项目还没有 Agent",
                     message: "请在左侧 Agent 区点「+ 添加」创建 Agent 后，再开始对话")
             } else if vm.messages.isEmpty && !vm.sending {
+                // 方向2 波次4b（A 组 P2-12 漏项）：已选会话拉取 DB 期间 messages 为空
+                // 会闪显空态——messagesLoading 三态分流加载态（仿 Roundtable nil=加载中
+                // 范式；「加载中…」用全角省略号）
+                if vm.messagesLoading {
+                    VLoadingView("加载中…")
+                } else {
                 VEmptyStateView(
                     icon: "message",
-                    title: vm.currentSessionId != nil ? "新会话 — 开始对话吧" : "加载中...",
-                    message: "在下方输入消息开始；会话与历史由应用本地持久化，重启后自动回读"
+                    // A 组 P2-10：nil-session 稳态不再恒显「加载中」（无加载动作时那是撒谎）；
+                    // 全角标点卫生（em 破折号模板镀铬清除）
+                    title: vm.currentSessionId != nil ? "新会话，开始对话吧" : "选择或新建会话",
+                    message: vm.currentSessionId != nil
+                        ? "在下方输入消息开始；会话与历史由应用本地持久化，重启后自动回读"
+                        : "在左侧会话区选择一个会话，或新建一个开始。",
+                    // 方向2 L4：示例操作组（点选即填入输入框）
+                    suggestions: vm.currentSessionId != nil
+                        ? ["总结一下最近的对话", "帮我起草一段文字", "把这段内容拆成行动项"] : [],
+                    onPick: vm.currentSessionId != nil ? { s in vm.input = s } : nil
                 )
+                }
             }
         }
     }
@@ -572,7 +633,7 @@ private struct ChatDetailView: View {
     private var pendingArea: some View {
         if !vm.pendingItems.isEmpty {
             HStack(alignment: .top, spacing: 8) {
-                Text("暂存区:")
+                Text("暂存区：")   // 方向2 波次4b（A 组 P2-13）：半角冒号 → 全角（原版 :565）
                     .font(VTheme.Typo.micro)
                     .foregroundStyle(VTheme.textTertiary)
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -616,10 +677,15 @@ private struct ChatDetailView: View {
             }
             Button { vm.removePending(item.id) } label: {
                 Image(systemName: "xmark").font(.system(size: 10))
+                    // 方向2 波次4b（A 组 P2-16）：10pt 字形命中区约 10×10 razor-thin
+                    // → label 内扩 vIconHitTarget(20)（顶栏同治法，见 VButtons）
+                    .vIconHitTarget(20)
             }
             .buttonStyle(.plain)
             .foregroundStyle(VTheme.textTertiary)
             .help("移除该附件")
+            .accessibilityLabel("移除附件")
+            .accessibilityIdentifier("pendingChip.remove.\(item.id)")
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
@@ -633,11 +699,12 @@ private struct ChatDetailView: View {
             ComposerTextView(
                 text: $vm.input,
                 height: $composerHeight,
+                // 方向2 波次4b（A 组 P2-13）：三处 placeholder 结尾半角「...」→ 全角「…」（原版 :627-630）
                 placeholder: vm.projectMissingAgent
-                    ? "该项目还没有 Agent，请先在左侧 + 添加..."
+                    ? "该项目还没有 Agent，请先在左侧 + 添加…"
                     : vm.pendingItems.isEmpty
-                        ? "输入消息（可先上传附件，再输入文字，一起发送）..."
-                        : "输入文字描述，或直接发送...",
+                        ? "输入消息（可先上传附件，再输入文字，一起发送）…"
+                        : "输入文字描述，或直接发送…",
                 disabled: vm.inputDisabled || vm.projectMissingAgent || !appState.runtime.nativeReady,
                 onSend: { vm.send() },
                 onPasteImages: { vm.addPastedImages($0) },
@@ -648,12 +715,47 @@ private struct ChatDetailView: View {
             .accessibilityIdentifier("messageInput")
 
             HStack(spacing: 4) {
+                // 思考深度档位（会话级临时覆盖：快速/平衡/深度，选档即覆盖、不选回落引擎默认）。
+                // popover 而非 Menu：composer 贴窗口底缘，NSMenu 向下弹出会超出应用框
+                //（业主 2026-10-26 实测）；popover 由系统锚定按钮、空间不足自动上翻。
+                Button {
+                    showThinkingPicker.toggle()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "brain")
+                        Text(vm.thinkingMode == .fast ? "快速"
+                             : vm.thinkingMode == .deep ? "深度" : "平衡")
+                            .font(VTheme.Typo.micro)
+                    }
+                    .foregroundStyle(vm.thinkingMode == nil ? VTheme.textSecondary : VTheme.accent)
+                }
+                .buttonStyle(.vGhost).controlSize(.small)
+                .popover(isPresented: $showThinkingPicker, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Button("快速（少思考）") { vm.thinkingMode = .fast; showThinkingPicker = false }
+                            .buttonStyle(.vGhost).controlSize(.small)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("平衡（默认）") { vm.thinkingMode = nil; showThinkingPicker = false }
+                            .buttonStyle(.vGhost).controlSize(.small)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("深度（多思考）") { vm.thinkingMode = .deep; showThinkingPicker = false }
+                            .buttonStyle(.vGhost).controlSize(.small)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(8)
+                    .frame(width: 160)
+                }
+                .help("思考深度（快速/平衡/深度，仅对支持思考的模型生效）")
+                .accessibilityLabel("思考深度")
+                .accessibilityIdentifier("thinkingModeButton")
+
                 // 附件（checkpoint-003 验收：上传按钮必须在）
                 Button { pickFiles() } label: {
                     Image(systemName: "paperclip")
                 }
                 .buttonStyle(.vGhost).controlSize(.small)
                 .help("上传图片或文本文件（发送前可在暂存区删除）")
+                .accessibilityLabel("上传附件")
                 .accessibilityIdentifier("attachButton")
 
                 // 0.4.29 语音输入（P3-W3b 点亮）：点开始录音、再点停止 →
@@ -677,6 +779,7 @@ private struct ChatDetailView: View {
                 .buttonStyle(.vGhost).controlSize(.small)
                 .disabled(voice.isTranscribing || !appState.runtime.nativeReady)
                 .help(voice.isRecording ? "停止录音" : "语音输入（录音后自动转文字）")
+                .accessibilityLabel("语音输入")
                 .accessibilityIdentifier("micButton")
 
                 Spacer()
@@ -686,39 +789,40 @@ private struct ChatDetailView: View {
                     Button { vm.send() } label: {
                         Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold))
                     }
-                    .buttonStyle(.vPrimary)
-                    .clipShape(Circle())
+                    .buttonStyle(.vCircle)   // A 组 P1-3：专用 28×28 正圆样式（原 vPrimary+clipShape 裁出椭圆）
                     .disabled(!hasSendableText(vm.input))
-                    .opacity(hasSendableText(vm.input) ? 1 : 0.5)
                     .help("发送新消息（模型完成当前这一步后会读到）")
+                    .accessibilityLabel("发送新消息")
                     .accessibilityIdentifier("injectSendButton")
                     Button { vm.stop() } label: {
                         Image(systemName: "stop.fill").font(.system(size: 11))
                     }
-                    .buttonStyle(.vPrimary)
-                    .clipShape(Circle())
+                    .buttonStyle(.vCircle)
                     .help("停止（先 POST 真停后端，再断本地流）")
+                    .accessibilityLabel("停止")
                     .accessibilityIdentifier("stopButton")
                 } else {
                     Button { vm.send() } label: {
                         Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold))
                     }
-                    .buttonStyle(.vPrimary)
-                    .clipShape(Circle())
+                    .buttonStyle(.vCircle)
                     .disabled(vm.inputDisabled || vm.projectMissingAgent
                               || !appState.runtime.nativeReady
                               || vm.selectedModel == nil
                               || (!hasSendableText(vm.input) && vm.pendingItems.isEmpty))
-                    .opacity((!hasSendableText(vm.input) && vm.pendingItems.isEmpty) ? 0.5 : 1)
                     .help("发送")
+                    .accessibilityLabel("发送")
                     .accessibilityIdentifier("sendButton")
                 }
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
+            .padding(.horizontal, VTheme.Space.s3).padding(.vertical, VTheme.Space.s2)
         }
-        .background(VTheme.bgCard)
-        .overlay(Rectangle().frame(height: 1).foregroundStyle(VTheme.borderDefault), alignment: .top)
-        // TS-120：勾选模式浮动栏
+        // 方向2 D4：composer 悬浮化——圆角卡片 + Shadow.composer；原平贴底+顶部 1px 分隔线退役
+        // （disabled 置灰由样式内 isEnabled 单通道承担，外挂 opacity 双通道删除——A 组 P2-9）
+        .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.l))
+        .shadow(color: VTheme.Shadow.composer.color, radius: VTheme.Shadow.composer.radius,
+                y: VTheme.Shadow.composer.y)
+        // TS-120：勾选模式浮动栏（overlay 挂在外边距之前，参考系=卡片本体，offset -56 不失效）
         .overlay(alignment: .top) {
             if vm.selectMode {
                 HStack(spacing: 10) {
@@ -735,10 +839,14 @@ private struct ChatDetailView: View {
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
                 .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderSubtle))
-                .shadow(color: .black.opacity(0.1), radius: 8, y: 2)
+                // 方向2 波次4b：勾选浮动条阴影归 Shadow.sticky 最近档（原版 :728 手写 0.1/8/2）
+                .shadow(color: VTheme.Shadow.sticky.color, radius: VTheme.Shadow.sticky.radius,
+                        y: VTheme.Shadow.sticky.y)
                 .offset(y: -56)
             }
         }
+        .padding(.horizontal, VTheme.Space.s4)
+        .padding(.bottom, VTheme.Space.s4)
     }
 
     private func pickFiles() {
@@ -804,6 +912,7 @@ private struct ChatDetailView: View {
                 Spacer()
                 Button("取消") { vm.showTransferModal = false }
                     .buttonStyle(.vGhost)
+                    .accessibilityIdentifier("transferCancelButton")   // 方向2 波次4b（A 组 P2-16）
                 Button {
                     Task { await vm.confirmTransfer() }
                 } label: {
@@ -812,10 +921,15 @@ private struct ChatDetailView: View {
                 }
                 .buttonStyle(.vPrimary)
                 .disabled(vm.transferring)
+                .accessibilityIdentifier("transferConfirmButton")   // 方向2 波次4b（A 组 P2-16）
+                // 方向2 波次4b：sheet 主钮补 Enter=确认（对齐 VDialog defaultAction 口径）
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(22)
         .frame(width: 420)
+        // 方向2 波次4b：sheet 补 Esc=取消（对齐 VDialog Esc 口径）
+        .onExitCommand { vm.showTransferModal = false }
     }
 
     private func scopeButton(_ value: String, label: String) -> some View {
@@ -829,6 +943,8 @@ private struct ChatDetailView: View {
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s)
             .stroke(vm.transferScope == value ? VTheme.accentBorder : VTheme.borderStrong))
         .foregroundStyle(vm.transferScope == value ? VTheme.accentText : VTheme.textSecondary)
+        // 方向2 波次4b（A 组 P2-16）：补 AX id（插值区分 project/global 两实例）
+        .accessibilityIdentifier("transferScope.\(value)")
     }
 }
 
@@ -840,6 +956,9 @@ private struct MessageRow: View {
     let isStreamingThis: Bool
     let selectMode: Bool
     let selected: Bool
+    /// C2（联调批二 Part C）：vmodel 思考折叠块展开态（仅流式中有效；
+    /// 完成即整态剥离，本状态随气泡重建自然复位）
+    @State private var thinkExpanded = false
 
     private var isUser: Bool { message.role == "user" }
     private var isSystem: Bool { message.role == "system" }
@@ -852,12 +971,14 @@ private struct MessageRow: View {
                     Toggle("", isOn: Binding(get: { selected }, set: { _ in vm.toggleMessageSelect(message) }))
                         .toggleStyle(.checkbox)
                         .labelsHidden()
+                        // 方向2 波次4：AX 补账（labelsHidden 空标题控件补 context）
+                        .accessibilityLabel("选择消息")
                 }
                 Image(systemName: isUser ? "person" : isSystem ? "info.circle" : "cpu")
                     .font(.system(size: 10))
                 Text(isUser ? "你" : isSystem ? "系统" : (message.modelUsed ?? "AI"))
                 if let t = message.createdAt, !t.isEmpty {
-                    Text(formatChatTime(t)).opacity(0.7)
+                    Text(formatChatTime(t))   // A 组 P1-2：去叠淡 opacity(0.7)——textTertiary 已达标，叠淡后仅 2.4:1
                 }
             }
             .font(VTheme.Typo.micro)
@@ -878,21 +999,33 @@ private struct MessageRow: View {
                     thinkingBlock
                     toolStepsBlock
                     contentBlock
+                    toolCardsBlock
+                    citationBlock
                     stepsCounter
                 }
             }
             .padding(isUser || isSystem ? .init(top: 10, leading: 14, bottom: 10, trailing: 14)
                                         : .init(top: 2, leading: 0, bottom: 2, trailing: 0))
             .background(bubbleBackground)
-            .clipShape(RoundedRectangle(cornerRadius: isUser ? VTheme.Radius.l : VTheme.Radius.m))
+            .clipShape(RoundedRectangle(cornerRadius: isUser ? VTheme.Radius.msg : VTheme.Radius.m))
             .overlay {
                 if isUser || isSystem {
-                    RoundedRectangle(cornerRadius: isUser ? VTheme.Radius.l : VTheme.Radius.m)
-                        .stroke(isSystem ? VTheme.okBorder : VTheme.borderDefault)
+                    // 方向2：浅墨灰泡配弱描边（强描边显脏），圆角升 msg 档
+                    RoundedRectangle(cornerRadius: isUser ? VTheme.Radius.msg : VTheme.Radius.m)
+                        .stroke(isSystem ? VTheme.okBorder : VTheme.borderSubtle)
                 }
             }
-            // 气泡最大宽对齐原版 maxWidth:'78%'（ChatPanel.tsx:2841）×消息列 820 ≈ 640
-            .frame(maxWidth: 640, alignment: isUser ? .trailing : .leading)
+            .overlay(alignment: .leading) {
+                if !isUser && !isSystem {
+                    // 方向2 D5：AI 消息无泡化（文档流排版）+ 左侧藏蓝细条
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(VTheme.accent.opacity(0.55))
+                        .frame(width: 2)
+                        .padding(.leading, -10)
+                }
+            }
+            // 气泡最大宽对齐原版 78% 口径（ChatPanel.tsx:2841）×消息列 720 ≈ 562（随 820→720 限宽同步收档）
+            .frame(maxWidth: 562, alignment: isUser ? .trailing : .leading)
 
             errorBlock
             waitingBanner
@@ -901,10 +1034,50 @@ private struct MessageRow: View {
             visionRescue
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        .onHover { isHovering = $0 }
+        // 方向2 L1：hover 浮现行内操作（复制/重跑）；overlay 不占布局，浮现不跳动
+        .overlay(alignment: isUser ? .topLeading : .topTrailing) {
+            if isHovering && !selectMode && !isSystem && !message.archived {
+                HStack(spacing: 4) {
+                    Button { copyContent() } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.vRowAction)
+                    .help("复制")
+                    .accessibilityLabel("复制")
+                    .accessibilityIdentifier("msgAction.copy.\(message.id)")
+                    if message.role == "assistant" && message.id == vm.messages.last?.id {
+                        Button { vm.resendLast() } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.vRowAction)
+                        .help("重跑")
+                        .accessibilityLabel("重跑")
+                        .accessibilityIdentifier("msgAction.rerun.\(message.id)")
+                    }
+                }
+                .padding(3)
+                .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+                .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s).stroke(VTheme.borderSubtle))
+                .shadow(color: VTheme.Shadow.card.color, radius: 6, y: 2)
+                .offset(y: -10)
+                .transition(.opacity)
+            }
+        }
+        .animation(VTheme.Motion.micro, value: isHovering)
+    }
+
+    // 方向2 L1：hover 浮现操作状态与复制实现
+    @State private var isHovering = false
+
+    private func copyContent() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.content, forType: .string)
     }
 
     private var bubbleBackground: Color {
-        isUser ? VTheme.bgCard : isSystem ? VTheme.okBg : Color.clear
+        // 方向2 L1：用户泡白底 → 浅墨灰（bgHover 族），AI 保持无泡
+        isUser ? VTheme.bgHover : isSystem ? VTheme.okBg : Color.clear
     }
 
     // 图片附件（pending_images 与 DB images 归一；0.1.71）
@@ -927,17 +1100,43 @@ private struct MessageRow: View {
     }
 
     // 思考指示（阶段化：脉动点 + 「思考中… Ns」+ 单行钳制预览悬浮看全文，0.4.33 F3 纪律）
+    // C2（联调批二 Part C）：vmodel 消息的思考段「可见不保留」——流式中为可展开
+    // 折叠块（点 chevron 看实时全文 thinkingText）；完成即整态剥离（无一刻定格、
+    // 无残影），由 ChatViewModel 终态清理保证此处永不渲染 vmodel 思考残留。
+    // 非 vmodel 后端的既有呈现（单行预览 + 「思考 Ns」定格）逐字保留不受影响。
     @ViewBuilder
     private var thinkingBlock: some View {
         if message.role == "assistant" && message.thinkingActive {
+            let isVModel = NativeVModelChat.isVModelName(message.modelUsed ?? "")
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     Circle().fill(VTheme.accent).frame(width: 6, height: 6)
                     Text("思考中… \(message.thinkingElapsed.map { "\($0)s" } ?? "")")
                         .font(VTheme.Typo.caption)
+                    if isVModel {
+                        // C2：可展开（看实时思考全文）
+                        Image(systemName: thinkExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
+                    }
                 }
                 .foregroundStyle(VTheme.accentText)
-                if !message.thinkingPreview.isEmpty {
+                .contentShape(Rectangle())
+                .onTapGesture { if isVModel { thinkExpanded.toggle() } }
+                .accessibilityIdentifier(isVModel ? "vmodelThinkingToggle" : "thinkingIndicator")
+                if isVModel && thinkExpanded {
+                    // C2：展开的实时思考全文（滚动钳高，防长思考撑爆气泡）
+                    ScrollView {
+                        Text(message.thinkingText)
+                            .font(VTheme.Typo.micro)
+                            .foregroundStyle(VTheme.textTertiary)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 160)
+                    .padding(.leading, 13)
+                    .accessibilityIdentifier("vmodelThinkingDetail")
+                } else if !message.thinkingPreview.isEmpty {
                     Text(message.thinkingPreview)
                         .font(VTheme.Typo.micro)
                         .foregroundStyle(VTheme.textTertiary)
@@ -959,13 +1158,19 @@ private struct MessageRow: View {
                 // B12：整轮进行计时（思考已结束但任务仍在进行的空白区间）
                 // F5（0.7.12 实测修复）：首 token 未到（正文仍空）即追加
                 // 「预计还需约 Xs」——chip 第 1 秒可见，不再等 ≥8s 横幅
+                // 联调批三 Part D：无样本的 vmodel 改追加包级锚点
+                // 「首次响应通常需要<桶词>（估算值）」（波次4b 措辞；与样本互斥，VM 层保证）
                 if isStreamingThis, let r = message.runElapsed, r > 0 {
                     HStack(spacing: 4) {
                         Image(systemName: "clock").font(.system(size: 10))
                         Text("进行中 \(r)s"
                              + ChatWaitStage.chipSuffix(estimate: vm.waitEstimate,
                                                         waitedSeconds: r,
-                                                        contentEmpty: message.content.isEmpty))
+                                                        contentEmpty: message.content.isEmpty)
+                             + ChatWaitStage.chipAnchorSuffix(
+                                anchorSeconds: vm.waitAnchorSeconds,
+                                waitedSeconds: r,
+                                contentEmpty: message.content.isEmpty))
                     }
                 }
                 if let d = message.completedDuration, d > 0 {
@@ -1010,6 +1215,92 @@ private struct MessageRow: View {
             }
             .accessibilityIdentifier("assistantContent")
         }
+    }
+
+    // C2 工具调用卡片区（联调批二 Part C）：.vmodel answer 内嵌 <tool_call> 段的
+    // 结构化呈现（可见且保留）——每张卡片 = 工具名 + 参数 pretty JSON（可复制），
+    // 挂 assistant 正文下方、引用区上方；toolCards 空 → 整个不出现（逐像素无残影）。
+    // 仅 .vmodel 引擎消息会有 toolCards；非法 JSON 段已在解析层纯文本兜底进正文。
+    @ViewBuilder
+    private var toolCardsBlock: some View {
+        if message.role == "assistant", !message.toolCards.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(message.toolCards) { card in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "wrench.and.screwdriver")
+                                .font(.system(size: 10))
+                            Text(card.name)
+                                .font(VTheme.Typo.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(VTheme.accentText)
+                        if !card.argsText.isEmpty {
+                            Text(card.argsText)
+                                .font(VTheme.Typo.micro.monospaced())
+                                .foregroundStyle(VTheme.textSecondary)
+                                .lineSpacing(2)
+                                .textSelection(.enabled)   // 参数可复制
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.init(top: 6, leading: 10, bottom: 6, trailing: 10))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(VTheme.bgHover)
+                    .clipShape(RoundedRectangle(cornerRadius: VTheme.Radius.m))
+                    .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderSubtle))
+                }
+            }
+            .accessibilityIdentifier("toolCardSection")
+        }
+    }
+
+    // C3 原文引用区（联调批二 Part B）：浅底圆角块挂 assistant 正文下方——
+    // 标题「原文引用」+ 每条来源小字「摘自『block.title』」（黑盒名，⛔ 永不出现
+    // 原始路径/ID）+ 正文（截断 280 字+「…」已在纯逻辑层做完，命中句加粗+底色，
+    // 可复制）。三态纪律：citations 空（无命中/库 nil/失效块已滤）→ 整个不出现
+    //（ViewBuilder 条件渲染，逐像素无残影）；仅 .vmodel 引擎消息会有 citations。
+    @ViewBuilder
+    private var citationBlock: some View {
+        if message.role == "assistant", !message.citations.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("原文引用")
+                    .font(VTheme.Typo.micro)
+                    .foregroundStyle(VTheme.textTertiary)
+                ForEach(message.citations, id: \.blockId) { c in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("摘自『\(c.title)』")
+                            .font(VTheme.Typo.micro)
+                            .foregroundStyle(VTheme.textTertiary)
+                        Text(citationAttributedText(c))
+                            .font(VTheme.Typo.caption)
+                            .foregroundStyle(VTheme.textSecondary)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)   // 正文可复制
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(.init(top: 8, leading: 10, bottom: 8, trailing: 10))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(VTheme.bgHover)
+            .clipShape(RoundedRectangle(cornerRadius: VTheme.Radius.m))
+            .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderSubtle))
+            .accessibilityIdentifier("citationSection")
+        }
+    }
+
+    /// 命中句加粗+底色（底色用 accentBg 浅底，不喧宾夺主）；非命中句原样。
+    private func citationAttributedText(_ c: ChatCitation) -> AttributedString {
+        var out = AttributedString()
+        for s in c.sentences {
+            var seg = AttributedString(s.text)
+            if s.isHit {
+                seg.font = VTheme.Typo.caption.weight(.semibold)
+                seg.backgroundColor = VTheme.accentBg
+            }
+            out.append(seg)
+        }
+        return out
     }
 
     // M1-4：state 计数（步骤 x/max · 已用 N tokens）
@@ -1076,6 +1367,8 @@ private struct MessageRow: View {
     // M5：长加载横幅（发送后 ≥8s 无正文）
     // W10（0.7.4，REQ-FUT-003）：阶段文案随真实信号切换（装载/装填 → 生成）+
     // 首 token 均值预估「预计还需约 Xs」（有样本且剩余>0 才显示，绝不编造）
+    // 联调批三 Part D：无样本的 vmodel 改追加包级锚点（出厂估算，六档桶词，
+    // 与样本实测措辞可区分；已等待 ≥ 锚点即静默）
     @ViewBuilder
     private var waitingBanner: some View {
         if message.role == "assistant" && message.streamError == nil
@@ -1084,7 +1377,9 @@ private struct MessageRow: View {
                 ProgressView().controlSize(.small)
                 Text(vm.waitStage.bannerText(waitedSeconds: message.waitingSeconds)
                      + ChatWaitStage.estimateSuffix(estimate: vm.waitEstimate,
-                                                    waitedSeconds: message.waitingSeconds))
+                                                    waitedSeconds: message.waitingSeconds)
+                     + ChatWaitStage.anchorSuffix(anchorSeconds: vm.waitAnchorSeconds,
+                                                  waitedSeconds: message.waitingSeconds))
                     .font(VTheme.Typo.caption)
             }
             .foregroundStyle(VTheme.accentTextDeep)
@@ -1151,6 +1446,8 @@ private struct ToolStepsGroupView: View {
     private var failed: Int { steps.filter { $0.status == .error }.count }
 
     // W9（0.7.4）：收拢/展开 210ms 高度动画（壳应用 .21s 等效；偏差④核销）。
+    // 方向2 波次4b 复核：Motion 族最近档 panel=200ms easeInOut 不等值——保 210ms
+    // 原值（壳应用等效核销登记优先），注释入 Motion 口径不改行为。
     // DBG-151/153 教训：动画闭包内只翻 Bool 状态，不做重活（测量/滚动不受影响）。
     private static let toggleAnimation = Animation.easeInOut(duration: 0.21)
 
@@ -1177,9 +1474,11 @@ private struct ToolStepsGroupView: View {
                         .foregroundStyle(VTheme.textTertiary)
                 }
                 .padding(.horizontal, 10).frame(height: 28)
+                // 方向2 波次4b（A 组 P2-8 漏项）：圆角 14 手写收编 Capsule——
+                // 行高 28 一半即 14 = 事实全圆，Capsule 语义化（值不变）
                 .background(failed > 0 ? VTheme.warnBg : VTheme.bgHover,
-                            in: RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14)
+                            in: Capsule())
+                .overlay(Capsule()
                     .stroke(failed > 0 ? VTheme.warnBorder : VTheme.borderSubtle))
                 .foregroundStyle(failed > 0 ? VTheme.warnText : VTheme.textSecondary)
             }
@@ -1250,6 +1549,8 @@ private struct ToolStepRow: View {
             }
             .buttonStyle(.plain)
             .help(ToolStepsCopy.stepLabel(step))
+            // 方向2 波次4b（A 组 P2-16）：行钮补 AX id（插值区分各步骤实例，只挂叶子）
+            .accessibilityIdentifier("toolStepRow.\(step.id)")
             if open {
                 VStack(alignment: .leading, spacing: 6) {
                     if let detail = step.status == .error ? (step.error ?? "unknown") : step.summary {
@@ -1447,9 +1748,9 @@ private struct VisionRescueCardView: View {
             }
             .padding(8)
             .frame(maxWidth: 560, alignment: .leading)
-            .background(VTheme.okBg, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-            .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s).stroke(VTheme.okBorder))
-            .foregroundStyle(VTheme.okText)
+            .background(VTheme.warnBg, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))   // A 组 P1-7：能力受限告知用 warn 族（原 ok 绿族语义错配）
+            .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s).stroke(VTheme.warnBorder))
+            .foregroundStyle(VTheme.warnText)
         }
     }
 }

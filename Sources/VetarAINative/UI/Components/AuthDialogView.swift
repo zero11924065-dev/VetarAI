@@ -39,7 +39,8 @@ public struct AuthDialogHostView: View {
     public var body: some View {
         if let prompt = auth.pending {
             ZStack {
-                Color.black.opacity(0.36)
+                // 方向2 波次4b：遮罩收编 scrim 令牌（原版 :25 手写 black.opacity(0.36)）
+                VTheme.scrim
                     .ignoresSafeArea()
                     .onTapGesture { deny() }   // 遮罩点击 = 拒绝（对齐前端 Esc/遮罩 = 取消 = 拒绝）
                 card(prompt)
@@ -52,7 +53,7 @@ public struct AuthDialogHostView: View {
     private func card(_ prompt: AuthPrompt) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(prompt.dialogTitle)
-                .font(.system(size: 15, weight: .semibold))
+                .font(VTheme.Typo.dialogTitle)   // 方向2 波次4b：手写 15pt 收编令牌（原版 :38）
                 .foregroundStyle(VTheme.textPrimary)
                 .padding(.bottom, 12)
             Text(prompt.dialogMessage)
@@ -82,8 +83,11 @@ public struct AuthDialogHostView: View {
                         .accessibilityIdentifier("authRememberAlwaysButton")
                 }
                 Button(prompt.confirmLabel) { allow(remember: nil) }
-                    .buttonStyle(.vDanger)   // 前端四类分支全部 danger: true
+                    // 方向2 波次4b（A 组 P1 漏项）：不再四类全红——普通「允许」vPrimary
+                    // 石墨黑；执行/安装类（允许执行/允许安装）保留 vDanger（语义在 isDanger）
+                    .buttonStyle(prompt.isDanger ? .vDanger : .vPrimary)
                     .accessibilityIdentifier("authAllowButton")
+                    .keyboardShortcut(.defaultAction)   // Enter = 确认（A 组 P1-4；Esc=拒绝 已承载）
             }
             .padding(.top, 22)
         }
@@ -91,7 +95,9 @@ public struct AuthDialogHostView: View {
         .frame(width: 460)
         .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.l))
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.l).stroke(VTheme.borderSubtle))
-        .shadow(color: .black.opacity(0.12), radius: 15, y: 5)
+        // 方向2 波次4b：弹窗浮层阴影收编 Shadow.popover（原版 :77 手写 0.12/15/5）
+        .shadow(color: VTheme.Shadow.popover.color, radius: VTheme.Shadow.popover.radius,
+                y: VTheme.Shadow.popover.y)
         .background(
             Button("") { deny() }   // Esc = 拒绝
                 .keyboardShortcut(.cancelAction)

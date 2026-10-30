@@ -543,7 +543,8 @@ final class WorkflowNodeFactoryTests: XCTestCase {
 
         let e3 = WorkflowPanelViewModel.RunEvent(event: "workflow_reply",
                                                  data: ["node_id": "n4", "text": "好了"])
-        XCTAssertEqual(e3.lineText, "workflow_reply · n4 💬 好了")
+        // 方向2 波次2：lineText 去 💬 装饰，回复正文同用「 · 」分隔
+        XCTAssertEqual(e3.lineText, "workflow_reply · n4 · 好了")
 
         let e4 = WorkflowPanelViewModel.RunEvent(event: "node_error", data: ["node_id": "n2"])
         XCTAssertTrue(e4.isError, "事件名含 error 即标红")

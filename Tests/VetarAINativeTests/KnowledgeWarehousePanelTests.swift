@@ -559,7 +559,8 @@ final class MemoryTabViewModelTests: XCTestCase {
                                     flashInterval: 0.2)
         vm.globalMem = "禁止撒谎"
         vm.save(scope: "global")
-        let __w3ok9 = await w3WaitFor { vm.msg == "已保存 ✓" }
+        // 方向2 波次2：断言同步收编——文案去字符对勾「 ✓」（VCallout 自带 success 图标）
+        let __w3ok9 = await w3WaitFor { vm.msg == "已保存" }
         XCTAssertTrue(__w3ok9)
         XCTAssertFalse(vm.msgIsError)
         XCTAssertEqual(client.writeMemoryCalls.first?.scope, "global")

@@ -21,11 +21,15 @@
 
 //  项目组面板内容（对标 subagent/renderer/src/panels/ProjectPanel.tsx，415 行）：
 //    · 标题行：「项目」+ 新建项目按钮（loading/error 时禁用；loading 转圈）
-//    · 错误条：连接错误附手动「重试」（checkpoint-064）
-//    · 通知条：工作组导出结果闪示（「导出失败」前缀 = error 样式，否则 success）
+//    · 错误条：结构化 kind（列表读取失败附手动「重试」，checkpoint-064；
+//      方向2 波次2 起不再用 error.contains 文案判定）
+//    · 进度条：首启退避重试进度走 info 通道（方向2 波次2 起与 error 通道分列）
+//    · 通知条：工作组导出结果闪示（VM 产出 noticeKind，方向2 波次2 起不再靠
+//      「导出失败」前缀判定样式）
 //    · 手动目录输入卡片（目录选择器不可用的内联 fallback，Enter 提交 / 留空取消）
-//    · 项目列表（限高 30vh 独立滚动，ProjectPanel.tsx:326）：空态 / 加载中 /
-//      行（选中卡态 + 悬停操作：查看根目录 / 导出工作组 / 重命名 / 删除）+
+//    · 项目列表（限高固定 8 行独立滚动——方向2 波次2：原版 30vh 直译随窗高飘忽，
+//      改固定行数，ProjectPanel.tsx:326）：空态 / 加载中 /
+//      行（选中卡态 + 行内操作：查看根目录 / 导出工作组 / 重命名 / 删除）+
 //      行内改名编辑区（Enter 保存 / Esc 取消）
 //  V1（智能中心侧栏单栏堆叠复刻）：整页面板壳移除——本文件只提供侧栏分区内容
 //  视图 `ProjectPanelContentView`（原版 ProjectPanel 无折叠壳，App.tsx:234 直接渲染）；
@@ -49,8 +53,11 @@ final class ProjectPanelViewModelBox: ObservableObject {
 struct ProjectPanelContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var vm: ProjectPanelViewModel
-    /// 侧栏视口高（原版列表限高 30vh，ProjectPanel.tsx:326）
-    let viewportHeight: CGFloat
+
+    /// 方向2 波次2：列表限高由「视口 30vh」直译改固定行数（TSX 30vh 随窗高飘忽——
+    /// 大窗列表过长、小窗过矮）。行高 40pt ≈ 内容 20 + 上下 padding 8×2 + 行间距 2×2。
+    private static let maxVisibleRows: CGFloat = 8
+    private static let rowHeight: CGFloat = 40
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -73,22 +80,15 @@ struct ProjectPanelContentView: View {
                     }
                 }
                 .buttonStyle(.vGhost)
-                .controlSize(.small)
                 .disabled(vm.loading || vm.error != nil)
                 .accessibilityIdentifier("projectCreateButton")
             }
 
-            // ── 错误提示条（连接错误附手动重试，checkpoint-064）──
+            // ── 错误提示条（结构化 kind：列表读取失败附手动重试，checkpoint-064；
+            //    方向2 波次2：手写复制 VCallout 外观收编回 VCallout accessory 槽）──
             if let error = vm.error {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: VCalloutKind.error.icon)
-                        .font(.system(size: 12))
-                        .padding(.top, 1)
-                    Text(error)
-                        .font(VTheme.Typo.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    if error.contains("无法连接") {
+                VCallout(.error, error) {
+                    if vm.errorKind == .fetch {
                         Button {
                             vm.retry()
                         } label: {
@@ -98,22 +98,20 @@ struct ProjectPanelContentView: View {
                             }
                         }
                         .buttonStyle(.vSecondary)
-                        .controlSize(.small)
                         .accessibilityIdentifier("projectRetryButton")
                     }
                 }
-                .foregroundStyle(VCalloutKind.error.foreground)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(VCalloutKind.error.background,
-                            in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-                .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s)
-                    .stroke(VCalloutKind.error.border))
             }
 
-            // ── 工作组导出结果闪示（TS-121：前缀「导出失败」= error 样式）──
+            // ── 首启退避进度条（方向2 波次2：进度从 error 通道单列，info 样式承载）──
+            if let progress = vm.progress {
+                VCallout(.info, progress)
+                    .accessibilityIdentifier("projectProgressCallout")
+            }
+
+            // ── 工作组导出结果闪示（TS-121：方向2 波次2 起 kind 由 VM 产出）──
             if let notice = vm.notice {
-                VCallout(notice.hasPrefix("导出失败") ? .error : .success, notice)
+                VCallout(vm.noticeKind, notice)
                     .accessibilityIdentifier("projectNoticeCallout")
             }
 
@@ -131,11 +129,9 @@ struct ProjectPanelContentView: View {
                             .accessibilityIdentifier("projectManualPathField")
                         Button("确定") { vm.createManual() }
                             .buttonStyle(.vPrimary)
-                            .controlSize(.small)
                             .accessibilityIdentifier("projectManualConfirmButton")
                         Button("取消") { vm.cancelManual() }
                             .buttonStyle(.vSecondary)
-                            .controlSize(.small)
                             .accessibilityIdentifier("projectManualCancelButton")
                     }
                 }
@@ -144,22 +140,15 @@ struct ProjectPanelContentView: View {
                 .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
             }
 
-            // ── 项目列表：独立滚动区（限高 30vh，ProjectPanel.tsx:326）──
+            // ── 项目列表：独立滚动区（方向2 波次2：30vh 直译 → 固定 8 行，
+            //    原版坐标 ProjectPanel.tsx:326）──
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if vm.projects.isEmpty && vm.error == nil && !vm.loading {
-                        // 空态
-                        VStack(spacing: 8) {
-                            Image(systemName: "folder")
-                                .font(.system(size: 30))
-                                .foregroundStyle(VTheme.borderStrong)
-                            Text("暂无项目，点击上方按钮创建")
-                                .font(VTheme.Typo.body)
-                                .foregroundStyle(VTheme.textTertiary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
+                        // 空态（方向2 波次2：手写图标+单行文本收编 VEmptyStateView 三件套）
+                        VEmptyStateView(icon: "folder",
+                                        title: "暂无项目",
+                                        message: "点击上方按钮创建")
                     } else if vm.loading && vm.projects.isEmpty {
                         // 加载中
                         VStack(spacing: 8) {
@@ -178,14 +167,14 @@ struct ProjectPanelContentView: View {
                     }
                 }
             }
-            .frame(maxHeight: viewportHeight * 0.30)
+            .frame(maxHeight: Self.maxVisibleRows * Self.rowHeight)
         }
         // 原版外层 padding: 8（ProjectPanel.tsx:265）
         .padding(8)
     }
 }
 
-// MARK: - 项目行（选中卡态 + 悬停操作 + 行内改名编辑区）
+// MARK: - 项目行（选中卡态 + 行内操作常显 + 行内改名编辑区）
 
 private struct ProjectRowView: View {
     let project: SidecarProject
@@ -207,11 +196,9 @@ private struct ProjectRowView: View {
                     .accessibilityIdentifier("projectRenameField")
                 Button("保存") { vm.saveRename(project) }
                     .buttonStyle(.vPrimary)
-                    .controlSize(.small)
                     .accessibilityIdentifier("projectRenameSaveButton")
                 Button("取消") { vm.cancelRename() }
                     .buttonStyle(.vSecondary)
-                    .controlSize(.small)
                     .accessibilityIdentifier("projectRenameCancelButton")
             } else {
                 Image(systemName: "folder")
@@ -222,7 +209,8 @@ private struct ProjectRowView: View {
                     .foregroundStyle(VTheme.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                // 悬停操作（对齐现状 opacity 0→1）
+                // 行内操作（方向2 波次2：常显，删 opacity(hover||selected) 切换——
+                // 「看不见却可聚焦」对键盘/读屏用户是陷阱；照 Agents 兄弟面板口径）
                 HStack(spacing: 2) {
                     // 问题1联动：明显的「去对话」入口（选中 + 切到会话面板）
                     Button {
@@ -232,6 +220,8 @@ private struct ProjectRowView: View {
                     }
                     .buttonStyle(.vRowAction)
                     .help("去对话（切到会话面板，落到主 Agent）")
+                    // 方向2 波次4：AX 补账
+                    .accessibilityLabel("去对话")
                     .accessibilityIdentifier("projectChatButton.\(project.id)")
                     // 0.4.5：查看项目工作根目录（Finder 打开）
                     Button {
@@ -245,6 +235,7 @@ private struct ProjectRowView: View {
                     }
                     .buttonStyle(.vRowAction)
                     .help("查看根目录")
+                    .accessibilityLabel("查看根目录")
                     .accessibilityIdentifier("projectOpenDirButton.\(project.id)")
                     // TS-121（0.3.1 补遗2）：工作组 JSON 导出
                     Button {
@@ -258,6 +249,7 @@ private struct ProjectRowView: View {
                     }
                     .buttonStyle(.vRowAction)
                     .help("导出工作组（JSON：项目+Agent+会话+任务+圆桌）")
+                    .accessibilityLabel("导出工作组")
                     .accessibilityIdentifier("projectExportButton.\(project.id)")
                     Button {
                         vm.beginRename(project)
@@ -266,18 +258,20 @@ private struct ProjectRowView: View {
                     }
                     .buttonStyle(.vRowAction)
                     .help("重命名")
+                    .accessibilityLabel("重命名")
                     .accessibilityIdentifier("projectRenameButton.\(project.id)")
                     Button {
                         vm.delete(project)
                     } label: {
                         Image(systemName: "trash")
                     }
-                    .buttonStyle(.vRowAction)
-                    .foregroundStyle(VTheme.dangerText)
+                    // 方向2 波次2：vRowAction 外叠 dangerText 被样式内层覆盖成死代码，
+                    // 危险染色收进样式本体 .vRowActionDanger
+                    .buttonStyle(.vRowActionDanger)
                     .help("删除")
+                    .accessibilityLabel("删除项目")
                     .accessibilityIdentifier("projectDeleteButton.\(project.id)")
                 }
-                .opacity(hovering || isSelected ? 1 : 0)
             }
         }
         .padding(.horizontal, 10)
@@ -290,7 +284,7 @@ private struct ProjectRowView: View {
             RoundedRectangle(cornerRadius: VTheme.Radius.s)
                 .stroke(isSelected ? VTheme.borderDefault : Color.clear)
         )
-        .shadow(color: isSelected ? .black.opacity(0.05) : .clear, radius: 1.5, y: 1)
+        // 方向2 波次2：选中卡静止阴影删除（静止元素不投影，色阶+描边已够）
         .contentShape(Rectangle())
         // 单击 = 选中（现状 onSelect）；双击 = 去对话（问题1联动入口之二）
         .onTapGesture(count: 2) {

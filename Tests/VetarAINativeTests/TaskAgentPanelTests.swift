@@ -48,6 +48,8 @@ final class W1MockClient: SidecarClientProtocol {
     var models: [OllamaModel] = []
     var createAgentError: Error?
     var updateAgentError: Error?
+    /// 方向2 波次2 新增：Agent 列表拉取失败注入（错误态+重试条收编测试用）
+    var listAgentsError: Error?
 
     // 调用记录
     private(set) var listTasksCalls = 0
@@ -78,6 +80,7 @@ final class W1MockClient: SidecarClientProtocol {
     func createProject(name: String, workingDir: String) async throws -> String { "p1" }
     func listAgents(projectId: String) async throws -> [SidecarAgent] {
         listAgentsCalls += 1
+        if let listAgentsError { throw listAgentsError }
         return agents
     }
     func createAgent(projectId: String, name: String, type: String, modelName: String?) async throws -> String {
@@ -667,6 +670,23 @@ final class AgentPanelViewModelTests: XCTestCase {
         let calls = client.listAgentsCalls
         try? await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(client.listAgentsCalls, calls, "stop 后轮询应停")
+    }
+
+    // 方向2 波次2 新增：列表拉取失败上屏 error 态（原静默假空收编）+ 手动重试恢复
+    func testFetchFailureSetsErrorAndRetryRecovers() async {
+        let client = W1MockClient()
+        client.listAgentsError = SidecarError.offline("连接被拒")
+        let (vm, _) = makeVM(client: client)
+        await vm.fetchAgents()
+        XCTAssertEqual(vm.error, AgentPanelViewModel.listError)
+        XCTAssertTrue(vm.agents.isEmpty)
+
+        client.listAgentsError = nil
+        client.agents = [makeAgent("a1")]
+        vm.retry()
+        let recovered = await waitFor { vm.agents.count == 1 }
+        XCTAssertTrue(recovered)
+        XCTAssertNil(vm.error, "重试成功应清错误态")
     }
 
     // 选择 Agent → 写 AppState.currentAgentId

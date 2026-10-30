@@ -217,13 +217,15 @@ public final class NativeOpenAIChatConnector: NativeChatConnector {
     // MARK: - chat_stream（openai_compat.py L245-362 逐行为）
 
     public func chatStream(model: String, messages: [[String: JSONValue]],
-                           tools: [JSONValue]?, images: [String]?)
+                           tools: [JSONValue]?, images: [String]?,
+                           thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     try await self.streamMain(model: model, messages: messages,
                                               tools: tools, images: images,
+                                              thinkingMode: thinkingMode,
                                               continuation: continuation)
                 } catch is CancellationError {
                     // 客户端断开（Python asyncio.CancelledError）：静默结束流
@@ -249,6 +251,7 @@ public final class NativeOpenAIChatConnector: NativeChatConnector {
     private func streamMain(
         model: String, messages: [[String: JSONValue]],
         tools: [JSONValue]?, images: [String]?,
+        thinkingMode: NativeThinkingMode?,
         continuation: AsyncThrowingStream<NativeChatStreamEvent, Error>.Continuation
     ) async throws {
         // ── payload（L253-262）：stream_options.include_usage 恒 true ──
@@ -262,6 +265,11 @@ public final class NativeOpenAIChatConnector: NativeChatConnector {
         for (k, v) in NativeWorkflowHTTPConnector.modelOptions(
             model: model, backend: "openai_compatible", config: config()) {
             payload[k] = v
+        }
+        // 思考深度档位（会话级临时覆盖）：选档才注入 reasoning_effort 顶层字段
+        // （llama.cpp / OpenAI 兼容端的思考档位；平衡/未选 = 不传，回落默认）。
+        if let thinkingMode {
+            payload["reasoning_effort"] = .string(thinkingMode.reasoningEffort)
         }
         if let tools, !tools.isEmpty {
             payload["tools"] = .array(tools)

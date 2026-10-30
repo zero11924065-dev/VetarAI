@@ -86,12 +86,18 @@ private struct WorkflowPanelBody: View {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 32))
                     .foregroundStyle(VTheme.textTertiary)
+                // 方向2 波次2（原版 :73-74）：空态主句 14pt textTertiary → textSecondary
                 Text("流程中心：新建或选择一个工作流开始编排")
                     .font(.system(size: 14))
-                    .foregroundStyle(VTheme.textTertiary)
+                    .foregroundStyle(VTheme.textSecondary)
                 Text("节点类型：推理 / 工具 / 条件分支 / 并行 / 循环 / 人工审批")
                     .font(VTheme.Typo.caption)
                     .foregroundStyle(VTheme.textTertiary)
+                // 方向2 波次2：空态补行动主钮（原版只文案无入口），调既有新建动作
+                Button("新建工作流") { vm.createWorkflow() }
+                    .buttonStyle(.vPrimary)
+                    .padding(.top, VTheme.Space.s1)
+                    .accessibilityIdentifier("workflowCreateEmpty")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -176,6 +182,8 @@ private struct WorkflowPanelBody: View {
                 .buttonStyle(.vDanger)
                 .controlSize(.small)
                 .help("删除工作流")
+                // 方向2 波次4：AX 补账
+                .accessibilityLabel("删除工作流")
                 .accessibilityIdentifier("workflowDelete")
             }
         }
@@ -323,6 +331,7 @@ private struct WorkflowPanelBody: View {
                 .buttonStyle(.vGhost)
                 .controlSize(.small)
                 .help("刷新运行记录")
+                .accessibilityLabel("刷新运行记录")
                 .accessibilityIdentifier("workflowRunsRefresh")
             }
             .padding(.horizontal, 12)
@@ -379,28 +388,39 @@ private struct WorkflowPanelBody: View {
             .padding(.vertical, 5)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // 方向2 波次2（原版 :365）：手写 .plain 收编回归 VButtons 体系——
+        // 行级展开钮按层级取 .vGhost（补 hover 浮浅底/pressed/disabled 三态）
+        .buttonStyle(.vGhost)
         .accessibilityIdentifier("workflowRunRow.\(run.id)")
     }
 
     /// 状态徽标（running 蓝 / awaiting_approval 黄 / done 绿 / failed 红 / stopped 灰）。
     private func runStatusBadge(_ status: String) -> some View {
-        let (label, fg, bg): (String, Color, Color) = {
+        // 方向2 波次2（原版 :378）：default 分支不再英文原文上屏——
+        // 兜底「未知状态」胶囊 + 原文降级 mono micro 小字（known 标记带出原文）
+        let (label, fg, bg, known): (String, Color, Color, Bool) = {
             switch status {
-            case "running": return ("进行中", VTheme.accentTextDeep, VTheme.accentBg)
-            case "awaiting_approval": return ("待审批", VTheme.warnText, VTheme.warnBg)
-            case "done": return ("完成", VTheme.okText, VTheme.okBg)
-            case "failed": return ("失败", VTheme.dangerText, VTheme.dangerBg)
-            case "stopped": return ("已停止", VTheme.textSecondary, VTheme.bgHover)
-            default: return (status, VTheme.textSecondary, VTheme.bgHover)
+            case "running": return ("进行中", VTheme.accentTextDeep, VTheme.accentBg, true)
+            case "awaiting_approval": return ("待审批", VTheme.warnText, VTheme.warnBg, true)
+            case "done": return ("完成", VTheme.okText, VTheme.okBg, true)
+            case "failed": return ("失败", VTheme.dangerText, VTheme.dangerBg, true)
+            case "stopped": return ("已停止", VTheme.textSecondary, VTheme.bgHover, true)
+            default: return ("未知状态", VTheme.textSecondary, VTheme.bgHover, false)
             }
         }()
-        return Text(label)
-            .font(VTheme.Typo.micro)
-            .foregroundStyle(fg)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(bg, in: Capsule())
+        return HStack(spacing: 4) {
+            Text(label)
+                .font(VTheme.Typo.micro)
+                .foregroundStyle(fg)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(bg, in: Capsule())
+            if !known {
+                Text(status)
+                    .font(VTheme.Typo.micro.monospaced())
+                    .foregroundStyle(VTheme.textTertiary)
+            }
+        }
     }
 
     /// 运行详情：结果/错误 + 节点事件表（node_events 按 id 升序，后端已排好）。
@@ -449,14 +469,16 @@ private struct WorkflowPanelBody: View {
                     .font(VTheme.Typo.micro)
                     if !ev.outputSummary.isEmpty {
                         Text(String(ev.outputSummary.prefix(120)))
-                            .font(.system(size: 10, design: .monospaced))
+                            // 方向2 波次2：字号下限收编 10pt mono → Typo.mono(12)
+                            .font(VTheme.Typo.mono)
                             .foregroundStyle(VTheme.textTertiary)
                             .lineLimit(2)
                             .padding(.leading, 16)
                     }
                     if let err = ev.error, !err.isEmpty {
                         Text(err)
-                            .font(.system(size: 10, design: .monospaced))
+                            // 方向2 波次2：字号下限收编 10pt mono → Typo.mono(12)
+                            .font(VTheme.Typo.mono)
                             .foregroundStyle(VTheme.dangerText)
                             .lineLimit(2)
                             .padding(.leading, 16)

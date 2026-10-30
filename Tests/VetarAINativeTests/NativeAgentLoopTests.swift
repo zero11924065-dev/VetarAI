@@ -65,7 +65,8 @@ private final class FakeConn: NativeChatConnector, @unchecked Sendable {
     }
 
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         let i = min(calls, rounds.count - 1)
         calls += 1
@@ -426,7 +427,8 @@ extension NativeAgentLoopTests {
     func test14_thinkingPassthrough() async throws {
         final class ThinkingConn: NativeChatConnector, @unchecked Sendable {
             func chatStream(model: String, messages: [[String: JSONValue]],
-                            tools: [JSONValue]?, images: [String]?)
+                            tools: [JSONValue]?, images: [String]?,
+                            thinkingMode: NativeThinkingMode?)
                 -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
                 AsyncThrowingStream { cont in
                     cont.yield(.thinkingDelta("让我想想"))
@@ -589,7 +591,8 @@ extension NativeAgentLoopTests {
         final class IncrConn: NativeChatConnector, @unchecked Sendable {
             private(set) var calls = 0
             func chatStream(model: String, messages: [[String: JSONValue]],
-                            tools: [JSONValue]?, images: [String]?)
+                            tools: [JSONValue]?, images: [String]?,
+                            thinkingMode: NativeThinkingMode?)
                 -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
                 calls += 1
                 let n = calls
@@ -686,7 +689,8 @@ extension NativeAgentLoopTests {
                 self.center = center; self.sid = sid
             }
             func chatStream(model: String, messages: [[String: JSONValue]],
-                            tools: [JSONValue]?, images: [String]?)
+                            tools: [JSONValue]?, images: [String]?,
+                            thinkingMode: NativeThinkingMode?)
                 -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
                 let i = min(calls, 2)
                 calls += 1

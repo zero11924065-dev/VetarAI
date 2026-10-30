@@ -566,7 +566,9 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(vm.config?.networkSwitch, "proxy")
     }
 
-    // 模型特长：100 字截断 + 空串删除 + 独立保存
+    // 模型特长：100 字截断 + 空串删除 + 保存提交
+    // 方向2 波次3收编：原断言 saveStrengths() 分区通道；分区保存按钮已撤除，
+    // 特长草稿改由 saveAll 统一提交——断言目标改为 saveAll 整包内携带该键。
     func testStrengthsDraftRules() async {
         let client = MockSettingsClient(config: sampleConfig())
         let vm = makeVM(client: client)
@@ -576,7 +578,7 @@ final class SettingsViewModelTests: XCTestCase {
         vm.setStrength("qwen3.8", "   ")
         XCTAssertNil(vm.strengthsDraft["qwen3.8"], "空白 = 删除该模型记录")
         vm.setStrength("ocr-model", "OCR/图片转写专用")
-        await vm.saveStrengths()
+        await vm.saveAll()
         XCTAssertEqual(client.putPatches.last?["model_strengths"],
                        .object(["ocr-model": .string("OCR/图片转写专用")]))
     }
@@ -656,16 +658,19 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(vm.modelOptions, [])
     }
 
-    // 上下文管理分区保存：只发三个键
-    func testSaveContextSectionSendsThreeKeys() async {
+    // 上下文管理键随「保存全部」整包提交
+    // 方向2 波次3收编：原断言 saveContextSection() 分区通道只发三键；分区保存
+    // 按钮已撤除，compact_archive_dir / allow_auto_compact / compact_keep_recent
+    // 改由 saveAll 统一提交（整包回写内含此三键，数值草稿转换口径不变）。
+    func testSaveAllIncludesContextKeys() async {
         let client = MockSettingsClient(config: sampleConfig())
         let vm = makeVM(client: client)
         await vm.load()
         vm.draftCompactKeepRecent = "20"
-        await vm.saveContextSection()
+        await vm.saveAll()
         let patch = client.putPatches.last
-        XCTAssertEqual(patch?.keys.sorted(),
-                       ["allow_auto_compact", "compact_archive_dir", "compact_keep_recent"])
+        XCTAssertEqual(patch?["compact_archive_dir"], .string("~/.subagent/compressed"))
+        XCTAssertEqual(patch?["allow_auto_compact"], .bool(false))
         XCTAssertEqual(patch?["compact_keep_recent"], .int(20))
     }
 }

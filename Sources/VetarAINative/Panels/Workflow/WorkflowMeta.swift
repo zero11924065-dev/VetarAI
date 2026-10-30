@@ -20,8 +20,9 @@
 //
 
 //  工作流节点类型元数据与工厂（纯数据/纯函数，可单测）：
-//    · WorkflowNodeMeta —— 类型 → 中文标签 + 分类色（移植 WorkflowCanvas.tsx TYPE_META，
-//      含 A12 降饱和色 #8578C8/#5B8DB8/#5FA388；主题色用 VTheme token 保持深浅跟随）
+//    · WorkflowNodeMeta —— 类型 → 中文标签 + 分类色（移植 WorkflowCanvas.tsx TYPE_META；
+//      方向2 波次2：A12 降饱和色 #8578C8/#5B8DB8/#5FA388 迁入 VTheme wfNode* 令牌
+//      （绿改青避撞 ok），全部经 VTheme token 保持深浅跟随）
 //    · nodeTypeOptions / conditionOps —— 编辑器下拉清单（移植 WorkflowEditor.tsx 常量，
 //      顺序即现状下拉顺序）
 //    · WorkflowNodeFactory —— addNode 缺省字段链（逐分支对齐 WorkflowEditor.tsx），
@@ -45,18 +46,19 @@ public enum WorkflowNodeTypes {
         case "inference":   return .init(label: "推理", color: VTheme.accent)
         case "tool":        return .init(label: "工具", color: VTheme.warn)
         case "condition":   return .init(label: "条件", color: VTheme.warn)
-        // A12：分类色降饱和（方向A 语义色柔和化）
-        case "parallel":    return .init(label: "并行", color: Color(hex: 0x8578C8))
-        case "loop":        return .init(label: "循环", color: Color(hex: 0x8578C8))
+        // 方向2 波次2：A12 降饱和分类色迁入 VTheme 令牌（wfNodeViolet/Blue/Teal），
+        // 深色映射随令牌；原绿 0x5FA388 与 ok 绿撞色，令牌已改青族
+        case "parallel":    return .init(label: "并行", color: VTheme.wfNodeViolet)
+        case "loop":        return .init(label: "循环", color: VTheme.wfNodeViolet)
         case "approval":    return .init(label: "审批", color: VTheme.danger)
-        case "file_input":  return .init(label: "文件输入", color: Color(hex: 0x5B8DB8))
-        case "file_read":   return .init(label: "文件读取", color: Color(hex: 0x5B8DB8))
-        case "file_output": return .init(label: "文件输出", color: Color(hex: 0x5B8DB8))
+        case "file_input":  return .init(label: "文件输入", color: VTheme.wfNodeBlue)
+        case "file_read":   return .init(label: "文件读取", color: VTheme.wfNodeBlue)
+        case "file_output": return .init(label: "文件输出", color: VTheme.wfNodeBlue)
         // TS-121（0.3.1 补遗1）
-        case "text_output": return .init(label: "文本输出", color: Color(hex: 0x5FA388))
-        case "variable_set": return .init(label: "变量赋值", color: Color(hex: 0x5FA388))
+        case "text_output": return .init(label: "文本输出", color: VTheme.wfNodeTeal)
+        case "variable_set": return .init(label: "变量赋值", color: VTheme.wfNodeTeal)
         case "code":        return .init(label: "代码执行", color: VTheme.warn)
-        case "reply":       return .init(label: "消息回复", color: Color(hex: 0x5FA388))
+        case "reply":       return .init(label: "消息回复", color: VTheme.wfNodeTeal)
         case "end":         return .init(label: "结束", color: VTheme.textSecondary)
         default:            return .init(label: type, color: VTheme.textSecondary)
         }

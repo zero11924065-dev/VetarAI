@@ -879,7 +879,8 @@ extension NativeAgentLoop {
         toolContext: NativeToolContext? = nil,
         toolExecutor: (any NativeLoopToolExecutor)? = nil,
         configProvider: (@Sendable () -> [String: JSONValue])? = nil,
-        lazyTiers: NativeLazyCtxTiers? = nil
+        lazyTiers: NativeLazyCtxTiers? = nil,
+        thinkingMode: NativeThinkingMode? = nil
     ) -> AsyncStream<NativeAgentLoopEvent> {
         AsyncStream { continuation in
             let task = Task {
@@ -899,6 +900,7 @@ extension NativeAgentLoop {
                     appControlCtx: appControlCtx, computerUseCtx: computerUseCtx,
                     delegationCtx: delegationCtx, skillReader: skillReader,
                     executor: executor, config: config, lazyTiers: tiers,
+                    thinkingMode: thinkingMode,
                     continuation: continuation)
                 continuation.finish()
             }
@@ -932,6 +934,7 @@ extension NativeAgentLoop {
         executor: (any NativeLoopToolExecutor)?,
         config: @escaping () -> [String: JSONValue],
         lazyTiers: NativeLazyCtxTiers,
+        thinkingMode: NativeThinkingMode?,
         continuation: AsyncStream<NativeAgentLoopEvent>.Continuation
     ) async {
         func emit(_ event: String, _ data: [String: JSONValue]) {
@@ -973,6 +976,9 @@ extension NativeAgentLoop {
         var toolCallsLog: [[String: JSONValue]] = []
         // #3（0.4.19）：full_text 必须在【轮次循环外】累积——done 带【完整】文本
         var fullText = ""
+        /// C2（联调批二 Part C）：本流是否产出过 .vmodel 工具调用段卡片——
+        /// 纯卡片回复（无正文）不得误判「模型未返回任何内容」（卡片=实质输出）
+        var sawToolCard = false
         var executedSearches: [String: Int] = [:]   // 归一化 query → 命中次数（去重缓存）
         var promptEvalHistory: [Int] = []           // M2 上下文预警（est_rounds_left 倒推）
         // checkpoint-067 R-4：read_file 读到的图片 base64，下一轮经 images 参数注入视觉流
@@ -1058,7 +1064,8 @@ extension NativeAgentLoop {
             do {
                 for try await ev in connector.chatStream(
                     model: model, messages: msgs,
-                    tools: toolsSpecList, images: imgs.isEmpty ? nil : imgs) {
+                    tools: toolsSpecList, images: imgs.isEmpty ? nil : imgs,
+                    thinkingMode: thinkingMode) {
                     if Task.isCancelled { return }   // 客户端断开：静默结束
                     switch ev {
                     case .streamError(let se):
@@ -1073,6 +1080,13 @@ extension NativeAgentLoop {
                     case .thinkingDelta(let delta):
                         // TS-102 B13：思考增量透传（不计入正文/上下文）
                         emit("thinking", ["delta": .string(delta)])
+                    case .toolCallCard(let cardName, let cardArgs):
+                        // C2（联调批二 Part C）：.vmodel answer 内嵌工具调用段的
+                        // 结构化卡片——透传呈现/落盘用，⛔ 不进工具执行回路
+                        //（pendingTcs 只承接 .toolCalls 结构化调用，两路不相干）
+                        sawToolCard = true
+                        emit("tool_card", ["name": .string(cardName),
+                                           "arguments": cardArgs])
                     case .toolCalls(let tcs):
                         for tc in tcs {
                             let fn = tc["function"]?.object ?? [:]
@@ -1135,7 +1149,7 @@ extension NativeAgentLoop {
                         continue   // 不 yield done：下一轮正常流程接管
                     }
                 }
-                if !pyTrim(fullText).isEmpty {
+                if !pyTrim(fullText).isEmpty || sawToolCard {
                     emit("state", stateData(step: step, tokensUsed: tokensUsed,
                                             promptEval: stepPe, ctxChars: ctxChars))
                     emit("done", ["content": .string(fullText),

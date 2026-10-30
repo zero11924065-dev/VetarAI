@@ -14,10 +14,10 @@
 > **Compute is free. Context is precious.**
 > VetarAI is an on-device desktop app: multi-agent collaboration, visual workflows, a pull-mode knowledge warehouse with on-device semantic retrieval, and a multi-model studio. Your chats, knowledge and project data stay on your disk.
 
-**当前版本 / Current version：v0.7.15**（macOS · Apple Silicon · dmg · 已签名 + Apple 公证）
+**当前版本 / Current version：v1.0.16**（macOS · Apple Silicon · dmg · 已签名 + Apple 公证）
 
-- 0.7.15：全原生 Swift 架构重写完成；超级工作室、应用内模型包、魔塔链接安装、CU 电脑操作等功能新增；若干问题修复。
-- 0.7.15: fully rewritten in native Swift; new — Studio, in-app model packs, ModelScope link install, Computer Use; plus various fixes.
+- 1.0.16：超级工作室、应用内模型包、CU 电脑操作等功能完善；新增 Ollama 模型常驻与 KV 缓存选档；若干问题修复。
+- 1.0.16: refinements to Studio, in-app model packs and Computer Use; new Ollama model residency and KV cache tier controls; plus various fixes.
 
 **Note: This project is developed by a Chinese team. English translations are provided immediately following each corresponding Chinese section. Full English language support will be included in a future update.**
 
@@ -30,6 +30,7 @@
 | [下载 VetarAI](#-下载-vetarai--download-vetarai) | [Download VetarAI](#-下载-vetarai--download-vetarai) |
 | [为什么做 VetarAI：痛点与解法](#-为什么做-vetarai痛点与解法) | [Why VetarAI: Pain Points & Solutions](#-为什么做-vetarai痛点与解法) |
 | [✨ 0.7 新特性：超级工作室](#-07-新特性超级工作室) | [0.7 Highlights: Studio](#-07-新特性超级工作室) |
+| [✨ 1.0 新特性：推理控制与模型常驻](#-10-新特性推理控制与模型常驻) | [1.0 Highlights: Inference Controls & Model Residency](#-10-新特性推理控制与模型常驻) |
 | [📦 模型包与魔塔链接安装](#-模型包与魔塔链接安装) | [Model Packs & ModelScope Install](#-模型包与魔塔链接安装) |
 | [✨ 0.4 新特性：知识仓库与语义检索](#-04-新特性知识仓库与语义检索) | [0.4 Highlights: Knowledge Warehouse & Semantic Search](#-04-新特性知识仓库与语义检索) |
 | [🔀 0.2 新特性：工作流（流程中心）](#-02-新特性工作流流程中心) | [0.2 Highlights: Workflow](#-02-新特性工作流流程中心) |
@@ -45,10 +46,10 @@
 
 ## ⬇️ 下载 VetarAI / Download VetarAI
 
-**[⬇️ 下载 VetarAI 0.7.15 安装包 / Download VetarAI 0.7.15 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v0.7.15)**
+**[⬇️ 下载 VetarAI 1.0.16 安装包 / Download VetarAI 1.0.16 Installer](https://github.com/zero11924065-dev/VetarAI/releases/tag/v1.0.16)**
 
-（约 31MB · macOS Apple Silicon · dmg 格式 · **已签名 + Apple 公证，首装无需额外放行** · 语义模型首次启动按需下载，安装包轻巧）
-(~31MB · macOS Apple Silicon · dmg · **signed + Apple-notarized, no extra bypass needed on first launch** · the semantic model downloads on first launch, keeping the installer lean)
+（约 33MB · macOS Apple Silicon · dmg 格式 · **已签名 + Apple 公证，首装无需额外放行** · 语义模型首次启动按需下载，安装包轻巧）
+(~33MB · macOS Apple Silicon · dmg · **signed + Apple-notarized, no extra bypass needed on first launch** · the semantic model downloads on first launch, keeping the installer lean)
 
 ---
 
@@ -115,14 +116,37 @@ Running agents on local LLMs means facing a few hard realities — each generati
 
 ---
 
+## ✨ 1.0 新特性：推理控制与模型常驻
+
+> 从对话里的思考深度，到模型加载与显存占用，把推理控制交到你手里。
+> From per-chat thinking depth to model loading and memory use, inference control stays in your hands.
+
+- **会话思考模式**：快速 / 平衡 / 深度三档按会话切换，仅对支持思考的模型生效，不改全局设置
+- **Ollama 加速与环境变量**：应用内检测、授权、一键优化与恢复；可读取并逐项编辑 `OLLAMA_*` 环境变量
+- **模型常驻**：手动勾选需要常驻的 Ollama 模型，减少后续对话冷加载；提供内存、模型体积与数量建议
+- **KV 缓存选档**：支持 f16 / q8_0 / q4_0 档位，修改前明确授权并自动备份，可一键恢复
+
+- **Per-chat thinking modes**: switch between Fast, Balanced and Deep for each chat — only for models that support thinking, without changing global settings.
+- **Ollama acceleration & environment variables**: detect, authorize, optimize and restore in the app; read and edit individual `OLLAMA_*` variables.
+- **Model residency**: manually keep selected Ollama models resident to reduce cold reloads, with memory, model-size and count guidance.
+- **KV cache tiers**: choose f16, q8_0 or q4_0 with explicit authorization, automatic backup and one-click restore.
+
+## ✨ 1.0 Highlights: Inference Controls & Model Residency
+
+（English text above each Chinese paragraph / 见上段双语对照。）
+
+---
+
 ## 📦 模型包与魔塔链接安装
 
 - **应用内模型包**：即装即用的本地对话 / 语音模型，与 Ollama 并存、无需切换后端；切换模型自动释放上一个模型占用的内存。见 [模型包安装指南](模型包安装指南.md)
 - **魔塔社区链接安装**：复制魔塔（ModelScope）社区里的模型链接粘贴进来，自动解析、下载、校验、装载；GGUF 与 MLX 两种格式都支持
+- **架构预检与推荐**：MLX 模型下载前探测架构支持性，标记推荐 / 本机暂不支持，并自动选中推荐档
 - **必备模型按需下载**：语义嵌入模型（bge-m3）首次启动时按需下载，带 SHA256 校验与断点续传，安装包因此保持轻巧
 
 - **In-app model packs**: ready-to-use local chat / speech models that coexist with Ollama — no backend switch needed; switching models frees the previous one's memory. See [模型包安装指南](模型包安装指南.md)（中文）.
 - **Install via ModelScope link**: paste a model link from the ModelScope community — automatic resolve, download, checksum and load; both GGUF and MLX formats supported.
+- **Architecture preflight & recommendations**: probe MLX architecture support before downloading, mark recommended / unsupported variants and select the recommended one automatically.
 - **On-demand required models**: the semantic embedding model (bge-m3) downloads on first launch with SHA256 verification and resumable downloads, keeping the installer lean.
 
 ---
@@ -256,7 +280,7 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 使用安装包（推荐普通用户）
 
-1. 下载 `VetarAI-0.7.15.dmg`，双击挂载
+1. 下载 `VetarAI-1.0.16.dmg`，双击挂载
 2. 把 **VetarAI** 拖入 **Applications** 文件夹
 3. 从启动台打开（已签名 + Apple 公证，无需额外放行）
 
@@ -264,7 +288,7 @@ Just tell the agent: "search the knowledge base for X." The agent retrieves the 
 
 ## 🚀 Install (Recommended)
 
-1. Download `VetarAI-0.7.15.dmg` and double-click to mount
+1. Download `VetarAI-1.0.16.dmg` and double-click to mount
 2. Drag **VetarAI** into **Applications**
 3. Open from Launchpad (signed + Apple-notarized, no extra bypass needed)
 

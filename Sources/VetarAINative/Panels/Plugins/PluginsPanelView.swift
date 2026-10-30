@@ -70,6 +70,8 @@ private struct PluginsPanelBody: View {
                 // ── 标题行 ──
                 HStack(spacing: 8) {
                     Image(systemName: "puzzlepiece")
+                        // 方向2 波次2：标题图标补显式 14pt（原版 :55 随渲染环境漂）
+                        .font(.system(size: 14))
                         .foregroundStyle(VTheme.textPrimary)
                     Text("插件管理")
                         .font(VTheme.Typo.sectionTitle)
@@ -108,7 +110,8 @@ private struct PluginsPanelBody: View {
             HStack(spacing: 8) {
                 TextField("https://github.com/owner/repo 或本地路径", text: $vm.repoUrl)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13, design: .monospaced))
+                    // 方向2 波次2：13 手写 mono 归 Typo.mono 令牌（原版 :94；仓库地址为数据身份段）
+                    .font(VTheme.Typo.mono)
                     .vInputStyle()
                     .onSubmit { vm.install() }   // 对齐 Enter 提交（输入法合成中由 AppKit 保证不触发）
                     .accessibilityIdentifier("pluginRepoInput")
@@ -119,7 +122,8 @@ private struct PluginsPanelBody: View {
                         } else {
                             Image(systemName: "plus")
                         }
-                        Text(vm.installing ? "安装中..." : "安装")
+                        // 方向2 波次2：「安装中...」半角三点 → 全角省略号（原版 :105）
+                        Text(vm.installing ? "安装中…" : "安装")
                     }
                 }
                 .buttonStyle(.vPrimary)
@@ -148,16 +152,12 @@ private struct PluginsPanelBody: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
             } else if vm.plugins.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "puzzlepiece")
-                        .font(.system(size: 30))
-                        .foregroundStyle(VTheme.borderStrong)
-                    Text("暂无插件。在上方输入 GitHub 仓库地址安装。")
-                        .font(VTheme.Typo.body)
-                        .foregroundStyle(VTheme.textTertiary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
+                // 方向2 波次2：手写空态收编 VEmptyStateView（原版 :134-143；图标色
+                // borderStrong 随组件内建 textDisabled 口径一并收编，不再单点改色）
+                VEmptyStateView(icon: "puzzlepiece",
+                                title: "暂无插件",
+                                message: "在上方输入 GitHub 仓库地址安装。")
+                    .padding(.vertical, 24)
             } else {
                 VStack(spacing: 12) {
                     ForEach(vm.plugins) { plugin in
@@ -172,13 +172,14 @@ private struct PluginsPanelBody: View {
 
     private var infoSection: some View {
         sectionCard {
+            // 方向2 波次2：说明卡内联 mono 12 手写三处归 Typo.mono 令牌（原版 :160/:162/:164）
             (Text("插件格式：").bold()
              + Text("仓库需包含 ")
-             + Text("manifest.json").font(.system(size: 12, design: .monospaced))
+             + Text("manifest.json").font(VTheme.Typo.mono)
              + Text("（name, version, entry_point, hooks）和入口文件（默认 ")
-             + Text("plugin.py").font(.system(size: 12, design: .monospaced))
+             + Text("plugin.py").font(VTheme.Typo.mono)
              + Text("）。Hook 函数签名：")
-             + Text("def hook_name(context: dict) -> dict").font(.system(size: 12, design: .monospaced))
+             + Text("def hook_name(context: dict) -> dict").font(VTheme.Typo.mono)
              + Text("。钩子采用手动触发（展开 Hooks → 触发）；启用/禁用开关在每个插件名称旁。"))
                 .font(VTheme.Typo.caption)
                 .foregroundStyle(VTheme.textTertiary)
@@ -213,34 +214,36 @@ private struct PluginCardView: View {
                     .foregroundStyle(plugin.isDisabled ? VTheme.textTertiary : VTheme.textPrimary)
                 if let version = plugin.version, !version.isEmpty {
                     Text("v\(version)")
-                        .font(.system(size: 12, design: .monospaced))
+                        // 方向2 波次2：12 手写 mono 归 Typo.mono 令牌（原版 :199；版本号为数据身份段）
+                        .font(VTheme.Typo.mono)
                         .foregroundStyle(VTheme.textTertiary)
                 }
-                Button { vm.toggleEnabled(plugin) } label: {
-                    Text(plugin.isDisabled ? "启用" : "禁用")
-                        .font(VTheme.Typo.caption)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
-                        .background(plugin.isDisabled ? VTheme.bgHover : VTheme.accentBg,
-                                    in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-                        .foregroundStyle(plugin.isDisabled ? VTheme.textSecondary : VTheme.accentText)
+                // 方向2 波次2：手写启停胶囊（accentBg+accentText）换原生 Toggle(.switch)——
+                // 开关类状态用开关表达（标签「启用」语义不变；ModelPacks 波次先例）；
+                // 回调 vm.toggleEnabled 不变，AX id 保留（原版 :202-213）
+                Toggle(isOn: Binding(
+                    get: { !plugin.isDisabled },
+                    set: { _ in vm.toggleEnabled(plugin) }
+                )) {
+                    Text("启用").font(VTheme.Typo.caption)
                 }
-                .buttonStyle(.plain)
+                .toggleStyle(.switch)
+                .controlSize(.small)
                 .help(plugin.isDisabled ? "点击启用此插件" : "点击禁用此插件")
                 .accessibilityIdentifier("pluginToggle.\(plugin.name)")
 
                 Spacer()
 
+                // 方向2 波次2：「卸载」vSecondary+.tint(dangerText) 是死代码（内层
+                // 覆盖，实际渲染不红）——改 vDanger 红底样式本体生效（原版 :217-227）；
+                // .controlSize(.small) 对自定义样式不响应，随改删除
                 Button { vm.uninstall(plugin.name) } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "trash")
                         Text("卸载")
                     }
-                    .font(VTheme.Typo.caption)
                 }
-                .buttonStyle(.vSecondary)
-                .controlSize(.small)
-                .tint(VTheme.dangerText)
+                .buttonStyle(.vDanger)
                 .accessibilityIdentifier("pluginUninstall.\(plugin.name)")
             }
 
@@ -252,14 +255,15 @@ private struct PluginCardView: View {
                         .font(VTheme.Typo.caption)
                         .vInputStyle()
                         .onSubmit { vm.saveNote(plugin.name) }   // Enter 保存
+                        // 方向2 波次2：补 Esc 取消（头注释 :11 承诺过未实现；
+                        // 范式对齐 ProjectPanelView:189）
+                        .onExitCommand { vm.cancelEditNote() }
                         .accessibilityIdentifier("pluginNoteInput.\(plugin.name)")
                     Button("保存") { vm.saveNote(plugin.name) }
                         .buttonStyle(.vPrimary)
-                        .controlSize(.small)
                         .accessibilityIdentifier("pluginNoteSave.\(plugin.name)")
                     Button("取消") { vm.cancelEditNote() }
                         .buttonStyle(.vSecondary)
-                        .controlSize(.small)
                         .accessibilityIdentifier("pluginNoteCancel.\(plugin.name)")
                 }
             } else {
@@ -276,7 +280,6 @@ private struct PluginCardView: View {
                         .font(VTheme.Typo.caption)
                     }
                     .buttonStyle(.vGhost)
-                    .controlSize(.small)
                     .help(plugin.note?.isEmpty == false ? "修改备注" : "添加备注")
                     .accessibilityIdentifier("pluginNoteEdit.\(plugin.name)")
                 }
@@ -317,9 +320,11 @@ private struct PluginCardView: View {
             }
         }
         .padding(12)
-        .opacity(plugin.isDisabled ? 0.7 : 1)
+        // 方向2 波次2：撤整卡 opacity(0.7)——禁用态仅名称行降色 textTertiary
+        // （本卡 :196 已有此口径），备注/状态文字保持全浓度（原版 :303）
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
+        // 方向2 波次2：卡套卡同色双边框——内卡底改 bgApp 与外层 sectionCard(bgCard) 拉开色阶（原版 :305）
+        .background(VTheme.bgApp, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
     }
 
@@ -337,7 +342,8 @@ private struct PluginCardView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(hook)
-                    .font(.system(size: 12, design: .monospaced))
+                    // 方向2 波次2：12 手写 mono 归 Typo.mono 令牌（原版 :323；钩子名为数据身份段）
+                    .font(VTheme.Typo.mono)
                     .foregroundStyle(VTheme.textPrimary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
@@ -354,14 +360,14 @@ private struct PluginCardView: View {
                     .font(VTheme.Typo.caption)
                 }
                 .buttonStyle(.vSecondary)
-                .controlSize(.small)
                 .disabled(plugin.isDisabled || vm.runningHook != nil)
                 .help(plugin.isDisabled ? "插件已禁用，无法触发" : "手动触发此钩子")
                 .accessibilityIdentifier("pluginHookTrigger.\(key)")
             }
             if let out {
                 Text(out.text)
-                    .font(.system(size: 11, design: .monospaced))
+                    // 方向2 波次2：11 手写 mono 归 Typo.mono 令牌（原版 :347；执行输出为数据段）
+                    .font(VTheme.Typo.mono)
                     .foregroundStyle(out.ok ? VTheme.okText : VTheme.dangerText)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -372,8 +378,11 @@ private struct PluginCardView: View {
             }
         }
         .padding(.vertical, 4)
+        // 方向2 波次2：hookRow 分隔线跳过末行（原版 :358 逐行都画）
         .overlay(alignment: .bottom) {
-            Rectangle().fill(VTheme.borderSubtle).frame(height: 1)
+            if hook != plugin.hooks?.last {
+                Rectangle().fill(VTheme.borderSubtle).frame(height: 1)
+            }
         }
     }
 }

@@ -187,12 +187,13 @@ public struct VDialogOverlay<Buttons: View>: View {
 
     public var body: some View {
         ZStack {
-            Color.black.opacity(0.36)
+            // 方向2 波次4b：遮罩收编 scrim 令牌（原版 :173 手写 black.opacity(0.36)）
+            VTheme.scrim
                 .ignoresSafeArea()
                 .onTapGesture { center.cancel() }
             VStack(alignment: .leading, spacing: 0) {
                 Text(spec.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(VTheme.Typo.dialogTitle)   // 方向2 波次4b：手写 15pt 收编令牌（原版 :178）
                     .foregroundStyle(VTheme.textPrimary)
                     .padding(.bottom, 12)
                 Text(spec.message)
@@ -228,6 +229,9 @@ public struct VDialogOverlay<Buttons: View>: View {
                         Button(button.title) { center.tap(button) }
                             .buttonStyle(style(for: button.role))
                             .accessibilityIdentifier("dialogButton.\(button.value)")
+                            // Enter = 确认（A 组 P1-4）：主/危险钮承载 defaultAction；
+                            // prompt 模式除外——TextField onSubmit 已承载 Enter，防双触发
+                            .keyboardShortcut((spec.promptDefault == nil && button.role != .secondary) ? .defaultAction : nil)
                     }
                 }
                 .padding(.top, 22)
@@ -236,7 +240,9 @@ public struct VDialogOverlay<Buttons: View>: View {
             .frame(width: 420)
             .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.l))
             .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.l).stroke(VTheme.borderSubtle))
-            .shadow(color: .black.opacity(0.12), radius: 15, y: 5)
+            // 方向2 波次4b：弹窗浮层阴影收编 Shadow.popover（原版 :222 手写 0.12/15/5）
+            .shadow(color: VTheme.Shadow.popover.color, radius: VTheme.Shadow.popover.radius,
+                    y: VTheme.Shadow.popover.y)
         }
         // Esc = 取消（隐藏按钮承载键盘语义）
         .background(

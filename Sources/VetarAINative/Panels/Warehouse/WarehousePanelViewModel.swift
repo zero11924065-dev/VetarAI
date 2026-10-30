@@ -80,6 +80,9 @@ public final class WarehousePanelViewModel: ObservableObject {
     @Published public private(set) var results: [WarehouseEntry] = []
     @Published public private(set) var checked: Set<String> = []
     @Published public private(set) var searching = false
+    /// 方向2 波次2：搜索失败 error 态——原版 catch 静默 results=[] 把错误伪装成
+    /// 空态；新增反馈通道（只加不改判定：results 清空口径不变），View 侧错误条带重试
+    @Published public private(set) var searchError: String?
     @Published public var searchMode: WarehouseSearchMode = .hybrid
 
     // ── 依赖与注入缝 ──
@@ -160,6 +163,8 @@ public final class WarehousePanelViewModel: ObservableObject {
             guard gen == loadGeneration else { return }   // 过期响应丢弃
             results = data
             checked = []
+            // 方向2 波次2：列全量成功后清陈旧搜索错误条（防挂屏；失败仍按 TSX 静默）
+            searchError = nil
         } catch {
             logger.warn("knowledge entries: \(SidecarError.describe(error))")
         }
@@ -170,6 +175,7 @@ public final class WarehousePanelViewModel: ObservableObject {
         Task {
             guard let client else { return }
             searching = true
+            searchError = nil   // 方向2 波次2：发起即清陈旧错误条（仿 CuMacro refresh 收口口径）
             let pid = scope == .project ? projectId : nil
             if scope == .project && pid == nil { searching = false; return }
             let q = query.trimmingCharacters(in: .whitespaces)
@@ -184,6 +190,8 @@ public final class WarehousePanelViewModel: ObservableObject {
                 checked = []
             } catch {
                 results = []      // TSX catch 分支：setResults([])
+                // 方向2 波次2：失败落 error 态上屏（原版 :168 静默吞错）
+                searchError = "搜索失败: \(SidecarError.describe(error))"
             }
             searching = false
         }

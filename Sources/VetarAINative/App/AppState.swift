@@ -286,7 +286,8 @@ public final class AppState: ObservableObject {
             let t0 = Date()
             var firstTokenAt: Date? = nil
             let stream = kernel.chatConnector.chatStream(model: model, messages: messages,
-                                                         tools: nil, images: nil)
+                                                         tools: nil, images: nil,
+                                                         thinkingMode: nil)
             var content = ""
             var thinking = ""
             var tokIn = 0
@@ -558,6 +559,17 @@ public final class AppState: ObservableObject {
         let kvRegistry = kvSinkRegistry
         Task {
             await NativeVModelChatRouter.shared.setKVEventSink(kvRegistry.handler())
+        }
+        // 方案 B·批三裁定（ROADMAP §十二 12.1）：vmodel 引擎装载默认窗口读包内
+        // meta/inference.json 声明值（context_limit）——供应缝 = 检索中心同步
+        // 冷路径（v1 直给 / v2 只查密钥缓存绝不触网；闭包内懒触达 retrievalCenter，
+        // 不装载 vmodel 引擎零副作用）；旧包/坏 JSON/缺字段/一切失败 → nil →
+        // 路由层回落旧档映射（0.7 前旧包零回归）。
+        let kernel = rt.kernel
+        Task {
+            await NativeVModelChatRouter.shared.setDeclaredContextLimitProvider { slug in
+                kernel.retrievalCenter.inferenceDefaults(forModelSlug: slug)?.contextLimit
+            }
         }
         logger.info("AppState 就绪：module=\(selectedModule.rawValue) panel=\(selectedPanel.key) settings=\(showSettings ? settingsSection.rawValue : "off") version=\(AppVersion.current)")
     }

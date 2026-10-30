@@ -61,7 +61,7 @@ public final class SettingsViewModel: ObservableObject {
     @Published public var draftProxyHTTPPort = ""
     @Published public var draftCompactKeepRecent = ""
 
-    // ── 模型特长草稿（独立提交：保存模型特长按钮）──
+    // ── 模型特长草稿（方向2 波次3：分区保存按钮撤除，改由「保存全部」统一提交）──
     @Published public private(set) var strengthsDraft: [String: String] = [:]
 
     // ── CU 能力探测（nil = 未探测）──
@@ -178,7 +178,10 @@ public final class SettingsViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 保存全部 / 分区保存（草稿键 → storage → 补丁）
+    // MARK: - 保存全部（草稿键 → storage → 补丁）
+    // 方向2 波次3：分区保存按钮×4（上下文/导出/多 Agent/模型特长）已撤除——
+    // 同页保存模型收敛为两路：Toggle/勾选类即存（saveBool 等单键通道），
+    // 数值/文本草稿统一走本区 saveAll。校验/钳制口径不变（ConfigValidator 同）。
 
     /// 数值草稿键 → storage 键映射。
     private var numericDraftKeys: [String] {
@@ -222,52 +225,24 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     /// 「保存全部」= tsx save(cfg)：数值草稿落 storage 后整包回写。
+    /// 方向2 波次3：模型特长草稿（原「保存模型特长」按钮守护）并入本通道——
+    /// 草稿与已存值有差异时才携带 model_strengths 键，不为从未配置特长的
+    /// 用户凭空落键；单条 ≤100 字截断仍在输入层（setStrength），校验层
+    /// （ConfigValidator）对整包同口径兜底。
     public func saveAll() async {
         message = nil
         errorMessage = nil
-        guard let cfg = config else { return }
+        guard config != nil else { return }
         guard applyNumericDrafts(keys: numericDraftKeys) else { return }
         guard let merged = config else { return }
-        _ = cfg  // cfg 是应用草稿前的快照；patch 用 merged（含草稿）
-        await save(patch: merged.asPatch(), resyncKeys: numericDraftKeys)
-    }
-
-    /// 「保存上下文管理」：compact_archive_dir / allow_auto_compact / compact_keep_recent。
-    public func saveContextSection() async {
-        message = nil
-        errorMessage = nil
-        let keys = [SidecarConfig.Key.compactArchiveDir,
-                    SidecarConfig.Key.allowAutoCompact,
-                    SidecarConfig.Key.compactKeepRecent]
-        guard applyNumericDrafts(keys: [SidecarConfig.Key.compactKeepRecent]) else { return }
-        guard let cfg = config else { return }
-        await save(patch: cfg.patch(keys), resyncKeys: keys)
-    }
-
-    /// 「保存导出与附件设置」：default_export_dir / vision_parse_attachments。
-    public func saveExportSection() async {
-        message = nil
-        errorMessage = nil
-        let keys = [SidecarConfig.Key.defaultExportDir, SidecarConfig.Key.visionParseAttachments]
-        guard let cfg = config else { return }
-        await save(patch: cfg.patch(keys), resyncKeys: keys)
-    }
-
-    /// 「保存多 Agent 设置」：auto_create_sub_agents（tsx 提交 `!== false` 归一值）。
-    public func saveMultiAgentSection() async {
-        message = nil
-        errorMessage = nil
-        let value = config?.autoCreateSubAgents ?? true
-        await save(patch: [SidecarConfig.Key.autoCreateSubAgents: .bool(value)],
-                   resyncKeys: [SidecarConfig.Key.autoCreateSubAgents])
-    }
-
-    /// 「保存模型特长」：提交整个 strengthsDraft（单条 ≤100 字由输入层截断 + 校验层兜底）。
-    public func saveStrengths() async {
-        message = nil
-        errorMessage = nil
-        await save(patch: [SidecarConfig.Key.modelStrengths: .object(strengthsDraft.mapValues { .string($0) })],
-                   resyncKeys: [SidecarConfig.Key.modelStrengths])
+        var patch = merged.asPatch()
+        var resyncKeys = numericDraftKeys
+        if strengthsDraft != merged.modelStrengths {
+            patch[SidecarConfig.Key.modelStrengths] =
+                .object(strengthsDraft.mapValues { .string($0) })
+            resyncKeys.append(SidecarConfig.Key.modelStrengths)
+        }
+        await save(patch: patch, resyncKeys: resyncKeys)
     }
 
     // MARK: - 逐项操作（对标 tsx 同名函数）

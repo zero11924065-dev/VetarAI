@@ -41,6 +41,8 @@ public struct WorkflowCanvasView: View {
     @State private var pan: CGSize = .zero
     @GestureState private var pinchScale: CGFloat = 1
     @GestureState private var dragTranslation: CGSize = .zero
+    // 方向2 波次2：画布持焦态（键盘缩放 Cmd+=/-/0 仅持焦时生效，见 body onKeyPress）
+    @FocusState private var canvasFocused: Bool
 
     public init(definition: WorkflowDefinition,
                 selectedNodeId: String? = nil,
@@ -100,6 +102,26 @@ public struct WorkflowCanvasView: View {
         .gesture(panGesture)
         .gesture(zoomGesture)
         .simultaneousGesture(tapGesture(positions: positions))
+        // 方向2 波次2：补上头注释宣称的「双击复位」（原版 :109-124 只有 count:1 点选）。
+        // 方案选 simultaneousGesture 双通道独立识别，而非 count:2 先注册的抢占式——
+        // 单击点选节点是核心职责，抢占式会让每次点选延迟一个双击判定时窗；
+        // 本方案单击零延迟，双击落在节点上时先（幂等）点选再复位，
+        // 复位只动视图变换（zoom/pan），不清选中态
+        .simultaneousGesture(doubleTapResetGesture)
+        // 方向2 波次2：键盘缩放 Cmd+=/+/−/0 —— .focusable 纳入焦点链 +
+        // 仅画布持焦时响应（guard .command + 焦点态由 onKeyPress 隐式保证），
+        // 输入框持焦/其他面板时绝不抢全局快捷键
+        .focusable()
+        .focused($canvasFocused)
+        .onKeyPress(phases: .down) { press in
+            guard press.modifiers.contains(.command) else { return .ignored }
+            switch press.key {
+            case KeyEquivalent("="), KeyEquivalent("+"): zoomIn(); return .handled
+            case KeyEquivalent("-"):                     zoomOut(); return .handled
+            case KeyEquivalent("0"):                     resetView(); return .handled
+            default:                                     return .ignored
+            }
+        }
         .overlay(alignment: .bottomTrailing) { zoomControls }
         // DBG-160：容器不挂 id（内有 workflowCanvasZoomControls 叶子 id）
     }
@@ -133,32 +155,35 @@ public struct WorkflowCanvasView: View {
             }
     }
 
+    /// 双击复位（方向2 波次2 补；等同右下角复位按钮，只动 zoom/pan 不动选中）。
+    private var doubleTapResetGesture: some Gesture {
+        SpatialTapGesture(count: 2)
+            .onEnded { _ in resetView() }
+    }
+
+    /// 缩放步进（+/- 按钮与键盘快捷键共用；钳 0.4x~2.5x 与捏合收口一致）。
+    private func zoomIn() { zoom = min(2.5, zoom + 0.2) }
+    private func zoomOut() { zoom = max(0.4, zoom - 0.2) }
+
     private func resetView() {
-        withAnimation(.easeOut(duration: 0.15)) {
+        // 方向2 波次2：硬编码 .easeOut(duration: 0.15) 归令牌——
+        // Motion.zoomSnap（画布缩放松手吸附档，100ms easeOut，语义最近）
+        withAnimation(VTheme.Motion.zoomSnap) {
             zoom = 1
             pan = .zero
         }
     }
 
     private var zoomControls: some View {
-        HStack(spacing: 4) {
-            Button { zoom = min(2.5, zoom + 0.2) } label: {
-                Image(systemName: "plus.magnifyingglass")
-            }
-            Button { zoom = max(0.4, zoom - 0.2) } label: {
-                Image(systemName: "minus.magnifyingglass")
-            }
-            Button { resetView() } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-            }
-        }
-        .font(.system(size: 11))
-        .buttonStyle(.vSecondary)
-        .controlSize(.mini)
-        .padding(6)
-        .background(VTheme.bgCard.opacity(0.85), in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
-        .padding(8)
-        .accessibilityIdentifier("workflowCanvasZoomControls")
+        // 方向2 波次2：收编共用 ZoomControl 组件（UI/Components/ZoomControl.swift）——
+        // 外观统一走磨砂 .regularMaterial + 百分比显示（Studio 版语言），原 :160-182
+        // vSecondary 图标钮组 + bgCard.opacity(0.85) 底退役。保留语义：
+        //   · 缩放域 0.4–2.5（与捏合/键盘收口一致）、步进 0.2；
+        //   · 百分比钮 = 复位（zoom/pan 双清零，resetView 原语义）；
+        //   · AX label（放大/缩小/复位缩放）由组件内建承担，键盘缩放 Cmd+=/-/0 不动。
+        ZoomControl(zoom: $zoom, range: 0.4...2.5, onResetZoom: resetView)
+            .padding(8)
+            .accessibilityIdentifier("workflowCanvasZoomControls")
     }
 
     // MARK: - 绘制：连线（对齐 SVG path 口径：近垂直直线，否则三次贝塞尔 + 箭头 + when 标签）
@@ -187,7 +212,8 @@ public struct WorkflowCanvasView: View {
                           ? CGPoint(x: x1, y: y1) : CGPoint(x: x2, y: midY))
 
             if let when = e.when, !when.isEmpty {
-                ctx.draw(Text(when).font(.system(size: 10)).foregroundStyle(VTheme.textSecondary),
+                // 方向2 波次2：字号下限收编 10 → Typo.micro(11)（任何文字 ≥11pt 地板）
+                ctx.draw(Text(when).font(VTheme.Typo.micro).foregroundStyle(VTheme.textSecondary),
                          at: CGPoint(x: (x1 + x2) / 2 + 8, y: midY))
             }
         }
@@ -239,7 +265,8 @@ public struct WorkflowCanvasView: View {
             if let model = n.props["model"]?.string, !model.isEmpty {
                 subtitle += " · \(model.split(separator: ":").first.map(String.init) ?? model)"
             }
-            ctx.draw(Text(subtitle).font(.system(size: 10.5))
+            // 方向2 波次2：副标题字号下限收编 10.5 → Typo.micro(11)（原版 :225-227）
+            ctx.draw(Text(subtitle).font(VTheme.Typo.micro)
                         .foregroundStyle(VTheme.textTertiary),
                      at: CGPoint(x: p.x + 14, y: p.y + 33), anchor: .leading)
         }

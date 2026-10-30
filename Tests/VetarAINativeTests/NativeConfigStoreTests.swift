@@ -52,14 +52,14 @@ final class NativeConfigStoreTests: XCTestCase {
     // MARK: - DEFAULT_CONFIG（store.py L41-186）
 
     func testDefaultConfigKeyCountAndOrder() {
-        // 55 键（0.7.5 W13 末位新增 error_analysis_timeout_s）；前 54 键顺序即
-        // Python dict 插入序（写盘字节可比的前提），新增键排最末不影响既有键序
-        XCTAssertEqual(NativeConfigStore.defaultKeys.count, 55)
+        // 56 键（原生新增 error_analysis_timeout_s / model_residency）；前 54 键顺序即
+        // Python dict 插入序（写盘字节可比的前提），新增键追加末尾不影响既有键序
+        XCTAssertEqual(NativeConfigStore.defaultKeys.count, 56)
         XCTAssertEqual(Set(NativeConfigStore.defaultKeys), Set(NativeConfigStore.defaultConfig.keys))
         XCTAssertEqual(NativeConfigStore.defaultKeys.prefix(5),
                        ["ollama_base_url", "proxy_http_port", "proxy_socks_port", "data_root", "default_model"])
         XCTAssertEqual(NativeConfigStore.defaultKeys.suffix(3),
-                       ["confirm_model_pack_download", "model_pack_boot_timeout_s", "error_analysis_timeout_s"])
+                       ["model_pack_boot_timeout_s", "error_analysis_timeout_s", "model_residency"])
     }
 
     func testDefaultValues() {
@@ -74,13 +74,14 @@ final class NativeConfigStoreTests: XCTestCase {
         XCTAssertEqual(d["app_control_confirm"],
                        .array([.string("workflow_run"), .string("roundtable_create")]))
         XCTAssertEqual(d["auth_grants"], .array([]))
+        XCTAssertEqual(d["model_residency"], .array([]))
     }
 
     // MARK: - get_config（store.py L461-488）
 
     func testGetConfigInitializesFileWithDefaults() throws {
         let cfg = try store.getConfig()
-        XCTAssertEqual(cfg.count, 55)   // 0.7.5 W13：+error_analysis_timeout_s
+        XCTAssertEqual(cfg.count, 56)   // A1：+model_residency
         // 首次运行写盘（missing 补写）
         XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.appendingPathComponent("config.json").path))
         // 二次读取不漂移（幂等）

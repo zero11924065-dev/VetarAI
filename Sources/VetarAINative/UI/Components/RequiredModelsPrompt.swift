@@ -62,7 +62,9 @@ public struct RequiredModelsPromptView: View {
 
     public var body: some View {
         ZStack {
-            Color.black.opacity(0.30)
+            // 方向2 波次4b：遮罩收编 scrim 令牌（原版 :48 手写 black.opacity(0.30)，
+            // 恰与 scrim 浅色值同档）
+            VTheme.scrim
                 .ignoresSafeArea()
                 .accessibilityIdentifier("requiredModels.overlay")
             // 遮罩点击不收起（下载决策需显式选择；「以后再说」/「后台继续」兜底）
@@ -80,14 +82,16 @@ public struct RequiredModelsPromptView: View {
             .frame(width: 520)
             .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.l))
             .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.l).stroke(VTheme.borderSubtle))
-            .shadow(color: .black.opacity(0.18), radius: 24, y: 8)
+            // 方向2 波次4b：弹窗浮层阴影收编 Shadow.popover（原版 :66 手写 0.18/24/8）
+            .shadow(color: VTheme.Shadow.popover.color, radius: VTheme.Shadow.popover.radius,
+                    y: VTheme.Shadow.popover.y)
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("下载必备模型")
-                .font(.system(size: 15, weight: .semibold))
+                .font(VTheme.Typo.dialogTitle)   // 方向2 波次4b：手写 15pt 收编令牌（原版 :73）
                 .foregroundStyle(VTheme.textPrimary)
             let totalBytes = pending.reduce(Int64(0)) { $0 + $1.sizeBytes }
             Text(pending.isEmpty
@@ -192,7 +196,7 @@ public struct RequiredModelRow: View {
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(VTheme.accent)
                                 .frame(width: geo.size.width * CGFloat(progress), height: 6)
-                                .animation(.easeOut(duration: 0.3), value: progress)
+                                .animation(VTheme.Motion.progress, value: progress)   // 方向2 波次4b：手写 easeOut(0.3) 收编 Motion 令牌（原版 :178）
                         }
                     }
                     .frame(height: 6)
@@ -229,7 +233,7 @@ public struct RequiredModelRow: View {
         case .ready:
             badge("已就绪", fg: VTheme.okText, bg: VTheme.okBg)
         case .failed:
-            badge("失败", fg: VTheme.dangerText, bg: VTheme.warnBg)
+            badge("失败", fg: VTheme.dangerText, bg: VTheme.dangerBg)   // A 组 P1-6：红字配红底（同族配对），原 warnBg 琥珀底错配
         }
     }
 

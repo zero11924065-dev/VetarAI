@@ -139,7 +139,7 @@ final class RoundtableCreateTimeoutFallbackTests: XCTestCase {
         vm.create()
         let ok = await waitUntil { !vm.creating && vm.error != nil }
         XCTAssertTrue(ok)
-        XCTAssertEqual(vm.error, "创建失败: 请求超时")
+        XCTAssertEqual(vm.error, "创建失败：请求超时")   // 方向2 波次2：随 VM 错误串全角冒号同步
         XCTAssertNil(vm.selectedId, "未落库不得进详情")
     }
 
@@ -156,7 +156,7 @@ final class RoundtableCreateTimeoutFallbackTests: XCTestCase {
         vm.create()
         let ok = await waitUntil { !vm.creating && vm.error != nil }
         XCTAssertTrue(ok)
-        XCTAssertEqual(vm.error, "创建失败: 请求超时")
+        XCTAssertEqual(vm.error, "创建失败：请求超时")   // 方向2 波次2：随 VM 错误串全角冒号同步
         XCTAssertNil(vm.selectedId)
     }
 
@@ -168,7 +168,7 @@ final class RoundtableCreateTimeoutFallbackTests: XCTestCase {
         vm.create()
         let ok = await waitUntil { !vm.creating && vm.error != nil }
         XCTAssertTrue(ok)
-        XCTAssertEqual(vm.error, "创建失败: HTTP 400：至少选择 2 个参与者")
+        XCTAssertEqual(vm.error, "创建失败：HTTP 400：至少选择 2 个参与者")   // 方向2 波次2：随 VM 错误串全角冒号同步
         XCTAssertNil(vm.selectedId)
     }
 
@@ -181,7 +181,7 @@ final class RoundtableCreateTimeoutFallbackTests: XCTestCase {
         vm.create()
         let ok = await waitUntil { !vm.creating && vm.error != nil }
         XCTAssertTrue(ok)
-        XCTAssertEqual(vm.error, "创建失败: 请求超时")
+        XCTAssertEqual(vm.error, "创建失败：请求超时")   // 方向2 波次2：随 VM 错误串全角冒号同步
         XCTAssertNil(vm.selectedId)
     }
 

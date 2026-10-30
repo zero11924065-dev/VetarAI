@@ -173,14 +173,15 @@ private struct WorkflowAccordionSection: View {
                         Text("工作流")
                             .font(VTheme.Typo.body)
                         Spacer()
-                        // 数量徽标（对齐智能中心徽标样式：accentBg/accentText，fontSize 11）
+                        // 数量徽标（方向2 波次2：计数不是待处理队列，不配强调色——
+                        // accentBg/accentText 蓝胶囊 → 中性 bgActive 底 + textSecondary 字）
                         if !vm.workflows.isEmpty {
                             Text("\(vm.workflows.count)")
                                 .font(.system(size: 11))
-                                .foregroundStyle(VTheme.accentText)
+                                .foregroundStyle(VTheme.textSecondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(VTheme.accentBg, in: Capsule())
+                                .background(VTheme.bgActive, in: Capsule())
                         }
                     }
                     .padding(.leading, 12)
@@ -201,20 +202,21 @@ private struct WorkflowAccordionSection: View {
                 }
                 .buttonStyle(.plain)
                 .help("新建")
+                // 方向2 波次2：图标钮补 AX 朗读文案
+                .accessibilityLabel("新建工作流")
                 .accessibilityIdentifier("workflowCreate")
 
-                Button { isOpen.toggle() } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11))
-                        .foregroundStyle(VTheme.textTertiary)
-                        .rotationEffect(.degrees(isOpen ? 180 : 0))
-                        .padding(.trailing, 12)
-                        .frame(height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                // 0.7.5 W13：同上，chevron 叶子加后缀
-                .accessibilityIdentifier("workflowAccordionHeader.chevron")
+                // 方向2 波次2：chevron 去 Button 化改纯 Image 入行——原独立 Button 与整行
+                // toggle 完全等价，AX 树同动作双控件；折叠/展开仍由左侧整行 toggle 承担，
+                // 视觉位置与 id 不变
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11))
+                    .foregroundStyle(VTheme.textTertiary)
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
+                    .padding(.trailing, 12)
+                    .frame(height: 36)
+                    // 0.7.5 W13：同上，chevron 叶子加后缀
+                    .accessibilityIdentifier("workflowAccordionHeader.chevron")
             }
             .foregroundStyle(isOpen || hovering ? VTheme.textPrimary : VTheme.textSecondary)
             .background(isOpen || hovering ? VTheme.bgHover : Color.clear)
@@ -261,25 +263,45 @@ private struct WorkflowAccordionSection: View {
     private func workflowRow(_ wf: WorkflowRecord) -> some View {
         let sel = vm.selectedId == wf.id
         return Button { center.selectWorkflow(wf) } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(wf.name + (wf.builtIn ? "（内置）" : ""))
-                    .font(VTheme.Typo.body.weight(.medium))
-                    .foregroundStyle(sel ? VTheme.textPrimary : VTheme.textSecondary)
-                if !wf.description.isEmpty {
-                    Text(wf.description)
-                        .font(VTheme.Typo.micro)
-                        .foregroundStyle(VTheme.textTertiary)
+            // 方向2 波次2：补行 hover（bgHover 圆角底，选中优先不叠底；Motion.micro 微动画）
+            SidebarRowHover(selected: sel) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(wf.name + (wf.builtIn ? "（内置）" : ""))
+                        .font(VTheme.Typo.body.weight(.medium))
+                        // 方向2 波次2：选中字色统一 accentText
+                        .foregroundStyle(sel ? VTheme.accentText : VTheme.textSecondary)
+                    if !wf.description.isEmpty {
+                        Text(wf.description)
+                            .font(VTheme.Typo.micro)
+                            .foregroundStyle(VTheme.textTertiary)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(sel ? VTheme.bgSelected : Color.clear,
-                        in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("workflowRow.\(wf.id)")
+    }
+}
+
+/// 方向2 波次2：二级行 hover 底壳（bgHover + Radius.s 圆角，选中态优先不叠 hover 底，
+/// 微动画 Motion.micro）——行是 Button+func 形态无法自持 @State，hover 状态下沉到此壳
+private struct SidebarRowHover<Content: View>: View {
+    let selected: Bool
+    @ViewBuilder let content: () -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        content()
+            .background(selected ? VTheme.bgSelected
+                                 : (hovering ? VTheme.bgHover : Color.clear),
+                        in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(VTheme.Motion.micro, value: hovering)
     }
 }
 
@@ -303,14 +325,15 @@ private struct CuMacroAccordionSection: View {
                         Text("CU 宏")
                             .font(VTheme.Typo.body)
                         Spacer()
-                        // 数量徽标（列表未拉回时不显示）
+                        // 数量徽标（列表未拉回时不显示；方向2 波次2：计数不是待处理队列，
+                        // 不配强调色——accentBg/accentText 蓝胶囊 → 中性 bgActive 底 + textSecondary 字）
                         if let count = vm.macros?.count, count > 0 {
                             Text("\(count)")
                                 .font(.system(size: 11))
-                                .foregroundStyle(VTheme.accentText)
+                                .foregroundStyle(VTheme.textSecondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(VTheme.accentBg, in: Capsule())
+                                .background(VTheme.bgActive, in: Capsule())
                         }
                     }
                     .padding(.leading, 12)
@@ -331,20 +354,21 @@ private struct CuMacroAccordionSection: View {
                 }
                 .buttonStyle(.plain)
                 .help("录制新宏")
+                // 方向2 波次2：图标钮补 AX 朗读文案
+                .accessibilityLabel("新建宏")
                 .accessibilityIdentifier("cuMacroCreate")
 
-                Button { isOpen.toggle() } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11))
-                        .foregroundStyle(VTheme.textTertiary)
-                        .rotationEffect(.degrees(isOpen ? 180 : 0))
-                        .padding(.trailing, 12)
-                        .frame(height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                // 0.7.5 W13：同上，chevron 叶子加后缀
-                .accessibilityIdentifier("cuMacroAccordionHeader.chevron")
+                // 方向2 波次2：chevron 去 Button 化改纯 Image 入行——原独立 Button 与整行
+                // toggle 完全等价，AX 树同动作双控件；折叠/展开仍由左侧整行 toggle 承担，
+                // 视觉位置与 id 不变
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11))
+                    .foregroundStyle(VTheme.textTertiary)
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
+                    .padding(.trailing, 12)
+                    .frame(height: 36)
+                    // 0.7.5 W13：同上，chevron 叶子加后缀
+                    .accessibilityIdentifier("cuMacroAccordionHeader.chevron")
             }
             .foregroundStyle(isOpen || hovering ? VTheme.textPrimary : VTheme.textSecondary)
             .background(isOpen || hovering ? VTheme.bgHover : Color.clear)
@@ -397,19 +421,23 @@ private struct CuMacroAccordionSection: View {
     private func macroRow(_ macro: CuMacroSummary) -> some View {
         let sel = vm.selectedId == macro.id
         return Button { center.selectMacro(macro) } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(macro.name)
-                    .font(VTheme.Typo.body)
-                    .foregroundStyle(sel ? VTheme.textPrimary : VTheme.textSecondary)
-                Text("\(macro.created_at) · \(macro.steps) 步")
-                    .font(VTheme.Typo.micro)
-                    .foregroundStyle(VTheme.textTertiary)
+            // 方向2 波次2：补行 hover（bgHover 圆角底，选中优先不叠底；Motion.micro 微动画）
+            SidebarRowHover(selected: sel) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(macro.name)
+                        .font(VTheme.Typo.body)
+                        // 方向2 波次2：选中字色统一 accentText
+                        .foregroundStyle(sel ? VTheme.accentText : VTheme.textSecondary)
+                    // 方向2 波次2：created_at 原为 ISO 直出——复用 formatChatTime 格式化
+                    // （对齐 AccountPanelView 同类修复），中点分隔保持
+                    Text("\(formatChatTime(macro.created_at)) · \(macro.steps) 步")
+                        .font(VTheme.Typo.micro)
+                        .foregroundStyle(VTheme.textTertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(sel ? VTheme.bgSelected : Color.clear,
-                        in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

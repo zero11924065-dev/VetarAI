@@ -60,6 +60,12 @@ public enum NativeChatStreamEvent: Sendable, Equatable {
     /// 原生 Ollama tool_calls 列表（{"id":..,"function":{"name":..,"arguments":str|dict}}），
     /// 归一化（arguments 字符串 → dict、补 id）由 loop 层做（loop.py L1347-1360）。
     case toolCalls([[String: JSONValue]])
+    /// C2（联调批二 Part C）：.vmodel answer 内嵌 `<tool_call>` 段的结构化卡片
+    /// （闭合 + JSON 合法 + 非空 name；仅 NativeVModelChatRouter 解析产出——
+    /// 其他后端永不出现）。呈现专用：UI 卡片（工具名+参数）+ 随消息落盘
+    /// tool_cards 列；⛔ 不进工具执行回路（执行回路由 .toolCalls 承接 MLX
+    /// 结构化 toolCall，两路互不相干——卡片不是待执行调用）。
+    case toolCallCard(name: String, arguments: JSONValue)
     /// done 计数：prompt_eval_count / eval_count（缺省 0）。
     case done(promptEvalCount: Int, evalCount: Int)
     /// 流中途超时兜底（connector 层不裸抛异常的约定出口）。
@@ -67,14 +73,42 @@ public enum NativeChatStreamEvent: Sendable, Equatable {
 }
 
 // ════════════════════════════════════════════════════════════
+// MARK: - 思考深度档位（会话级临时覆盖，参数分层「会话级 > 模型默认 > 引擎默认」）
+// ════════════════════════════════════════════════════════════
+
+/// 思考深度三档「快速/平衡/深度」的会话级临时覆盖。平衡 = 不传（nil）回落引擎默认。
+/// 值域映射：fast→low、deep→high（Ollama think 与 llama.cpp reasoning_effort 同值域）。
+public enum NativeThinkingMode: String, Sendable, CaseIterable {
+    case fast = "fast"
+    case deep = "deep"
+
+    /// Ollama 原生 /api/chat 的 think 字段值（fast→"low"、deep→"high"）。
+    public var ollamaThink: String {
+        switch self {
+        case .fast: return "low"
+        case .deep: return "high"
+        }
+    }
+    /// llama.cpp / OpenAI 兼容端的 reasoning_effort 值（同值域）。
+    public var reasoningEffort: String {
+        switch self {
+        case .fast: return "low"
+        case .deep: return "high"
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════
 // MARK: - 连接器协议（测试注入假 connector 的接缝）
 // ════════════════════════════════════════════════════════════
 
 public protocol NativeChatConnector: Sendable {
-    /// chat_stream(model, messages, tools=..., images=...)。
+    /// chat_stream(model, messages, tools=..., images=..., thinkingMode=...)。
     /// images=nil 等价 Python 缺省不传 kwarg（loop 只在有图时才传）。
+    /// thinkingMode=nil 等价不覆盖思考深度（回落引擎/模型默认）——向后兼容。
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error>
     /// chat(model, messages) 非流式（报错分析模型用，loop._analyze_error）。
     func chat(model: String, messages: [[String: JSONValue]]) async throws -> String
@@ -146,13 +180,15 @@ public final class NativeOllamaChatConnector: NativeChatConnector {
     // MARK: chat_stream（connector.py L248-352）
 
     public func chatStream(model: String, messages: [[String: JSONValue]],
-                           tools: [JSONValue]?, images: [String]?)
+                           tools: [JSONValue]?, images: [String]?,
+                           thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     try await self.streamMain(model: model, messages: messages,
                                               tools: tools, images: images,
+                                              thinkingMode: thinkingMode,
                                               continuation: continuation)
                 } catch is CancellationError {
                     // 客户端断开（Python asyncio.CancelledError）：静默结束流
@@ -173,16 +209,25 @@ public final class NativeOllamaChatConnector: NativeChatConnector {
 
     private func streamMain(model: String, messages: [[String: JSONValue]],
                             tools: [JSONValue]?, images: [String]?,
+                            thinkingMode: NativeThinkingMode?,
                             continuation: AsyncThrowingStream<NativeChatStreamEvent, Error>.Continuation) async throws {
         var payload: [String: JSONValue] = [
             "model": .string(model),
             "messages": .array(messages.map { .object($0) }),
             "stream": .bool(true),
         ]
+        // A1：仅勾选模型带请求级 keep_alive=-1；未勾选不新增该键。
+        payload = NativeModelResidency.applyingOllamaKeepAlive(
+            payload, model: model, config: config())
         // A2/A4：model_options 注入（空 dict 绝不注入）
         for (k, v) in NativeWorkflowHTTPConnector.modelOptions(model: model, backend: "ollama",
                                                                config: config()) {
             payload[k] = v
+        }
+        // 思考深度档位（会话级临时覆盖）：选档才注入 think 顶层字段（Ollama 原生
+        // /api/chat 的思考档位；平衡/未选 = 不传，回落模型默认）。
+        if let thinkingMode {
+            payload["think"] = .string(thinkingMode.ollamaThink)
         }
         if let tools, !tools.isEmpty {
             payload["tools"] = .array(tools)
@@ -335,6 +380,8 @@ public final class NativeOllamaChatConnector: NativeChatConnector {
             "messages": .array(messages.map { .object($0) }),
             "stream": .bool(false),
         ]
+        payload = NativeModelResidency.applyingOllamaKeepAlive(
+            payload, model: model, config: config())
         for (k, v) in NativeWorkflowHTTPConnector.modelOptions(model: model, backend: "ollama",
                                                                config: config()) {
             payload[k] = v
@@ -374,6 +421,8 @@ public final class NativeOllamaChatConnector: NativeChatConnector {
             "messages": .array(messages.map { .object($0) }),
             "stream": .bool(false),
         ]
+        payload = NativeModelResidency.applyingOllamaKeepAlive(
+            payload, model: model, config: config())
         for (k, v) in NativeWorkflowHTTPConnector.modelOptions(model: model, backend: "ollama",
                                                                config: config()) {
             payload[k] = v

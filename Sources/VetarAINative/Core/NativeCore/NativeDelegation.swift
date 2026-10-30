@@ -822,7 +822,8 @@ extension NativeDelegationEngine {
     func runOnePass(model: String, msgs: [[String: JSONValue]], sandboxRoot: String,
                     maxRounds: Int, images: [String]?,
                     cancelCheck: @escaping @Sendable () -> Bool,
-                    projectId: String, taskId: String) async throws -> NativeDelegationPassOutcome {
+                    projectId: String, taskId: String,
+                    connectorOverride: (any NativeChatConnector)? = nil) async throws -> NativeDelegationPassOutcome {
         var fullText = ""
         var steps: [[String: JSONValue]] = []
         var peMax = 0   // TS-116：本轮最大 prompt_eval_count
@@ -840,7 +841,7 @@ extension NativeDelegationEngine {
             model: model, messages: msgs,
             // 0.4.9 F2：子 Agent 既不可再委派（防递归），也不可有联网安装权
             toolsSpecList: NativeAgentLoop.toolsSpec(withDelegation: false, withInstall: false),
-            sandboxRoot: sandboxRoot, connector: connector, authorizer: authorizer,
+            sandboxRoot: sandboxRoot, connector: connectorOverride ?? connector, authorizer: authorizer,
             maxRounds: maxRounds, contextLimit: 0, firstRoundImages: images,
             cancelCheck: cancelCheck,
             toolContext: toolContext, toolExecutor: toolExecutor,
@@ -925,12 +926,14 @@ extension NativeDelegationEngine {
                             maxRounds: Int, timeout: Double,
                             cancelCheck: @escaping @Sendable () -> Bool,
                             images: [String]?,
-                            projectId: String, taskId: String) async throws -> NativeDelegationPassOutcome {
+                            projectId: String, taskId: String,
+                            connectorOverride: (any NativeChatConnector)? = nil) async throws -> NativeDelegationPassOutcome {
         guard timeout > 0 else {
             return try await runOnePass(model: model, msgs: msgs, sandboxRoot: sandboxRoot,
                                         maxRounds: maxRounds, images: images,
                                         cancelCheck: cancelCheck,
-                                        projectId: projectId, taskId: taskId)
+                                        projectId: projectId, taskId: taskId,
+                                        connectorOverride: connectorOverride)
         }
         enum Race: Sendable {
             case value(NativeDelegationPassOutcome)
@@ -942,7 +945,8 @@ extension NativeDelegationEngine {
                                                  sandboxRoot: sandboxRoot,
                                                  maxRounds: maxRounds, images: images,
                                                  cancelCheck: cancelCheck,
-                                                 projectId: projectId, taskId: taskId))
+                                                 projectId: projectId, taskId: taskId,
+                                                 connectorOverride: connectorOverride))
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
@@ -1222,17 +1226,25 @@ extension NativeDelegationEngine {
                                                 title: "委派任务 \(String(taskId.prefix(8)))")
             try db.updateAgentTask(projectId: projectId, taskId: taskId, sessionId: childSid)
 
-            let netSwitch = config()["network_switch"]?.string ?? "auto"
-            // TS-110 M4：子 Agent 同样注入知识/记忆/技能；加载失败一律降级为空，不阻塞委派
-            let kText = knowledgeTextProvider?(projectId) ?? ""
-            let (mText, proh) = memoryInjectionProvider?(projectId) ?? ("", [])
-            let skText = skillsListTextProvider?() ?? ""
-            let sysPrompt = NativeAgentLoop.buildSystemPrompt(
-                agentName: targetName, agentRole: targetAgent.role,
-                sandboxRoot: req.sandboxRoot, networkSwitch: netSwitch,
-                systemPrompt: targetAgent.systemPrompt,
-                knowledgeText: kText, memoryText: mText, prohibitions: proh,
-                skillsListText: skText)
+            // 联调批六：.vmodel 不叠加宿主全局 Agent system；包内身份由
+            // Router 注入。独立交卷契约保留，不借本批改写其角色或正文协议。
+            let hostPrompt: String
+            if NativeVModelChat.isVModelName(model) {
+                hostPrompt = ""
+            } else {
+                let netSwitch = config()["network_switch"]?.string ?? "auto"
+                // TS-110 M4：子 Agent 同样注入知识/记忆/技能；加载失败一律降级为空，不阻塞委派
+                let kText = knowledgeTextProvider?(projectId) ?? ""
+                let (mText, proh) = memoryInjectionProvider?(projectId) ?? ("", [])
+                let skText = skillsListTextProvider?() ?? ""
+                hostPrompt = NativeAgentLoop.buildSystemPrompt(
+                    agentName: targetName, agentRole: targetAgent.role,
+                    sandboxRoot: req.sandboxRoot, networkSwitch: netSwitch,
+                    systemPrompt: targetAgent.systemPrompt,
+                    knowledgeText: kText, memoryText: mText, prohibitions: proh,
+                    skillsListText: skText)
+            }
+            let sysPrompt = hostPrompt
                 + (simple ? "" : NativeDelegation.reportContractPrompt)
 
             // 0.1.71（TS-118）：简单模式任务消息只留任务书本身；
@@ -1258,17 +1270,22 @@ extension NativeDelegationEngine {
             var peFinal = 0   // TS-116：交卷报告 prompt_eval_count（追问路径可能不赋值）
             var finalText = ""
 
+            // 每个委派使用自己的原始资料副本；共享连接器与其他 Agent 不受影响。
+            let taskConnector = (connector as? NativeVModelRoutingConnector)?
+                .withAgentProfile(targetAgent.systemPrompt) ?? connector
             do {
-                // 第一轮：任务书 → 子 Agent 执行 → 交卷
-                var msgs: [[String: JSONValue]] = [
-                    ["role": .string("system"), "content": .string(sysPrompt)],
-                    ["role": .string("user"), "content": .string(userMsg)],
-                ]
+                // 第一轮：任务书 → 子 Agent 执行 → 交卷；.vmodel simple 模式
+                // 不制造空 system，包内身份由 Router 在引擎边界补齐。
+                var msgs: [[String: JSONValue]] = []
+                if !sysPrompt.isEmpty {
+                    msgs.append(["role": .string("system"), "content": .string(sysPrompt)])
+                }
+                msgs.append(["role": .string("user"), "content": .string(userMsg)])
                 let pass1 = try await runPassWithTimeout(
                     model: model, msgs: msgs, sandboxRoot: req.sandboxRoot,
                     maxRounds: req.maxRounds, timeout: activityTimeout,
                     cancelCheck: cancelCheck, images: req.images,
-                    projectId: projectId, taskId: taskId)
+                    projectId: projectId, taskId: taskId, connectorOverride: taskConnector)
                 if pass1.promptEvalMax > 0 { peFinal = pass1.promptEvalMax }
                 // TS-114（3.25）检查点2：第一轮结束后、交卷解析前
                 if Self.isDelegationCancelled(taskId) {
@@ -1329,7 +1346,7 @@ extension NativeDelegationEngine {
                         model: model, msgs: msgs, sandboxRoot: req.sandboxRoot,
                         maxRounds: req.maxRounds, timeout: activityTimeout,
                         cancelCheck: cancelCheck, images: nil,
-                        projectId: projectId, taskId: taskId)
+                        projectId: projectId, taskId: taskId, connectorOverride: taskConnector)
                     if pass2.promptEvalMax > 0 { peFinal = pass2.promptEvalMax }
                     // TS-114（3.25）检查点4：追问结束后
                     if Self.isDelegationCancelled(taskId) {

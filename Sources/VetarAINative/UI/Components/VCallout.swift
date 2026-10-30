@@ -61,17 +61,22 @@ public enum VCalloutKind {
     }
 }
 
-public struct VCallout: View {
+public struct VCallout<Accessory: View>: View {
     public let kind: VCalloutKind
     public let text: String
+    /// 尾随附件槽（方向2 波次2 新增：按钮/链接等动作件——原 CuMacroPanel:73/:107、
+    /// ProjectPanel:65 三处因 VCallout 无按钮槽而逐字段手写复制外观，收编回库）
+    public let accessory: Accessory?
 
-    public init(_ kind: VCalloutKind, _ text: String) {
+    public init(_ kind: VCalloutKind, _ text: String,
+                @ViewBuilder accessory: () -> Accessory) {
         self.kind = kind
         self.text = text
+        self.accessory = accessory()
     }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: VTheme.Space.s2) {
             Image(systemName: kind.icon)
                 .font(.system(size: 12))
                 .padding(.top, 1)
@@ -79,11 +84,23 @@ public struct VCallout: View {
                 .font(VTheme.Typo.body)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+            if let accessory {
+                accessory
+            }
         }
         .foregroundStyle(kind.foreground)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, VTheme.Space.s3)
+        .padding(.vertical, VTheme.Space.s2)
         .background(kind.background, in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
         .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s).stroke(kind.border))
+    }
+}
+
+public extension VCallout where Accessory == EmptyView {
+    /// 无附件槽的原口径初始化（既有调用点不受影响）
+    init(_ kind: VCalloutKind, _ text: String) {
+        self.kind = kind
+        self.text = text
+        self.accessory = nil
     }
 }

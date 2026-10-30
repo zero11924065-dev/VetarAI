@@ -86,7 +86,8 @@ final class DelegScriptConn: NativeChatConnector, @unchecked Sendable {
     }
 
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         let i = min(calls, scripts.count - 1)
         calls += 1
@@ -116,7 +117,8 @@ final class DelegRoundConn: NativeChatConnector, @unchecked Sendable {
     init(_ rounds: [Round]) { self.rounds = rounds }
 
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         let i = min(calls, rounds.count - 1)
         calls += 1

@@ -42,6 +42,7 @@
 //
 
 import Foundation
+import MLXLLM
 
 // ════════════════════════════════════════════════════════════
 // MARK: - 输入解析（三形态 → org/name）
@@ -503,6 +504,12 @@ public final class NativeModelScopeInstaller: @unchecked Sendable {
     public var resolveURLForFile: @Sendable (ModelScopeRepoRef, String) -> String = {
         ModelScopeAPI.resolveURL($0, path: $1)
     }
+    /// 架构支持表查询缝（生产 = LLMTypeRegistry.shared.contains——mlx-swift-lm
+    /// 本版可实例化的 model_type 全集；测试注入固定表，钉桩不随依赖升降漂移，
+    /// NativeMPMLXDriver.supportsModelType 同款口径）。用于 MLX 仓安装前预检。
+    public var supportsModelType: @Sendable (String) async -> Bool = {
+        await LLMTypeRegistry.shared.contains($0)
+    }
 
     public init(store: NativeModelPackStore) {
         self.store = store
@@ -544,6 +551,48 @@ public final class NativeModelScopeInstaller: @unchecked Sendable {
         return data
     }
 
+    /// A0 分流产品化（2026-10-27）：解析期 MLX 支持性探测（不抛错版 preflight）。
+    /// 返回：true=架构支持（可推荐）；false=架构不支持（应引导改选 GGUF）；
+    /// nil=无法判定（config.json 不在文件清单/拉取失败/解析失败/无 model_type——
+    /// 安装期 preflight 兜底，与既有静默放行口径一致）。
+    public func probeMLXSupport(ref: ModelScopeRepoRef,
+                                files: [ModelScopeRepoFile]) async -> Bool? {
+        guard let modelType = await fetchMLXModelType(ref: ref, files: files) else { return nil }
+        return await supportsModelType(modelType)
+    }
+
+    /// probe/preflight 公共段（A0 从 preflightMLXSupport 抽出）：拉 config.json
+    ///（几 KB）解析非空 model_type；config 不在清单/拉取失败/解析失败/无
+    /// model_type → nil（无法判定，交由安装期 preflight/装载侧兜底）。
+    private func fetchMLXModelType(ref: ModelScopeRepoRef,
+                                   files: [ModelScopeRepoFile]) async -> String? {
+        guard files.contains(where: { $0.path == "config.json" }) else { return nil }
+        let url = resolveURLForFile(ref, "config.json")
+        guard let data = try? await fetchRaw(url),
+              case .object(let cfg)? = NativeJSONWriter.loads(data),
+              let modelType = cfg["model_type"]?.string, !modelType.isEmpty else {
+            return nil
+        }
+        return modelType
+    }
+
+    /// MLX 仓安装前架构预检：下载 config.json（几 KB）读 model_type，查架构支持表。
+    /// 不支持 → 抛 unsupportedFormat 提前中止（诚实提示改选 GGUF），避免下完
+    /// 15GB 大权重后装载侧才报「该模型暂不支持」。config.json 缺失/坏/无 model_type
+    /// 时静默放行（交由下载后的 ModelScopeMLXValidator 报更准确的 incompleteMLX）。
+    /// A0 分流产品化（2026-10-27）：改为消费解析期同款探测 probeMLXSupport——
+    /// 仅探测「不支持」（false）才拦截，true/nil 均放行，错误文案逐字不变。
+    private func preflightMLXSupport(ref: ModelScopeRepoRef,
+                                    files: [ModelScopeRepoFile]) async throws {
+        guard await probeMLXSupport(ref: ref, files: files) == false else { return }
+        // 拦截路径再取一次 model_type 仅供错误文案（probe=false ⇒ 首次必解析成功，
+        // 竞态拉取失败以「未知」兜底保句式）；放行路径零额外请求。
+        let modelType = await fetchMLXModelType(ref: ref, files: files) ?? "未知"
+        throw NativeModelScopeError.unsupportedFormat(
+            "该模型暂不支持：架构「\(modelType)」暂不在本机 MLX 推理支持列表内，"
+            + "请改选 GGUF 版本（如有）或改用其他模型。")
+    }
+
     /// 下载选定档位 → 落模型包目录 + manifest.json + 登记 registry。
     /// 取消抛 CancellationError（.partial 保留续传）；失败/取消均不留「无 manifest
     /// 无登记」的半成品完成文件——W12（L7）：catch 里把已落位完成文件挪入
@@ -581,6 +630,12 @@ public final class NativeModelScopeInstaller: @unchecked Sendable {
             + " · \(variant.title)（\(pid)，\(variant.files.count) 个文件 / \(variant.totalBytes) 字节）")
         let t0 = Date()
         do {
+            // 1.0.8 性能批（7b12444）：MLX 仓下载大权重前预检架构支持（下载 config.json 读
+            // model_type 查支持表；不支持提前中止，避免白下 15GB 却装载不了）。
+            // GGUF 仓无此需求（llama.cpp 覆盖架构面广，装载侧门禁兜底）。
+            if variant.format == .mlx {
+                try await preflightMLXSupport(ref: snapshot.ref, files: variant.files)
+            }
             // Range 续传/低速换源/SHA256/原子落位全部复用 W2 下载器
             try await downloader.downloadFiles(specs, destDir: destDir, partDir: partDir)
             // 0.7.7 W3：MLX 仓落盘完整性校验（config.json + 权重 + 分片索引；

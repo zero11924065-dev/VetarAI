@@ -33,8 +33,10 @@ public struct UpdatesFeedbackPanelView: View {
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // 方向2 波次2：设置壳页标题统一 Typo.pageTitle（16pt semibold；
+                // 原版 :20-22 用展示层宋体 title 降档收编）
                 Text("更新与反馈")
-                    .font(VTheme.Typo.title2)
+                    .font(VTheme.Typo.pageTitle)
                     .foregroundStyle(VTheme.textPrimary)
 
                 // ── 检查更新卡（C 组）──
@@ -56,28 +58,22 @@ public struct UpdatesFeedbackPanelView: View {
                             .accessibilityIdentifier("updates.currentVersion")
                     }
                     HStack(spacing: 12) {
+                        // 方向2 波次2：手写 120×32 accent 软底按钮收编 .vSecondary
+                        // （原版 :43-57；次级动作层级，高度/圆角/hover 全由样式库承担）
                         Button {
                             appState.update.checkNowManually(
                                 isOnline: appState.network.isOnline)
                         } label: {
                             Text("检查更新")
-                                .font(.system(size: 13, weight: .medium))
-                                .frame(width: 120, height: 32)
-                                .background(VTheme.accentBgSoft,
-                                            in: RoundedRectangle(cornerRadius: VTheme.Radius.m2))
-                                .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m2)
-                                    .stroke(VTheme.accentBorder, lineWidth: 1))
-                                .foregroundStyle(VTheme.accentText)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.vSecondary)
                         .accessibilityIdentifier("updates.checkButton")
 
                         // 离线直拒错误条（其余结果——有更新/已是最新——全由
                         // Sparkle 原生弹窗呈现，本卡不重复文案）
+                        // 方向2 波次2：内联 dangerText 一行升 VCallout(.error)（原版 :61-66）
                         if let error = appState.update.lastManualError {
-                            Text(error)
-                                .font(VTheme.Typo.caption)
-                                .foregroundStyle(VTheme.dangerText)
+                            VCallout(.error, error)
                                 .accessibilityIdentifier("updates.manualError")
                         }
                     }

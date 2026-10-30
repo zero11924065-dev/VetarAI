@@ -82,13 +82,13 @@ final class VetarOOXMLReaderTests: XCTestCase {
         let doc = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>\(rpr(cjkFont, 44, true))<w:t>民事起诉状</w:t></w:r></w:p>
-        <w:p><w:pPr><w:jc w:val="both"/><w:ind w:firstLine="561"/></w:pPr><w:r>\(rpr(cjkFont, 28, false))<w:t>原告：王永斌，男，汉族，住重庆市渝北区。</w:t></w:r></w:p>
-        <w:p><w:r><w:t>诉讼请求如下表所列：</w:t></w:r></w:p>
-        <w:tbl><w:tr><w:tc><w:p><w:r><w:t>请求事项</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>金额</w:t></w:r></w:p></w:tc></w:tr>
-        <w:tr><w:tc><w:p><w:r><w:t>返还借款本金</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>239900元</w:t></w:r></w:p></w:tc></w:tr>
-        <w:tr><w:tc><w:p><w:r><w:t>支付资金占用损失</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>5972元</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
-        <w:p><w:r><w:t>事实与理由：被告拖欠设备意向金，经多次催告拒不返还。</w:t></w:r></w:p>
+        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>\(rpr(cjkFont, 44, true))<w:t>示例文档</w:t></w:r></w:p>
+        <w:p><w:pPr><w:jc w:val="both"/><w:ind w:firstLine="561"/></w:pPr><w:r>\(rpr(cjkFont, 28, false))<w:t>正文：这是用于解析测试的虚构内容。</w:t></w:r></w:p>
+        <w:p><w:r><w:t>表格内容如下：</w:t></w:r></w:p>
+        <w:tbl><w:tr><w:tc><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>金额</w:t></w:r></w:p></w:tc></w:tr>
+        <w:tr><w:tc><w:p><w:r><w:t>示例项目一</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>100</w:t></w:r></w:p></w:tc></w:tr>
+        <w:tr><w:tc><w:p><w:r><w:t>示例项目二</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>200</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+        <w:p><w:r><w:t>结尾：以上均为虚构测试数据。</w:t></w:r></w:p>
         <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1803" w:bottom="1440" w:left="1803" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
         </w:body></w:document>
         """
@@ -108,7 +108,7 @@ final class VetarOOXMLReaderTests: XCTestCase {
               case .paragraph = doc.blocks[4] else {
             return XCTFail("blocks 流序不符: \(doc.blocks)")
         }
-        XCTAssertEqual(p0.text, "民事起诉状")
+        XCTAssertEqual(p0.text, "示例文档")
         XCTAssertEqual(p0.alignmentValue, 1)            // center
         XCTAssertEqual(p0.firstRun?.combinedFontName, "Times New Roman/仿宋")
         XCTAssertEqual(p0.firstRun?.sizePt, 22.0)
@@ -117,7 +117,7 @@ final class VetarOOXMLReaderTests: XCTestCase {
         XCTAssertEqual(p1.firstLineIndentCm ?? 0, 0.99, accuracy: 0.01)
         XCTAssertEqual(p1.firstRun?.sizePt, 14.0)
         XCTAssertEqual(tbl.rows.count, 3)
-        XCTAssertEqual(tbl.rows[1], ["返还借款本金", "239900元"])
+        XCTAssertEqual(tbl.rows[1], ["示例项目一", "100"])
         XCTAssertEqual(doc.tableCount, 1)
         XCTAssertEqual(doc.paragraphs.count, 4)
         // 页面：twips → cm

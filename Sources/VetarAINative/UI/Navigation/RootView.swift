@@ -169,10 +169,15 @@ public struct RootView: View {
                                                     .stroke(VTheme.borderSubtle, lineWidth: 1)
                                                     .frame(width: 26, height: 46)
                                             }
-                                            .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                                            // 方向2 波次2：手写阴影收档 Shadow.card 令牌
+                                            .shadow(color: VTheme.Shadow.card.color,
+                                                    radius: VTheme.Shadow.card.radius,
+                                                    y: VTheme.Shadow.card.y)
                                     }
                                     .buttonStyle(.plain)
                                     .help(sidebarPinned ? "收起侧栏" : "展开侧栏")
+                                    // 方向2 波次2：把手补 AX 朗读文案（随收起态切换）
+                                    .accessibilityLabel(sidebarPinned ? "收起侧栏" : "展开侧栏")
                                     .accessibilityIdentifier("sidebarEdgeHandle")
                                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                                     .zIndex(900)
@@ -537,7 +542,8 @@ private struct SettingsGearButton: View {
 }
 
 /// rail 按钮通用外观（ModuleNav.tsx:61-78：42×46 圆角 10、图标 18 + 10 号微标签、
-/// 选中 = 浅底 + 强调字 + 左侧 3px 指示条）
+/// 选中 = 浅底 + 强调字 + 左侧 3px 指示条；方向2 波次2：微标签收档 11pt micro、
+/// 选中底 bgSelected、指示条改 2pt）
 private struct RailButtonBody: View {
     let icon: String
     let title: String
@@ -551,17 +557,20 @@ private struct RailButtonBody: View {
                 Image(systemName: icon)
                     .font(.system(size: 17))
                 Text(title)
-                    .font(.system(size: 9.5, weight: isActive ? .semibold : .regular))
+                    // 方向2 波次2：9.5pt 低于 11pt 字号地板，收档 Typo.micro
+                    .font(VTheme.Typo.micro.weight(isActive ? .semibold : .regular))
             }
             .frame(width: 44, height: 46)
-            .background(isActive ? VTheme.accentBg : (hovering ? VTheme.bgHover : Color.clear),
+            // 方向2 波次2：rail 选中态统一 bgSelected 底 + accentText 字（原 accentBg 底）
+            .background(isActive ? VTheme.bgSelected : (hovering ? VTheme.bgHover : Color.clear),
                         in: RoundedRectangle(cornerRadius: 10))
             .foregroundStyle(isActive ? VTheme.accentText : VTheme.textSecondary)
             .overlay(alignment: .leading) {
                 if isActive {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(VTheme.accent)
-                        .frame(width: 3)
+                        // 方向2 波次2：左缘指示条 3pt→2pt（accent 填充不动）
+                        .frame(width: 2)
                         .padding(.vertical, 12)
                         .offset(x: -7)
                 }

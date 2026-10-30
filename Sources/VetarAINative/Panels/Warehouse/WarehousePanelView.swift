@@ -126,17 +126,14 @@ private struct WarehousePanelBody: View {
     private var header: some View {
         HStack {
             HStack(spacing: 7) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(VTheme.accentBgSoft)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(VTheme.accentBorder))
-                        .frame(width: 22, height: 22)
-                    Image(systemName: "cylinder")   // TSX: database 图标
-                        .font(.system(size: 11))
-                        .foregroundStyle(VTheme.accentText)
-                }
+                // 方向2 波次2：头部图标去 accentBgSoft+accentBorder 描边方块，
+                // 裸图标 16pt textTertiary（原版 :112-120）
+                Image(systemName: "cylinder")   // TSX: database 图标
+                    .font(.system(size: 16))
+                    .foregroundStyle(VTheme.textTertiary)
                 Text("知识仓库")
-                    .font(.system(size: 13, weight: .semibold))
+                    // 方向2 波次2：13 semibold 手写归 Typo 档（原版 :122）
+                    .font(VTheme.Typo.body.weight(.semibold))
                     .foregroundStyle(VTheme.textPrimary)
             }
             Spacer()
@@ -150,6 +147,8 @@ private struct WarehousePanelBody: View {
                 }
                 .buttonStyle(.plain)
                 .help("收起面板")
+                // 方向2 波次4：AX 补账
+                .accessibilityLabel("收起面板")
                 .accessibilityIdentifier("warehouse.close")
             }
         }
@@ -175,13 +174,14 @@ private struct WarehousePanelBody: View {
                         .fontWeight(selected ? .medium : .regular)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
+                        // 方向2 波次2：分段控件圆角字面量 8 归 Radius.m2；选中态静止阴影
+                        // 删除（阴影只给浮起物，原版 :162-167）
                         .background(selected ? VTheme.bgCard : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8)
+                                    in: RoundedRectangle(cornerRadius: VTheme.Radius.m2))
+                        .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m2)
                             .stroke(selected ? VTheme.borderDefault : Color.clear))
                         .foregroundStyle(disabled ? VTheme.textDisabled
                                          : (selected ? VTheme.textPrimary : VTheme.textSecondary))
-                        .shadow(color: selected ? .black.opacity(0.06) : .clear, radius: 1, y: 1)
                 }
                 .buttonStyle(.plain)
                 .disabled(disabled)
@@ -201,11 +201,8 @@ private struct WarehousePanelBody: View {
         HStack(spacing: 6) {
             TextField("搜索（关键词/换述，留空=列出全部）", text: $vm.query)
                 .textFieldStyle(.plain)
-                .font(VTheme.Typo.body)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
-                .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
+                // 方向2 波次2：手写输入框样式收编 vInputStyle（含焦点态边框；原版 :186-191）
+                .vInputStyle()
                 .onSubmit { vm.doSearch() }   // Enter 触发（对齐 TSX onKeyDown）
                 .accessibilityIdentifier("warehouse.query")
             Button {
@@ -226,6 +223,7 @@ private struct WarehousePanelBody: View {
             .buttonStyle(.plain)
             .disabled(vm.searching)
             .help("搜索")
+            .accessibilityLabel("搜索")
             .accessibilityIdentifier("warehouse.search")
         }
         .padding(.horizontal, 14)
@@ -246,8 +244,10 @@ private struct WarehousePanelBody: View {
                         .font(VTheme.Typo.micro)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 3)
-                        .background(selected ? VTheme.accentBg : VTheme.bgCard, in: Capsule())
-                        .overlay(Capsule()
+                        // 方向2 波次2：检索模式 Capsule 胶囊方角化 Radius.s（方向2 方系口径，原版 :232-234）
+                        .background(selected ? VTheme.accentBg : VTheme.bgCard,
+                                    in: RoundedRectangle(cornerRadius: VTheme.Radius.s))
+                        .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.s)
                             .stroke(selected ? VTheme.accentBorder : VTheme.borderSubtle))
                         .foregroundStyle(selected ? VTheme.accentText : VTheme.textTertiary)
                 }
@@ -266,7 +266,25 @@ private struct WarehousePanelBody: View {
     private var resultList: some View {
         ScrollView {
             LazyVStack(spacing: 6) {
-                if vm.results.isEmpty {
+                // 方向2 波次2：搜索失败 error 条上屏带重试（原版失败静默 results=[]
+                // 伪装成空态；仿 Projects 错误条口径，VM 侧只加反馈通道不改判定）
+                if let searchError = vm.searchError {
+                    VCallout(.error, searchError) {
+                        Button {
+                            vm.doSearch()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise")
+                                Text("重试")
+                            }
+                        }
+                        .buttonStyle(.vSecondary)
+                        .accessibilityIdentifier("warehouse.searchRetry")
+                    }
+                    .accessibilityIdentifier("warehouse.searchError")
+                }
+                // 有错误条时不再叠空态文案（错误≠无结果）
+                if vm.results.isEmpty && vm.searchError == nil {
                     Text(vm.emptyHint)
                         .font(VTheme.Typo.caption)
                         .foregroundStyle(VTheme.textTertiary)
@@ -282,29 +300,34 @@ private struct WarehousePanelBody: View {
                         .toggleStyle(.checkbox)
                         .tint(VTheme.accent)
                         .labelsHidden()
+                        .accessibilityLabel("选择该条目")
                         .padding(.top, 2)
                         .accessibilityIdentifier("warehouse.check.\(e.id)")
 
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
                                 Text(e.title)
-                                    .font(.system(size: 12, weight: .semibold))
+                                    // 方向2 波次2：12 semibold 手写归 Typo 档（原版 :274）
+                                    .font(VTheme.Typo.caption.weight(.semibold))
                                     .foregroundStyle(VTheme.textPrimary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 if let score = e.score {
                                     Text("相关 \(WarehousePanelViewModel.scoreText(score))")
-                                        .font(.system(size: 10))
+                                        // 方向2 波次2：10pt 归 Typo.micro（≥11pt 地板，原版 :279）
+                                        .font(VTheme.Typo.micro)
                                         .foregroundStyle(VTheme.textTertiary)
                                 }
                             }
                             if let category = e.category, !category.isEmpty {
                                 Text("分类：\(category)")
-                                    .font(.system(size: 10))
+                                    // 方向2 波次2：10pt 归 Typo.micro（原版 :285）
+                                    .font(VTheme.Typo.micro)
                                     .foregroundStyle(VTheme.textTertiary)
                             }
                             if let created = e.created_at, !created.isEmpty {
                                 Text(created)
-                                    .font(.system(size: 10))
+                                    // 方向2 波次2：10pt 归 Typo.micro（原版 :290）
+                                    .font(VTheme.Typo.micro)
                                     .foregroundStyle(VTheme.textTertiary)
                             }
                         }
@@ -312,8 +335,13 @@ private struct WarehousePanelBody: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 9)
-                    .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
-                    .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderSubtle))
+                    // 方向2 波次2：结果行 bgCard 落 bgCard 零色阶——行去底留分隔线
+                    // （跳过末行，原版 :298-299）
+                    .overlay(alignment: .bottom) {
+                        if e.id != vm.results.last?.id {
+                            Rectangle().fill(VTheme.borderSubtle).frame(height: 1)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 14)
@@ -326,22 +354,20 @@ private struct WarehousePanelBody: View {
 
     private var footer: some View {
         VStack(spacing: 6) {
+            // 方向2 波次2：手写 ink 主钮收编 vPrimary——禁用降透明由样式库 0.45
+            // 单通道承担，外层 opacity(0.7) 死代码删除（原版 :312-324）
             Button {
                 vm.inject()
             } label: {
                 Text("发送 \(vm.checked.count) 条到会话")
-                    .font(VTheme.Typo.body)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(VTheme.ink, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
-                    .foregroundStyle(VTheme.onInk)
-                    .opacity(vm.checked.isEmpty ? 0.7 : 1)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.vPrimary)
             .disabled(vm.checked.isEmpty)
             .accessibilityIdentifier("warehouse.inject")
             Text("注入的内容会作为你的消息进入对话（仅你勾选的条目）。知识内容默认不自动进入上下文。")
-                .font(.system(size: 10))
+                // 方向2 波次2：10pt 归 Typo.micro（≥11pt 地板，原版 :327）
+                .font(VTheme.Typo.micro)
                 .foregroundStyle(VTheme.textTertiary)
                 .lineSpacing(2)
         }

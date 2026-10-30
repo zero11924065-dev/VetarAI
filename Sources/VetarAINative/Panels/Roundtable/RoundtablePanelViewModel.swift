@@ -37,6 +37,7 @@
 
 import Foundation
 import Combine
+import SwiftUI   // 方向2 波次2：头像色板 adaptive 双态（Color 返回类型）
 
 // MARK: - 纯函数助手（独立成枚举便于单测；规则逐字对齐 TSX 同名函数/常量）
 
@@ -62,18 +63,36 @@ public enum RoundtableFormat {
         return Int(h % 6)
     }
 
-    /// 六色板（bg, fg）hex 值，供 View 取 Color(hex:)——面板专属色板，不走 VTheme。
+    /// 六色板浅色 hex（bg, fg）——面板专属色板；保留 `avatarPalette` 名作钉桩锚点
+    ///（RoundtablePluginsPanelTests 断言 count/[0].bg/[5].fg）。
+    /// 方向2 波次2：原 [3] 紫系 0xEEE4FB/0x6B3FA0 换相——方向2 纸墨暖族，紫与
+    /// noteUser 紫撞色且偏冷，改暖米/赭石系 (0xF5E4D4, 0x8C4A1F)（报回待业主验收）。
     public static let avatarPalette: [(bg: UInt32, fg: UInt32)] = [
         (0xDCF1FE, 0x075985),
         (0xDEF3E4, 0x1F7A3D),
         (0xFCEEDC, 0xA05A00),
-        (0xEEE4FB, 0x6B3FA0),
+        (0xF5E4D4, 0x8C4A1F),
         (0xFCE0E6, 0xB03052),
         (0xDFF2F6, 0x0F7490),
     ]
 
-    public static func avatarColors(_ agentId: String) -> (bg: UInt32, fg: UInt32) {
-        avatarPalette[avatarColorIndex(agentId)]
+    /// 六色板深色映射（方向2 波次2 新增：同族降亮度，仿 VTheme wfNode/noteUser
+    /// 族深色档口径 ⚠️VERIFY 待真机过目）。
+    public static let avatarPaletteDark: [(bg: UInt32, fg: UInt32)] = [
+        (0x1F3345, 0x7FB3DC),   // 蓝
+        (0x22382B, 0x7CCB9B),   // 绿（对齐 okText dark）
+        (0x3A2E1F, 0xD9A45C),   // 橙
+        (0x382619, 0xD89668),   // 暖米/赭石（原紫系换相族）
+        (0x3C222C, 0xE48AA4),   // 玫红
+        (0x1F363E, 0x6FBECC),   // 青
+    ]
+
+    /// 头像稳定配色（方向2 波次2：原返回固定浅色 hex 由 View 包 Color(hex:)，深色
+    /// 下浅底刺眼——改 adaptive 双态 Color 直出，哈希选色算法不动）。
+    public static func avatarColors(_ agentId: String) -> (bg: Color, fg: Color) {
+        let i = avatarColorIndex(agentId)
+        return (VTheme.adaptive(light: avatarPalette[i].bg, dark: avatarPaletteDark[i].bg),
+                VTheme.adaptive(light: avatarPalette[i].fg, dark: avatarPaletteDark[i].fg))
     }
 
     /// 列表议题截断：前 40 字 + "…"（对齐 RoundtablePanel.tsx slice(0, 40)）。
@@ -105,7 +124,9 @@ public final class RoundtablePanelViewModel: ObservableObject {
     @Published public private(set) var agents: [SidecarAgent] = []
     // W8（0.7.4）：列表/详情里出现 status=="running" 的讨论即上报 busy 闸
     // （waiting_user/confirm_end 非「在跑」不计）；stop() 撤报
-    @Published public private(set) var roundtables: [Roundtable] = [] {
+    // 方向2 波次2：改 optional——nil = 尚未加载（列表三态「加载中」档，
+    // 修假空闪烁：原初始 [] 首轮拉取前渲染「暂无圆桌讨论」空态闪一下）
+    @Published public private(set) var roundtables: [Roundtable]? {
         didSet { reportBusyToGuard() }
     }
     // 创建表单
@@ -210,7 +231,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
             .sink { [weak self] _ in
                 guard let self, self.started else { return }
                 self.agents = []
-                self.roundtables = []
+                self.roundtables = nil   // 方向2 波次2：optional 化——重新加载中（非空态）
                 self.exitDetail()
                 Task { await self.fetchAgents() }
                 Task { await self.fetchRoundtables() }
@@ -247,7 +268,8 @@ public final class RoundtablePanelViewModel: ObservableObject {
     /// W8（0.7.4）：busy 上报——仅 status=="running" 的讨论计「在跑」
     /// （waiting_user/confirm_end 是等用户，不弹防误关确认）。
     private func reportBusyToGuard() {
-        let active = roundtables.contains { $0.status == "running" }
+        // 方向2 波次2：roundtables optional 化，nil（未加载）按空集计
+        let active = (roundtables ?? []).contains { $0.status == "running" }
             || (detail.map { $0.status == "running" } ?? false)
         appState.busyGuard.report(.roundtable, isBusy: active)
     }
@@ -396,7 +418,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
                     self.resetCreateForm()
                     self.select(recovered.id)
                 } else {
-                    self.error = "创建失败: \(SidecarError.describe(error))"
+                    self.error = "创建失败：\(SidecarError.describe(error))"   // 方向2 波次2：半角冒号→全角（原版 :382）
                 }
             }
             self.creating = false
@@ -417,7 +439,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
                                        client: any RoundtablePanelClient,
                                        projectId: String) async -> Roundtable? {
         guard case SidecarError.timeout = error else { return nil }
-        let before = roundtables
+        let before = roundtables ?? []   // 方向2 波次2：optional 化取空集兜底
         do {
             let after = try await client.listRoundtables(projectId: projectId, limit: 20)
             roundtables = after
@@ -517,7 +539,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
                 try await client.continueRoundtable(projectId: pid, rtId: rtId)
                 await self.fetchDetail()
             } catch {
-                self.error = "继续失败: \(SidecarError.describe(error))"
+                self.error = "继续失败：\(SidecarError.describe(error))"   // 方向2 波次2：半角冒号→全角（原版 :503）
             }
             self.detailBusy = false
         }
@@ -535,7 +557,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
                 try await client.finishRoundtable(projectId: pid, rtId: rtId)
                 await self.fetchDetail()
             } catch {
-                self.error = "结束失败: \(SidecarError.describe(error))"
+                self.error = "结束失败：\(SidecarError.describe(error))"   // 方向2 波次2：半角冒号→全角（原版 :521）
             }
             self.detailBusy = false
         }
@@ -554,7 +576,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
                 self.flashNotice("已请求停止，将在当前发言完成后中止", ttlNanos: self.noticeTTL6sNanos)
                 await self.fetchDetail()
             } catch {
-                self.error = "停止失败: \(SidecarError.describe(error))"
+                self.error = "停止失败：\(SidecarError.describe(error))"   // 方向2 波次2：半角冒号→全角（原版 :540）
             }
             self.stopping = false
         }
@@ -574,7 +596,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
                 self.flashNotice("已保存：\(result.path ?? result.name ?? "未知路径")",
                                  ttlNanos: self.noticeTTL8sNanos)
             } catch {
-                self.error = "保存失败: \(SidecarError.describe(error))"
+                self.error = "保存失败：\(SidecarError.describe(error))"   // 方向2 波次2：半角冒号→全角（原版 :560）
             }
             self.detailBusy = false
         }
@@ -601,7 +623,7 @@ public final class RoundtablePanelViewModel: ObservableObject {
                 self.exitDetail()
                 await self.fetchRoundtables()
             } catch {
-                self.error = "删除失败: \(SidecarError.describe(error))"
+                self.error = "删除失败：\(SidecarError.describe(error))"   // 方向2 波次2：半角冒号→全角（原版 :587）
                 self.detailBusy = false
             }
         }

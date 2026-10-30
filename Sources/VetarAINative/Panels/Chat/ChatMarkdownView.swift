@@ -23,7 +23,9 @@
 //    · 未闭合 ``` 代码围栏 → 整段按纯文本 pre-wrap（避免半截 markdown 抖动）
 //    · 闭合后分块渲染：标题/段落/代码块/列表/表格/引用/分隔线
 //    · 行内样式经 AttributedString(markdown:)（粗体/斜体/行内代码/链接）
-//    · 代码块：等宽字体 + 底色 + 横向滚动 + 轻量语法着色（关键词/字符串/注释/数字）
+//    · 代码块：等宽字体 + 底色 + 横向滚动 + 轻量语法着色（波次4b 减为三色：
+//      关键词藏蓝 accentText / 字符串+数字 noteDiscuss 青 / 注释 textTertiary 灰，
+//      其余 base 墨黑——原五色「红=字符串」与「红=错误」同屏歧义已根治）
 //      —— 纪律口径「代码块高亮从简但要有」
 //    · 长串不断行撑破气泡的根治（B3）：溢出换行交给 Text 自然折行；
 //      代码块与表格各自有独立横向滚动层
@@ -158,7 +160,8 @@ func inlineText(_ s: String) -> Text {
     return Text(s)
 }
 
-// MARK: - 代码块轻量高亮（从简但要有：注释/字符串/数字/关键词四类）
+// MARK: - 代码块轻量高亮（从简但要有；方向2 波次4b 五色减三色：注释灰/关键词藏蓝/
+// 字符串+数字青，plain 兜底墨黑）
 
 private enum CodeHighlighter {
     static let keywords: Set<String> = [
@@ -183,7 +186,8 @@ private enum CodeHighlighter {
         // 整行注释
         let t = line.trimmingCharacters(in: .whitespaces)
         if t.hasPrefix("//") || t.hasPrefix("#") || t.hasPrefix("--") {
-            return Text(line).foregroundColor(VTheme.ok)
+            // 方向2 波次4b（A 组 P2-14）：高亮减色——注释 ok 绿 → textTertiary 灰
+            return Text(line).foregroundColor(VTheme.textTertiary)
         }
         var result = Text("")
         var token = ""
@@ -193,7 +197,9 @@ private enum CodeHighlighter {
             if keywords.contains(token) {
                 result = result + Text(token).foregroundColor(VTheme.accentText)
             } else if Double(token) != nil {
-                result = result + Text(token).foregroundColor(VTheme.warnText)
+                // 方向2 波次4b（A 组 P2-14）：数字 warnText 琥珀 → noteDiscuss 青
+                //（与字符串合并一档，避开 warn/danger 语义色撞车）
+                result = result + Text(token).foregroundColor(VTheme.noteDiscuss)
             } else {
                 result = result + Text(token).foregroundColor(base)
             }
@@ -211,7 +217,9 @@ private enum CodeHighlighter {
                     j = line.index(after: j)
                     if cc == c { break }
                 }
-                result = result + Text(str).foregroundColor(VTheme.dangerText)
+                // 方向2 波次4b（A 组 P2-14）：字符串 dangerText 红 → noteDiscuss 青——
+                // 「红=字符串」与同屏「红=错误」歧义根治，字符串避开 danger 红
+                result = result + Text(str).foregroundColor(VTheme.noteDiscuss)
                 i = j
                 continue
             }
@@ -222,7 +230,8 @@ private enum CodeHighlighter {
                 if c == "/" {
                     let next = line.index(after: i)
                     if next < line.endIndex && line[next] == "/" {
-                        result = result + Text(line[i...]).foregroundColor(VTheme.ok)
+                        // 方向2 波次4b（A 组 P2-14）：行尾注释 ok 绿 → textTertiary 灰
+                        result = result + Text(line[i...]).foregroundColor(VTheme.textTertiary)
                         return result
                     }
                 }
@@ -277,7 +286,12 @@ public struct ChatMarkdownView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .heading(let level, let s):
             inlineText(s)
-                .font(level <= 2 ? VTheme.Typo.sectionTitle : VTheme.Typo.body.weight(.semibold))
+                // 方向2 波次4b（A 组 P1 漏项）：原版 :261-266 六级塌两档（h1/h2=sectionTitle
+                // 14 不大于正文）→ 三档拉开：h1=pageTitle(16) h2=dialogTitle(15)
+                // h3–h6=body semibold（聊天气泡语境克制口径）
+                .font(level == 1 ? VTheme.Typo.pageTitle
+                      : level == 2 ? VTheme.Typo.dialogTitle
+                      : VTheme.Typo.body.weight(.semibold))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
@@ -291,7 +305,7 @@ public struct ChatMarkdownView: View {
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     CodeHighlighter.highlight(code, base: VTheme.textPrimary)
-                        .font(.system(size: 12.5, design: .monospaced))
+                        .font(VTheme.Typo.mono)   // 方向2 波次4b：手写 12.5 半档收编 Typo.mono(12)（原版 :277）
                         .lineSpacing(3)
                         .padding(.horizontal, 10).padding(.vertical, 8)
                         .textSelection(.enabled)
@@ -325,8 +339,12 @@ public struct ChatMarkdownView: View {
                                     .font(VTheme.Typo.caption)
                                     .padding(.horizontal, 8).padding(.vertical, 4)
                                     .frame(maxWidth: 260, alignment: .leading)
-                                    .background(r == 0 ? VTheme.bgHover : Color.clear)
-                                    .overlay(Rectangle().stroke(VTheme.borderSubtle, lineWidth: 0.5))
+                                    .background(r == 0 ? VTheme.bgHover : Color.clear)   // 表头 band 保留
+                                    // 方向2 波次4b（A 组 P2-14）：0.5pt 全格描边 → 只留行底线
+                                    //（原版 :312 全格框显脏；横 spacing 0 拼接即连续行线）
+                                    .overlay(alignment: .bottom) {
+                                        Rectangle().fill(VTheme.borderSubtle).frame(height: 0.5)
+                                    }
                             }
                         }
                     }

@@ -117,8 +117,12 @@ public struct AuthPrompt: Identifiable {
         return "允许"
     }
 
-    /// 前端四类分支全部用 danger: true（确认按钮红色）。
-    public var isDanger: Bool { true }
+    /// 确认按钮是否红底警示。
+    /// 方向2 波次4b（A 组 P1 漏项）：不再沿袭前端「四类分支全部 danger: true」——
+    /// 普通「允许」（默认分支：敏感路径读/写/删/列等，confirmLabel「允许」）改主钮
+    /// 石墨黑；破坏性/执行类（联网安装「允许安装」、应用模块与操作电脑「允许执行」）
+    /// 保留 vDanger 红底警示。
+    public var isDanger: Bool { isNetInstall || isAppModule || isComputerUse }
 
     /// 「同时开启全量联网」勾选（仅 net_install 且后端提示需要时）。
     public var showsEnableNetworkCheckbox: Bool {

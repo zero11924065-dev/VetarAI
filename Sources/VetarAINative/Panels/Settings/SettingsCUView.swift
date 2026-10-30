@@ -54,6 +54,12 @@ private struct SettingsCUBody: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // 方向2 波次2：补分区名页标题（设置壳统一 Typo.pageTitle 16pt
+                // semibold；原版 :37-66 首行即错误条，文案对齐左侧导航项「CU」）
+                Text("CU")
+                    .font(VTheme.Typo.pageTitle)
+                    .foregroundStyle(VTheme.textPrimary)
+
                 if let err = vm.errorMessage {
                     VCallout(.error, err)
                         .accessibilityIdentifier("settings.cu.errorCallout")   // DBG-160：与 SettingsPanelView 区分
@@ -106,7 +112,10 @@ struct ComputerUseSection: View {
                 set: { vm.saveBool(SidecarConfig.Key.computerUseEnabled, $0) }))
                 .toggleStyle(.checkbox)
                 .accessibilityIdentifier("settings.cuEnabledToggle")
-            HintText("⚠️ 开启后 Agent 能看到你的屏幕并真实操作鼠标键盘——误操作后果立即可见且可能难以撤销（删文件、发消息、点支付）。默认关闭。一期仅支持 macOS，全程本地不联网。建议保持\"每步确认\"开启，并用应用白名单限定可操作范围。")
+            // 方向2 波次2：⚠️ emoji 提示升 VCallout(.warn) 承载（原版 :92；
+            // CU 总开关风险是真正关键后果提示——Agent 真实操作鼠标键盘、
+            // 误操作可能难以撤销，够警示层级）
+            VCallout(.warn, "开启后 Agent 能看到你的屏幕并真实操作鼠标键盘——误操作后果立即可见且可能难以撤销（删文件、发消息、点支付）。默认关闭。一期仅支持 macOS，全程本地不联网。建议保持\"每步确认\"开启，并用应用白名单限定可操作范围。")
 
             if enabled {
                 Toggle("每步操作前都要我确认", isOn: Binding(
@@ -213,19 +222,20 @@ struct ComputerUseSection: View {
     private func capabilityFacts(_ cap: CUCapabilities) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let v = cap.factString("frontmost_app") {
-                factLine("前台应用：\(v)")
+                factLine("前台应用：", v)
             }
             if let v = cap.factString("screen_points") {
-                factLine("屏幕逻辑尺寸：\(v) 点")
+                factLine("屏幕逻辑尺寸（点）：", v)
             }
             if let v = cap.factString("screenshot_px") {
-                factLine("截屏分辨率：\(v) px")
+                factLine("截屏分辨率（px）：", v)
             }
             if let v = cap.factString("retina_scale") {
-                factLine("Retina 缩放：\(v)x（点击坐标已自动换算）")
+                factLine("Retina 缩放：", "\(v)x", note: "（点击坐标已自动换算）")
             }
-            factLine("CoreGraphics 接口：\(cap.factString("coregraphics") ?? "未探测")")
-            Text("· 无需安装任何第三方工具（用系统内置 screencapture + JXA/CoreGraphics）。")
+            factLine("CoreGraphics 接口：", cap.factString("coregraphics") ?? "未探测")
+            // 方向2 波次2：去「·」中点当 bullet（原版 :211；说明行非列表项）
+            Text("无需安装任何第三方工具（用系统内置 screencapture + JXA/CoreGraphics）。")
                 .font(VTheme.Typo.caption)
                 .foregroundStyle(VTheme.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -236,10 +246,24 @@ struct ComputerUseSection: View {
         .padding(.top, 8)
     }
 
-    private func factLine(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(VTheme.textTertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    /// 方向2 波次2：整行 mono 混排拆「标签+值」分列（原版 :222-227 中文标签
+    /// 随 mono 渲染出混合节奏）——标签界面字正文灰，值 Typo.mono 数据身份，
+    /// 备注（可选第三槽）用 caption 浅灰。
+    private func factLine(_ label: String, _ value: String, note: String? = nil) -> some View {
+        HStack(spacing: VTheme.Space.s2) {
+            Text(label)
+                .font(VTheme.Typo.caption)
+                .foregroundStyle(VTheme.textSecondary)
+            Text(value)
+                .font(VTheme.Typo.mono)
+                .foregroundStyle(VTheme.textPrimary)
+            if let note {
+                Text(note)
+                    .font(VTheme.Typo.caption)
+                    .foregroundStyle(VTheme.textTertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

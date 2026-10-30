@@ -284,6 +284,18 @@ public final class NativeLlamaCppDriver: @unchecked Sendable {
         guard nameOk == 0 else { return 0 }
         return Int(UInt16(bigEndian: out.sin_port))
     }
+    /// MTP 检测缝：读 GGUF 文件头判断是否含 MTP 层（metadata 键 nextn_predict_layers，
+    /// 架构前缀各异如 qwen3/qwen35，故只匹配后缀）。默认实现读前 2MB 搜字符串
+    /// （tensor 名/元数据都在文件头，不碰权重数据，毫秒级）；读失败/不存在返回
+    /// false（fail-safe：不开投机，不影响对话）。MTP 投机只在模型自带 nextn 层时
+    /// 启用，否则 llama-server 报 "model doesn't contain MTP layers" 硬退。
+    public var mtpProbe: @Sendable (URL) -> Bool = { url in
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 2_097_152) else { return false }
+        return data.range(of: Data("nextn_predict_layers".utf8)) != nil
+    }
+
     /// 日志目录缝（偏差①：{data_root}/logs）。
     public var logDirProvider: @Sendable () -> URL
 
@@ -410,12 +422,27 @@ public final class NativeLlamaCppDriver: @unchecked Sendable {
     // MARK: - spawn / 健康探测
 
     /// _spawn（L224-243）：日志 append 打开 → spawner；失败关句柄再抛。
+    /// allowSpeculative=false 供 MTP 回退重试使用（排雷 2026-10-26，见 ensureServer
+    /// 注记）：跳过投机参数组。返回 speculative 标记本次是否真带了投机参数
+    /// （回退判定「当且仅当本次加了投机参数」的依据）。
     private func spawnServer(_ packId: String, binary: URL, gguf: URL, port: Int,
-                             contextLength: Int?) throws
-        -> (proc: any NativeLlamaServerProcess, log: FileHandle, logPath: URL) {
+                             contextLength: Int?, allowSpeculative: Bool = true) throws
+        -> (proc: any NativeLlamaServerProcess, log: FileHandle, logPath: URL,
+            speculative: Bool) {
         var argv = [binary.path, "--model", gguf.path,
                     "--port", String(port), "--host", "127.0.0.1"]
         if let cl = contextLength, cl != 0 { argv += ["-c", String(cl)] }
+        // MTP 投机（0.7.6 实测 +22%：23.69 vs 19.40 tok/s，M3 Max）：仅模型自带
+        // nextn 层才开；不带 MTP 的模型加 --spec-type draft-mtp 会被 llama-server
+        // 拒绝（"model doesn't contain MTP layers" 硬退），故必须先探测。
+        // 排雷 2026-10-26：探测是头部子串匹配存在假阳性（模型无真 MTP 层但头部
+        // 碰巧含该串），假阳性时本参数组必硬退——回退重试由 ensureServer 编排。
+        var speculative = false
+        if allowSpeculative && mtpProbe(gguf) {
+            argv += ["--spec-type", "draft-mtp",
+                     "--spec-draft-n-max", "4", "--spec-draft-ngl", "99"]
+            speculative = true
+        }
         let logPath = serverLogPath(packId)
         try FileManager.default.createDirectory(at: logPath.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
@@ -427,7 +454,7 @@ public final class NativeLlamaCppDriver: @unchecked Sendable {
             try fh.seekToEnd()   // append：换装重启不抹掉上一次日志
             let proc = try spawner.spawn(argv: argv, env: subprocessEnv(), log: fh)
             log("llama-server 已拉起: pack=\(packId) port=\(port) argv=\(argv) log=\(logPath.path)")
-            return (proc, fh, logPath)
+            return (proc, fh, logPath, speculative)
         } catch {
             try? fh.close()
             throw error
@@ -536,16 +563,40 @@ public final class NativeLlamaCppDriver: @unchecked Sendable {
         let binary = try resolveServerBinary()
         let gguf = try ggufPath(packId)
         let port = freePort()
-        let (proc, logHandle, logPath) = try spawnServer(packId, binary: binary, gguf: gguf,
-                                                         port: port, contextLength: wantCtx)
-        state = Active(packId: packId, proc: proc, port: port, log: logHandle, ctx: wantCtx)
+        let first = try spawnServer(packId, binary: binary, gguf: gguf,
+                                    port: port, contextLength: wantCtx)
+        state = Active(packId: packId, proc: first.proc, port: port, log: first.log,
+                       ctx: wantCtx)
         do {
-            try await waitReady(proc, port: port, logPath: logPath, timeout: bootTimeout())
+            try await waitReady(first.proc, port: port, logPath: first.logPath,
+                                timeout: bootTimeout())
+            return "http://127.0.0.1:\(port)/v1"
         } catch {
             await stopLocked()   // 启动失败回收现场
-            throw error
+            // 排雷 2026-10-26：mtpProbe 为头部子串匹配存在假阳性（模型无真 MTP 层
+            // 但头部碰巧含该串），此时带投机参数的 llama-server 必硬退，原实现无
+            // 回退、对话直接挂。当且仅当本次 spawn 加了投机参数且 waitReady 失败
+            // （早死/超时皆算）→ 落「MTP 回退」日志（含日志尾巴）后以无投机参数
+            // 重试一次——去掉投机参数即 MTP 落地前的基线行为，零风险；
+            // 重试再失败才把错误抛给上层。
+            guard first.speculative else { throw error }
+            log("MTP 回退：带投机参数启动失败（\(error)），去除 --spec-type 等投机参数"
+                + "重试一次。日志尾巴：\(logTail(first.logPath))")
+            let retryPort = freePort()
+            let retry = try spawnServer(packId, binary: binary, gguf: gguf,
+                                        port: retryPort, contextLength: wantCtx,
+                                        allowSpeculative: false)
+            state = Active(packId: packId, proc: retry.proc, port: retryPort,
+                           log: retry.log, ctx: wantCtx)
+            do {
+                try await waitReady(retry.proc, port: retryPort, logPath: retry.logPath,
+                                    timeout: bootTimeout())
+            } catch {
+                await stopLocked()   // 重试失败同样回收现场
+                throw error
+            }
+            return "http://127.0.0.1:\(retryPort)/v1"
         }
-        return "http://127.0.0.1:\(port)/v1"
     }
 
     /// stop_server（L401-413）：packId 给定时只停匹配的包（不匹配=不动，False）。

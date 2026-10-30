@@ -43,11 +43,13 @@ final class SSEEventKindTests: XCTestCase {
             ("cancelled", .cancelled), ("segment_break", .segmentBreak),
             ("auth_request", .authRequest),
             ("compact_required", .compactRequired), ("compact_auto", .compactAuto),
+            ("citations", .citations),   // C3（联调批二 Part B）：.vmodel 引用块 id 事件
+            ("tool_card", .toolCard),   // C2（联调批二 Part C）：.vmodel 工具调用段卡片事件
         ]
         for (raw, kind) in cases {
             XCTAssertEqual(SSEEventKind(rawValue: raw), kind, "事件 \(raw) 映射失败")
         }
-        XCTAssertEqual(SSEEventKind.allCases.count, 13)   // 12 + message 缺省
+        XCTAssertEqual(SSEEventKind.allCases.count, 15)   // 14（含 message 缺省）+ tool_card（C2）
     }
 
     // 未知事件 → kind 为 nil（容错，不崩）

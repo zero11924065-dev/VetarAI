@@ -110,6 +110,13 @@ private final class OrderLog: @unchecked Sendable {
     func add(_ s: String) { lock.lock(); items.append(s); lock.unlock() }
 }
 
+/// 驱动日志录证盒（排雷 2026-10-26：MTP 回退日志断言用）
+private final class LogBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var items: [String] = []
+    func add(_ s: String) { lock.lock(); items.append(s); lock.unlock() }
+}
+
 private final class ClockBox2: @unchecked Sendable {
     private let lock = NSLock()
     private var t = 0.0
@@ -367,6 +374,122 @@ final class NativeLlamaCppDriverTests: XCTestCase {
         _ = try await driver.ensureServer("plain-pack", contextLength: 1024)
         XCTAssertEqual(spawner.callCount, 2)
         XCTAssertEqual(Array(spawner.calls[1].suffix(2)), ["-c", "1024"])
+    }
+
+    // MARK: - MTP 投机（带 nextn 层才开，否则 llama-server 硬退）
+
+    func testMTPSpeculativeArgsAddedWhenModelHasMTP() async throws {
+        let dir = try seedPack("mtp-pack")
+        // 覆盖假 gguf 为含 nextn_predict_layers 元数据的文件头（架构前缀 qwen3 各异，
+        // 只匹配后缀）
+        let header = Data("GGUF".utf8) + Data(repeating: 0, count: 256)
+            + Data("qwen3.nextn_predict_layers".utf8) + Data(repeating: 0, count: 64)
+        try header.write(to: dir.appendingPathComponent("model.gguf"))
+        _ = try await driver.ensureServer("mtp-pack")
+        let argv = spawner.calls[0]
+        XCTAssertTrue(argv.contains("--spec-type"), "\(argv)")
+        XCTAssertTrue(argv.contains("draft-mtp"), "\(argv)")
+        XCTAssertTrue(argv.contains("--spec-draft-n-max") && argv.contains("4"), "\(argv)")
+        XCTAssertTrue(argv.contains("--spec-draft-ngl") && argv.contains("99"), "\(argv)")
+    }
+
+    func testMTPSpeculativeArgsOmittedWhenModelLacksMTP() async throws {
+        try seedPack("plain-pack2")   // 4 字节 0x01 假 gguf，不含 nextn
+        _ = try await driver.ensureServer("plain-pack2")
+        let argv = spawner.calls[0]
+        XCTAssertFalse(argv.contains("--spec-type"), "\(argv)")
+        XCTAssertFalse(argv.contains("draft-mtp"), "\(argv)")
+    }
+
+    func testMTPProbeFailsSafeOnMissingFile() {
+        // 文件不存在 → false（不开投机，不影响对话）
+        XCTAssertFalse(driver.mtpProbe(tmp.appendingPathComponent("ghost.gguf")))
+    }
+
+    // MARK: - MTP 回退（排雷 2026-10-26：探测假阳性 → 带投机参数硬退；去投机参数重试一次）
+
+    /// a. probe=true + 首次启动早死 → 回退重试，第二次 spawn argv 不含 --spec-type
+    func testMTPFallbackRetryDropsSpecArgsOnEarlyDeath() async throws {
+        try seedPack("mtp-die")
+        driver.mtpProbe = { _ in true }   // 假阳性注入：探测称含 MTP，实际 llama-server 会硬退
+        let logs = LogBox()
+        driver.log = { logs.add($0) }
+        spawner.queue = [FakeProc(running: false, exit: 1), FakeProc()]   // 首死次活
+        spawner.logText = "model doesn't contain MTP layers"
+        let url = try await driver.ensureServer("mtp-die")
+        XCTAssertEqual(url, "http://127.0.0.1:54321/v1")                 // 重试成功，对话不挂
+        XCTAssertEqual(spawner.callCount, 2)
+        XCTAssertTrue(spawner.calls[0].contains("--spec-type"), "\(spawner.calls[0])")   // 首次带投机
+        XCTAssertFalse(spawner.calls[1].contains("--spec-type"), "\(spawner.calls[1])")  // 重试去除
+        XCTAssertFalse(spawner.calls[1].contains("draft-mtp"), "\(spawner.calls[1])")
+        XCTAssertEqual(driver.activePack(), "mtp-die")
+        XCTAssertTrue(logs.items.contains { $0.contains("MTP 回退") },
+                      "回退必须落「MTP 回退」日志：\(logs.items)")
+        XCTAssertTrue(logs.items.contains { $0.contains("model doesn't contain MTP layers") },
+                      "回退日志须含日志尾巴：\(logs.items)")
+    }
+
+    /// a'. probe=true + 首次启动超时同样回退（waitReady 两种失败皆算）
+    func testMTPFallbackRetryOnBootTimeout() async throws {
+        try seedPack("mtp-slow")
+        driver.mtpProbe = { _ in true }
+        let logs = LogBox()
+        driver.log = { logs.add($0) }
+        let clock = ClockBox2()
+        driver.now = { clock.now() }
+        driver.sleep = { ns in clock.advance(Double(ns) / 1_000_000_000) }
+        driver.configProvider = { ["model_pack_boot_timeout_s": .int(10)] }
+        let sp = spawner!
+        spawner.queue = [FakeProc(), FakeProc()]
+        driver.probe = { _ in sp.callCount >= 2 }   // 首次永不就绪（超时），重试即就绪
+        let url = try await driver.ensureServer("mtp-slow")
+        XCTAssertEqual(url, "http://127.0.0.1:54321/v1")
+        XCTAssertEqual(spawner.callCount, 2)
+        XCTAssertTrue(spawner.calls[0].contains("--spec-type"))
+        XCTAssertFalse(spawner.calls[1].contains("--spec-type"))
+        XCTAssertTrue(logs.items.contains { $0.contains("MTP 回退") }, "\(logs.items)")
+    }
+
+    /// b. probe=true + 健康 → 不重试（单 spawn 带投机参数，0.7.6 增益路径零变化）
+    func testMTPHealthyDoesNotRetry() async throws {
+        try seedPack("mtp-ok")
+        driver.mtpProbe = { _ in true }
+        _ = try await driver.ensureServer("mtp-ok")
+        XCTAssertEqual(spawner.callCount, 1)
+        XCTAssertTrue(spawner.calls[0].contains("--spec-type"))
+        XCTAssertEqual(driver.activePack(), "mtp-ok")
+    }
+
+    /// c. probe=false → argv 本就不含 --spec-type，早死也不重试（基线行为逐字保留）
+    func testNoMTPNoSpecArgsAndNoRetryOnEarlyDeath() async throws {
+        try seedPack("plain-die")
+        driver.mtpProbe = { _ in false }
+        spawner.queue = [FakeProc(running: false, exit: 3)]
+        spawner.logText = "gguf 损坏无法加载"
+        await XCTAssertAsyncThrowsNativeLlama(try await driver.ensureServer("plain-die")) { msg in
+            XCTAssertTrue(msg.contains("llama-server 启动后立即退出（exit=3）"), msg)
+        }
+        XCTAssertEqual(spawner.callCount, 1, "非投机 spawn 失败直接抛，不重试")
+        XCTAssertFalse(spawner.calls[0].contains("--spec-type"))
+        XCTAssertNil(driver.activePack())
+    }
+
+    /// d. probe=true + 重试也失败 → 错误正常抛出（不吞），现场回收
+    func testMTPFallbackRetryAlsoFailsThrows() async throws {
+        try seedPack("mtp-die2")
+        driver.mtpProbe = { _ in true }
+        let logs = LogBox()
+        driver.log = { logs.add($0) }
+        spawner.queue = [FakeProc(running: false, exit: 1), FakeProc(running: false, exit: 2)]
+        spawner.logText = "boom"
+        await XCTAssertAsyncThrowsNativeLlama(try await driver.ensureServer("mtp-die2")) { msg in
+            // 抛给上层的是重试那次（无投机）的错误
+            XCTAssertTrue(msg.contains("llama-server 启动后立即退出（exit=2）"), msg)
+        }
+        XCTAssertEqual(spawner.callCount, 2)
+        XCTAssertFalse(spawner.calls[1].contains("--spec-type"))
+        XCTAssertTrue(logs.items.contains { $0.contains("MTP 回退") }, "\(logs.items)")
+        XCTAssertNil(driver.activePack())   // 现场已回收，不留半截状态
     }
 
     // MARK: - 启动失败

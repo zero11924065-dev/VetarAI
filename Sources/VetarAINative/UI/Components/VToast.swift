@@ -70,14 +70,16 @@ public struct ToastHostView: View {
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(Color(hex: 0x1C1C1A).opacity(0.92), in: Capsule())
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+                .background(VTheme.toastBg, in: Capsule())   // 方向2 波次4b：手写 0x1C1C1A 0.92 收编 toastBg 令牌（原版 :56；ink 令牌深色翻白不可用，见 VTheme）
+                // 方向2 波次4b：浮层轻提示阴影收编 Shadow.popover（原版 :57 手写 0.15/8/3）
+                .shadow(color: VTheme.Shadow.popover.color, radius: VTheme.Shadow.popover.radius,
+                        y: VTheme.Shadow.popover.y)
                 .padding(.top, 12)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
             Spacer()
         }
-        .animation(.easeInOut(duration: 0.2), value: center.current)
+        .animation(VTheme.Motion.panel, value: center.current)   // 方向2 波次4b：手写 easeInOut(0.2) 同值换令牌引用（原版 :63）
         .allowsHitTesting(false)
     }
 }

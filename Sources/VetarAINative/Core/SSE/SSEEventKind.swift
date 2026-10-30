@@ -50,6 +50,13 @@ public enum SSEEventKind: String, CaseIterable, Sendable {
     case authRequest = "auth_request"
     case compactRequired = "compact_required"
     case compactAuto = "compact_auto"
+    /// C3（联调批二 Part B）：.vmodel 原文引用块 id 随流先行到达（载荷只有 id 数组——
+    /// 明文纪律：原文/来源名不进事件线，UI 按 id 回查内存库重建展示）
+    case citations
+    /// C2（联调批二 Part C）：.vmodel answer 内嵌工具调用段的结构化卡片
+    ///（工具名+参数；可见且保留——随消息落盘 tool_cards 列）。非增量事件，
+    /// 分发前必须先 flush 保序（纪律③，与 citations 同款）。
+    case toolCard = "tool_card"
     case message
 
     /// 增量事件（纪律①适用：必经 StreamAccumulator 缓冲 + 15fps 合帧 flush）

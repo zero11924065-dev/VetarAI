@@ -61,7 +61,8 @@ private final class DelegSensitiveWriteConn: NativeChatConnector, @unchecked Sen
     }
 
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         let i = min(calls, 1)
         calls += 1

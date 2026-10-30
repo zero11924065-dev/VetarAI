@@ -21,9 +21,11 @@
 
 //  独立 Agent 面板内容（对标 subagent/renderer/src/panels/IndependentAgentsPanel.tsx，305 行）：
 //    · 创建表单卡片：名称输入（Enter 提交）+ 创建按钮 + 模型下拉（默认）+ 角色设定
+//    · 错误条：列表拉取失败 + 手动「重试」（方向2 波次2 新增——原静默假空）
 //    · 空态说明（不属于任何项目 / 删项目不影响 / 全局能力照常）
 //    · 列表行：bot 图标 + 名称 + 已设角色设定标记 + 行内模型切换 +
 //      编辑角色设定 + 删除（确认弹窗）
+//      —— 行视图为共享组件 AgentRowView（方向2 波次2 收编，Panels/Agents/AgentRowView.swift）
 //    · 行内编辑区：角色设定多行编辑 + 取消/保存
 //  V1（智能中心侧栏单栏堆叠复刻）：整页面板壳移除——本文件只提供手风琴展开区
 //  内容视图 `IndependentAgentsPanelContentView`（原版 IndependentAgentsPanel.tsx:207-301
@@ -54,62 +56,61 @@ struct IndependentAgentsPanelContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // ── 创建表单卡片：名称 / 模型 / 角色设定 ──
-            VStack(spacing: 6) {
-                HStack(spacing: 6) {
-                    TextField("新独立 Agent 名称", text: $vm.newName)
-                        .textFieldStyle(.plain)
-                        .vInputStyle()
-                        .onSubmit { vm.create() }
-                        .accessibilityIdentifier("indepAgentNameField")
+            // ── 错误提示条（方向2 波次2 新增：列表拉取失败 + 手动重试，
+            //    照 Projects 错误条口径 VCallout accessory 槽承载重试钮）──
+            if let error = vm.error {
+                VCallout(.error, error) {
                     Button {
-                        vm.create()
+                        vm.retry()
                     } label: {
                         HStack(spacing: 4) {
-                            if vm.creating {
-                                ProgressView().controlSize(.mini)
-                            } else {
-                                Image(systemName: "plus")
-                            }
-                            Text("创建")
+                            Image(systemName: "arrow.clockwise")
+                            Text("重试")
                         }
                     }
-                    .buttonStyle(.vPrimary)
-                    .controlSize(.small)
-                    .disabled(vm.creating)
-                    .accessibilityIdentifier("indepAgentCreateButton")
+                    .buttonStyle(.vSecondary)
+                    .accessibilityIdentifier("indepAgentRetryButton")
                 }
-                Picker("", selection: $vm.newModel) {
-                    Text("模型（默认）").tag("")
-                    ForEach(vm.modelList, id: \.name) { m in
-                        Text(m.name).tag(m.name)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .accessibilityIdentifier("indepAgentModelPicker")
-                TextField("角色设定（可选）：如「你是严谨的文档审校员」，随对话注入模型",
-                          text: $vm.newPrompt, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(2...4)
-                    .vInputStyle()
-                    .accessibilityIdentifier("indepAgentPromptField")
             }
-            .padding(10)
-            .background(VTheme.bgCard, in: RoundedRectangle(cornerRadius: VTheme.Radius.m))
-            .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m).stroke(VTheme.borderDefault))
 
             // ── 空态 / 列表 ──
-            if vm.agents.isEmpty {
-                Text("暂无独立 Agent。独立 Agent 不属于任何项目，删项目不影响它；全局记忆/技能/插件照常可用。")
-                    .font(VTheme.Typo.caption)
-                    .foregroundStyle(VTheme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 6)
-            } else {
+            // 波次7（业主拍板对齐 Kimi/WorkBuddy）：创建表单撤出侧栏改弹窗
+            // （由 IntelligenceSidebarView 的 overlay 承载，⊕ 入口在手风琴头）；
+            // 方向2 波次2：空态收编 VEmptyStateView 三件套（原单行裸文本）；
+            // 错误态下不显示空态，避免错误条与空态同框假空
+            if vm.agents.isEmpty && vm.error == nil {
+                VEmptyStateView(
+                    icon: "person.crop.circle",
+                    title: "暂无独立 Agent",
+                    message: "独立 Agent 不属于任何项目，删项目不影响它；全局记忆/技能/插件照常可用。"
+                )
+            } else if !vm.agents.isEmpty {
+                // 方向2 波次2：行视图收编共享组件 AgentRowView，原私有
+                // IndependentAgentRowView（:108-256）退役——与项目内 Agent 行是双胞胎
                 ForEach(vm.agents) { agent in
-                    IndependentAgentRowView(agent: agent, vm: vm,
-                                            isSelected: vm.isSelected(agent))
+                    AgentRowView(
+                        rowId: agent.id,
+                        name: agent.name,
+                        hasPrompt: !(agent.system_prompt?.isEmpty ?? true),
+                        modelName: agent.model_name,
+                        leadingIcon: "person.crop.circle",
+                        isSelected: vm.isSelected(agent),
+                        isEditing: vm.editingId == agent.id,
+                        modelList: vm.modelList,
+                        showsModelPicker: !vm.modelList.isEmpty,
+                        modelPickerHasDefault: agent.model_name == nil,
+                        onChangeModel: { vm.switchModel(agent, to: $0) },
+                        onStartChat: { vm.startChat(agent) },
+                        onEdit: { vm.beginEdit(agent) },
+                        onDelete: { vm.delete(agent) },
+                        onTap: { vm.startChat(agent) },
+                        editText: $vm.editText,
+                        savingPrompt: vm.savingPrompt,
+                        onSavePrompt: { vm.savePrompt(agent) },
+                        onCancelEdit: { vm.cancelEdit() },
+                        accessibilityPrefix: "indepAgent",
+                        entityLabel: "独立 Agent"
+                    )
                 }
             }
         }
@@ -120,154 +121,6 @@ struct IndependentAgentsPanelContentView: View {
     }
 }
 
-// MARK: - 独立 Agent 行（选中卡态 + 行内操作 + 行内编辑区）
-
-private struct IndependentAgentRowView: View {
-    let agent: IndependentAgent
-    @ObservedObject var vm: IndependentAgentsPanelViewModel
-    let isSelected: Bool
-    @State private var hovering = false
-
-    private var isEditing: Bool { vm.editingId == agent.id }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // 行本体
-            HStack(spacing: 6) {
-                Image(systemName: "person.crop.circle")
-                    .font(.system(size: 13))
-                    .foregroundStyle(VTheme.accentText)
-                Text(agent.name)
-                    .font(VTheme.Typo.body.weight(isSelected ? .medium : .regular))
-                    .foregroundStyle(VTheme.textPrimary)
-                    .lineLimit(1)
-                if let prompt = agent.system_prompt, !prompt.isEmpty {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 11))
-                        .foregroundStyle(VTheme.accentText)
-                        .help("已设角色设定")
-                }
-                Spacer(minLength: 4)
-                // 问题1联动：明显的「开始对话」入口（选中 + 切到会话面板）
-                Button { vm.startChat(agent) } label: {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                }
-                .buttonStyle(.vRowAction)
-                .help("开始对话（切到会话面板）")
-                .accessibilityIdentifier("indepAgentChatButton.\(agent.id)")
-                // 行内模型切换（无 model_name 也可选，兜底「默认」项；模型列表为空不显示）
-                if !vm.modelList.isEmpty {
-                    Picker("", selection: Binding(
-                        get: { agent.model_name ?? "" },
-                        set: { vm.switchModel(agent, to: $0) }
-                    )) {
-                        if agent.model_name == nil {
-                            Text("默认").tag("")
-                        }
-                        ForEach(vm.modelList, id: \.name) { m in
-                            Text(m.name).tag(m.name)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .font(.system(size: 11))
-                    .frame(maxWidth: 140)
-                    .help("切换该独立 Agent 的模型")
-                    .accessibilityIdentifier("indepAgentModelSelect.\(agent.id)")
-                }
-                Button { vm.beginEdit(agent) } label: {
-                    Image(systemName: "pencil")
-                }
-                .buttonStyle(.vRowAction)
-                .help("编辑角色设定")
-                .accessibilityIdentifier("indepAgentEditButton.\(agent.id)")
-                Button { vm.delete(agent) } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.vRowAction)
-                .foregroundStyle(VTheme.dangerText)
-                .help("删除独立 Agent")
-                .accessibilityIdentifier("indepAgentDeleteButton.\(agent.id)")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                isSelected ? VTheme.bgCard : (hovering ? VTheme.bgHover : Color.clear),
-                in: isEditing
-                    ? UnevenRoundedRectangle(topLeadingRadius: VTheme.Radius.s,
-                                             bottomLeadingRadius: 0,
-                                             bottomTrailingRadius: 0,
-                                             topTrailingRadius: VTheme.Radius.s)
-                    : UnevenRoundedRectangle(topLeadingRadius: VTheme.Radius.s,
-                                             bottomLeadingRadius: VTheme.Radius.s,
-                                             bottomTrailingRadius: VTheme.Radius.s,
-                                             topTrailingRadius: VTheme.Radius.s)
-            )
-            .overlay(
-                (isEditing
-                    ? UnevenRoundedRectangle(topLeadingRadius: VTheme.Radius.s,
-                                             bottomLeadingRadius: 0,
-                                             bottomTrailingRadius: 0,
-                                             topTrailingRadius: VTheme.Radius.s)
-                    : UnevenRoundedRectangle(topLeadingRadius: VTheme.Radius.s,
-                                             bottomLeadingRadius: VTheme.Radius.s,
-                                             bottomTrailingRadius: VTheme.Radius.s,
-                                             topTrailingRadius: VTheme.Radius.s))
-                .stroke(isSelected ? VTheme.borderDefault : Color.clear)
-            )
-            .shadow(color: isSelected ? .black.opacity(0.05) : .clear, radius: 1.5, y: 1)
-            .contentShape(Rectangle())
-            // U2：单击 = 选中 + 直达聊天（对齐原版 selectIndependentAgent 单击即见聊天；
-            // 原「双击开始对话」手势随之取消。行内编辑/删除为独立按钮，优先于行点击）
-            .onTapGesture { vm.startChat(agent) }
-            .onHover { hovering = $0 }
-
-            // 行内角色设定编辑区（贴行下半卡）
-            if isEditing {
-                VStack(spacing: 6) {
-                    TextField("角色设定（system_prompt）：留空保存则清除",
-                              text: $vm.editText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(3...6)
-                        .vInputStyle()
-                        .accessibilityIdentifier("indepAgentPromptEditField")
-                    HStack(spacing: 6) {
-                        Spacer()
-                        Button("取消") { vm.cancelEdit() }
-                            .buttonStyle(.vSecondary)
-                            .controlSize(.small)
-                        Button {
-                            vm.savePrompt(agent)
-                        } label: {
-                            HStack(spacing: 4) {
-                                if vm.savingPrompt {
-                                    ProgressView().controlSize(.mini)
-                                }
-                                Text(vm.savingPrompt ? "保存中…" : "保存")
-                            }
-                        }
-                        .buttonStyle(.vPrimary)
-                        .controlSize(.small)
-                        .disabled(vm.savingPrompt)
-                        .accessibilityIdentifier("indepAgentPromptSaveButton")
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(VTheme.bgCard,
-                            in: UnevenRoundedRectangle(topLeadingRadius: 0,
-                                                       bottomLeadingRadius: VTheme.Radius.m,
-                                                       bottomTrailingRadius: VTheme.Radius.m,
-                                                       topTrailingRadius: 0))
-                .overlay(
-                    UnevenRoundedRectangle(topLeadingRadius: 0,
-                                           bottomLeadingRadius: VTheme.Radius.m,
-                                           bottomTrailingRadius: VTheme.Radius.m,
-                                           topTrailingRadius: 0)
-                    .stroke(VTheme.borderDefault)
-                )
-            }
-        }
-        .padding(.vertical, 2)
-    }
-}
+// 方向2 波次2：原私有 IndependentAgentRowView（:108-256）已收编为共享组件
+// Panels/Agents/AgentRowView.swift——与项目内 Agent 行是约 120 行复制粘贴
+// 双胞胎；逐分叉取舍（阴影/删除染色/开始对话钮/行首图标）见共享文件头注释。

@@ -82,7 +82,11 @@ public struct FeedbackFormCard: View {
             }
 
             // 标题（必填 ≤100）
-            TextField("标题（必填，≤100 字）", text: $title)
+            // 方向2 波次2：补可见标签（原版 :68 占位符代标签；占位符保留作补充提示）
+            Text("标题（必填，≤100 字）")
+                .font(VTheme.Typo.caption.weight(.medium))
+                .foregroundStyle(VTheme.textSecondary)
+            TextField("请输入标题", text: $title)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("feedback.titleField")
 
@@ -97,32 +101,32 @@ public struct FeedbackFormCard: View {
             .accessibilityIdentifier("feedback.categoryPicker")
 
             // 描述（≤5000）
+            // 方向2 波次2：补可见标签（原版 :83-88 无标签，靠底部计数行代行字段名；
+            // 底部行改为纯计数，超限变色口径不变）
+            Text("详细描述（可空，≤5000 字）")
+                .font(VTheme.Typo.caption.weight(.medium))
+                .foregroundStyle(VTheme.textSecondary)
             TextEditor(text: $descriptionText)
                 .font(.system(size: 13))
                 .frame(minHeight: 88, maxHeight: 140)
                 .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m2)
                     .stroke(VTheme.borderDefault, lineWidth: 1))
                 .accessibilityIdentifier("feedback.descriptionEditor")
-            Text("详细描述（可空，≤5000 字）· 已输入 \(descriptionText.count) 字")
+            Text("已输入 \(descriptionText.count) 字")
                 .font(VTheme.Typo.micro)
                 .foregroundStyle(descriptionText.count > FeedbackCenter.descriptionMaxLength
                                  ? VTheme.dangerText : VTheme.textTertiary)
 
             // 附件（白名单 + ≤10MB；日志开关开时 zip 占 1 槽 → 自选上限 4，关恢复 5）
             HStack(spacing: 12) {
+                // 方向2 波次2：手写 120×32 accent 软底按钮收编 .vSecondary
+                // （原版 :96-109；次级动作层级，高度/圆角/hover 全由样式库承担）
                 Button {
                     pickAttachments()
                 } label: {
                     Label("添加附件", systemImage: "paperclip")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 120, height: 32)
-                        .background(VTheme.accentBgSoft,
-                                    in: RoundedRectangle(cornerRadius: VTheme.Radius.m2))
-                        .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m2)
-                            .stroke(VTheme.accentBorder, lineWidth: 1))
-                        .foregroundStyle(VTheme.accentText)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.vSecondary)
                 .accessibilityIdentifier("feedback.attachButton")
                 if attachLogs {
                     Text("已附日志，还可添加 \(FeedbackCenter.userAttachmentLimit(logsAttached: true) - attachments.count) 个附件")
@@ -151,10 +155,15 @@ public struct FeedbackFormCard: View {
                         Button {
                             attachments.remove(at: idx)
                         } label: {
+                            // 方向2 波次2：× 裸图标命中区扩面（原版 :134-141
+                            // 命中区=字形框架；套 vIconHitTarget 对齐行内 20×20 口径）
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(VTheme.textTertiary)
+                                .vIconHitTarget(20)
                         }
                         .buttonStyle(.plain)   // 行内不挂 id（DBG-AX 静态撞车纪律）
+                        // 方向2 波次4：AX 补账
+                        .accessibilityLabel("移除附件")
                     }
                 }
             }
@@ -182,10 +191,14 @@ public struct FeedbackFormCard: View {
                             // 点 × = 等同关开关（日志附件态同步清空）
                             attachLogs = false
                         } label: {
+                            // 方向2 波次2：× 裸图标命中区扩面（原版 :164-172；
+                            // 套 vIconHitTarget 对齐行内 20×20 口径）
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(VTheme.textTertiary)
+                                .vIconHitTarget(20)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("移除日志附件")
                         .accessibilityIdentifier("feedback.logChipRemove")
                     }
                     .padding(.horizontal, 10)
@@ -238,37 +251,30 @@ public struct FeedbackFormCard: View {
                         // 失败：表单与日志附件态全部保留（业主口径——不清空）
                     }
                 } label: {
+                    // 方向2 波次2：主 CTA 手写 120×32 accent 软底收编 .vPrimary
+                    // （原版 :198-240；高度/圆角/hover/禁用态全由样式库承担，
+                    // label 只留 spinner+文案结构）
                     HStack(spacing: 6) {
                         if appState.feedback.submitting {
                             ProgressView().controlSize(.small)
                         }
                         Text(appState.feedback.submitting ? "提交中…" : "提交反馈")
-                            .font(.system(size: 13, weight: .medium))
                     }
-                    .frame(width: 120, height: 32)
-                    .background(VTheme.accentBgSoft,
-                                in: RoundedRectangle(cornerRadius: VTheme.Radius.m2))
-                    .overlay(RoundedRectangle(cornerRadius: VTheme.Radius.m2)
-                        .stroke(VTheme.accentBorder, lineWidth: 1))
-                    .foregroundStyle(VTheme.accentText)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.vPrimary)
                 .disabled(appState.feedback.submitting)
                 .accessibilityIdentifier("feedback.submitButton")
 
                 if let outcome = appState.feedback.submitOutcome {
+                    // 方向2 波次2：成功 Label+图标 / 失败纯文字两种形制统一走
+                    // VCallout（原版 :245 vs :251；成功 .success / 失败 .error，
+                    // 互斥分支字面量 id 不变——AX 纪律）
                     switch outcome {
                     case .success(let msg):
-                        Label(msg, systemImage: "checkmark.circle.fill")
-                            .font(VTheme.Typo.caption)
-                            .foregroundStyle(VTheme.okText)
-                            .lineLimit(2)
+                        VCallout(.success, msg)
                             .accessibilityIdentifier("feedback.submitSuccess")
                     case .failed(let msg):
-                        Text(msg)
-                            .font(VTheme.Typo.caption)
-                            .foregroundStyle(VTheme.dangerText)
-                            .lineLimit(2)
+                        VCallout(.error, msg)
                             .accessibilityIdentifier("feedback.submitError")
                     }
                 }
@@ -387,10 +393,17 @@ public struct FeedbackMineCard: View {
                     .foregroundStyle(VTheme.textTertiary)
                     .accessibilityIdentifier("feedback.mineError")
             } else if appState.feedback.myFeedback.isEmpty, !appState.feedback.loadingMine {
-                Text("暂无反馈记录")
-                    .font(VTheme.Typo.caption)
-                    .foregroundStyle(VTheme.textTertiary)
-                    .accessibilityIdentifier("feedback.mineEmpty")
+                // 方向2 波次2：空态补指向表单的动作引导（原版 :373 单行「暂无反馈
+                // 记录」；卡内小槽不上 VEmptyStateView 整页规格，用引导文案口径）
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("暂无反馈记录")
+                        .font(VTheme.Typo.caption)
+                        .foregroundStyle(VTheme.textTertiary)
+                        .accessibilityIdentifier("feedback.mineEmpty")
+                    Text("遇到问题或想提建议？用上方「问题反馈」卡提交，处理进展会列在这里。")
+                        .font(VTheme.Typo.micro)
+                        .foregroundStyle(VTheme.textTertiary)
+                }
             } else {
                 VStack(spacing: 10) {
                     ForEach(appState.feedback.myFeedback, id: \.id) { item in
@@ -416,30 +429,34 @@ public struct FeedbackMineCard: View {
         let expanded = expandedIDs.contains(item.id)
         VStack(alignment: .leading, spacing: 6) {
             // R3（0.7.12 实测 A9）：行头可点——折叠/展开只读详情（chevron 指示态）
-            HStack(spacing: 8) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(VTheme.textTertiary)
-                    .frame(width: 10)
-                Text(item.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(VTheme.textPrimary)
-                    .lineLimit(expanded ? nil : 1)
-                    .fixedSize(horizontal: false, vertical: expanded)
-                Spacer()
-                statusChip(item.status)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
+            // 方向2 波次2：onTapGesture 改 Button(.plain) 承载（原版 :415-418；
+            // contentShape 与既有 accessibilityIdentifier 保留，键盘/AX 可触达）
+            Button {
                 if expanded { expandedIDs.remove(item.id) } else { expandedIDs.insert(item.id) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(VTheme.textTertiary)
+                        .frame(width: 10)
+                    Text(item.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(VTheme.textPrimary)
+                        .lineLimit(expanded ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: expanded)
+                    Spacer()
+                    statusChip(item.status)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("feedback.mineRow.\(item.id)")
-            HStack(spacing: 8) {
+            // 方向2 波次2：元信息中点串拆固定槽位 HStack（原版 :420-428
+            // 「分类 · 日期 · N 个附件」；附件槽计数为 0 时整槽不渲染）
+            HStack(spacing: VTheme.Space.s2) {
                 Text(FeedbackCenter.categoryText(item.category))
-                Text("·")
                 Text(item.createdAt.prefix(10))
                 if item.attachmentCount > 0 {
-                    Text("·")
                     Text("\(item.attachmentCount) 个附件")
                 }
             }

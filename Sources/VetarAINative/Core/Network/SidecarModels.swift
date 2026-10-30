@@ -51,6 +51,68 @@ public struct ToolStep: Identifiable, Equatable {
     }
 }
 
+/// C3 原文引用呈现模型（联调批二 Part B；自家 .vmodel 引擎 assistant 消息专用）。
+/// 明文纪律：本模型只活内存——落盘只有 ChatMessage.citationBlockIds（id 数组），
+/// title/text 由 NativeVModelRetrieval 按 id 回查库重建（库 nil → 整个不出现）。
+public struct ChatCitation: Equatable, Sendable {
+    /// 展示句（命中句 = 含 ≥1 个命中 gram 的句子；NativeVModelRetrieval 标注口径）
+    public struct Sentence: Equatable, Sendable {
+        public var text: String
+        public var isHit: Bool
+        public init(text: String, isHit: Bool) {
+            self.text = text
+            self.isHit = isHit
+        }
+    }
+    /// 块 id（UUID 字符串；与落盘的 citation_block_ids 元素一致）
+    public var blockId: String
+    /// 来源黑盒名（block.title：训练块=「训练材料」，探索条目=源文件名；
+    /// ⛔ 绝不出现原始路径/内部 ID）
+    public var title: String
+    /// 正文（块原文截断 280 字 +「…」；= sentences 拼接）
+    public var displayText: String
+    /// 逐句标注（命中句加粗+底色的渲染数据源）
+    public var sentences: [Sentence]
+
+    public init(blockId: String, title: String, displayText: String, sentences: [Sentence]) {
+        self.blockId = blockId
+        self.title = title
+        self.displayText = displayText
+        self.sentences = sentences
+    }
+}
+
+/// C2 工具调用卡片（联调批二 Part C；自家 .vmodel 引擎 answer 内嵌
+/// `<tool_call>{"name","arguments"}` 段的呈现模型——可见且保留）。
+/// 落盘权威 = session_messages.tool_cards 列（[{"name","arguments"}] JSON）；
+/// 非法 JSON 段已在解析层（NativeVModelThinkParser）纯文本兜底，到本模型即合法。
+public struct ChatToolCard: Identifiable, Equatable, Sendable {
+    public let id: String
+    /// 工具名（契约 name 字段；⛔ 白名单校验是 VetarModel 侧出口职责，本侧不做）
+    public var name: String
+    /// 参数展示文本（pretty JSON，对齐 ToolStep.argsText 口径；空 = 无参数）
+    public var argsText: String
+
+    public init(id: String = UUID().uuidString, name: String, argsText: String) {
+        self.id = id
+        self.name = name
+        self.argsText = argsText
+    }
+
+    /// arguments JSON → 展示文本（prettyPrinted；标量/数组等片段经
+    /// .fragmentsAllowed 兜底；序列化失败 → 紧凑描述，绝不崩）。
+    public static func prettyArgsText(_ any: Any?) -> String {
+        guard let any else { return "" }
+        if let s = any as? String { return s }
+        if let data = try? JSONSerialization.data(
+            withJSONObject: any, options: [.prettyPrinted, .fragmentsAllowed]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return String(describing: any)
+    }
+}
+
 /// 会话消息（UI 模型）。字段逐一对齐现状 useMessages.ts 的 Message：
 /// 流式瞬态字段（thinkingActive/runElapsed/waitingSeconds 等）不落库、不随历史回读恢复；
 /// DB 权威字段（dbId/createdAt/images/archived/promptEvalCount/stopped）由 loadMessages 填充。
@@ -75,6 +137,15 @@ public struct ChatMessage: Identifiable, Equatable {
     public var maxStep: Int?
     public var tokensUsed: Int?
     public var promptEvalCount: Int?          // H17：历史会话恢复指示器的兜底
+    // ── C3 原文引用（联调批二 Part B；仅自家 .vmodel 引擎的 assistant 消息）──
+    public var citationBlockIds: [String] = []  // 落盘权威：只存块 id 数组（明文纪律）
+    public var citations: [ChatCitation] = []   // 瞬态展示：按 id 回查库重建，不落盘
+    // ── C2 思考呈现（联调批二 Part C；仅自家 .vmodel 引擎的 assistant 消息）──
+    /// 工具调用段卡片（可见且保留：落盘权威 = tool_cards 列，历史回读恢复）
+    public var toolCards: [ChatToolCard] = []
+    /// 思考全文（可见不保留：仅流式中供折叠块展开查看；完成即清，不落盘、
+    /// 不回填历史——含内存会话态；非 vmodel 消息本字段恒空）
+    public var thinkingText: String = ""
     // ── 流式瞬态（计时/思考预览）──
     public var thinkingActive: Bool = false   // 当前处于思考阶段
     public var thinkingPreview: String = ""   // 末尾 120 字简版预览（0.4.33 F3 单行钳制）
@@ -137,11 +208,13 @@ public struct ChatStreamRequest: Encodable {
     public let skip_user_persist: Bool
     public let sandbox_root: String?
     public let auto_archive_unit: Bool
+    /// 思考深度档位（会话级临时覆盖）："fast"/"deep"；nil = 平衡（回落引擎默认）。
+    public let thinking_mode: String?
 
     public init(agent_id: String, model: String, messages: [ChatStreamMessage],
                 images: [String]? = nil, project_id: String, session_id: String,
                 skip_user_persist: Bool = false, sandbox_root: String? = nil,
-                auto_archive_unit: Bool = false) {
+                auto_archive_unit: Bool = false, thinking_mode: String? = nil) {
         self.agent_id = agent_id
         self.model = model
         self.messages = messages
@@ -151,6 +224,7 @@ public struct ChatStreamRequest: Encodable {
         self.skip_user_persist = skip_user_persist
         self.sandbox_root = sandbox_root
         self.auto_archive_unit = auto_archive_unit
+        self.thinking_mode = thinking_mode
     }
 }
 

@@ -105,12 +105,27 @@ public final class NativeSidecarClient: SidecarClientProtocol {
         // 空注册表自然为空集，原口径不动。
         let vmodels = NativeVModelParity.poolNames(
             forEnabledIn: kernel.vmodelInstaller.listInstalled())
+        // 1.0.13 业主实测首报排雷：魔塔模型包（GGUF/MLX）此前不在本面——会话与
+        // 新建 Agent/独立 Agent 选模器只见 ollama+.vmodel，已装包「选不了」；
+        // 路由侧 routeToPack 本就能按注册表名直送（NativeMPRoutingConnector），
+        // 纯名单缺漏。按 models() 端点同一真源 mpUnionFetcher 平级并入
+        // （task=chat 且 enabled；安装后全场景可选的装机提示自此兑现）。
+        let packs = await mpUnionFetcher().map { OllamaModel(name: $0.name, size: $0.size) }
+        let packAndVModel = packs + vmodels.map { OllamaModel(name: $0, size: nil) }
         guard backend == "ollama" else {
-            // 非 ollama 后端本无此面的 ollama 部分（见上注），.vmodel 仍平级入列
-            return vmodels.map { OllamaModel(name: $0, size: nil) }
+            // 非 ollama 后端本无此面的 ollama 部分（见上注），模型包/.vmodel 仍平级入列
+            return Self.dedupedModels(packAndVModel)
         }
         let names = await ollamaTagsFetcher(cfg)
-        return (names + vmodels).map { OllamaModel(name: $0, size: nil) }   // 空名单直返空（同源）
+        return Self.dedupedModels(names.map { OllamaModel(name: $0, size: nil) }
+                                  + packAndVModel)   // 空名单直返空（同源）
+    }
+
+    /// 按 name 去重保序（Picker 以 name 为 ForEach id，重名撞 SwiftUI 身份会崩——
+    /// 防御性兜底；先见者赢：ollama 在前、模型包次之、.vmodel 殿后）。
+    static func dedupedModels(_ list: [OllamaModel]) -> [OllamaModel] {
+        var seen = Set<String>()
+        return list.filter { seen.insert($0.name).inserted }
     }
 
     // ── projects（原生）──
@@ -239,9 +254,15 @@ public final class NativeSidecarClient: SidecarClientProtocol {
     // ── messages（原生读）──
 
     /// load_messages 行 → ChatMessage（宽容解码口径与已退役的 HTTP 版 loadMessages 相同）。
+    /// C3（联调批二 Part B）：引用列只有块 id（明文纪律）——此处按 id 回查内存库
+    /// 重建展示数据：库 nil → citations 空（引用区整个不出现）；失效块（id 不在
+    /// 现库）过滤不留残影；命中句查询取与当前 ids 匹配的 search_knowledge
+    /// 工具卡，无匹配时回退其前最近一条 user 行（剥离附件注入段）。
     public func loadMessages(projectId: String, sessionId: String) async throws -> [ChatMessage] {
         do {
+            var lastUserContent: String?
             return try kernel.database.loadMessages(projectId: projectId, sessionId: sessionId).map { r in
+                if r.role == "user" { lastUserContent = r.content }
                 var msg = ChatMessage(id: String(r.id), role: r.role,
                                       content: r.content ?? "", modelUsed: r.modelUsed)
                 msg.dbId = Int(r.id)
@@ -261,6 +282,30 @@ public final class NativeSidecarClient: SidecarClientProtocol {
                                     withJSONObject: $0.mapValues { $0.anyValue }, options: [.prettyPrinted]) }
                                 .flatMap { String(data: $0, encoding: .utf8) }
                         )
+                    }
+                }
+                // C2（联调批二 Part C）：工具调用段卡片随消息回读重建（可见且保留；
+                // 缺 name 的畸形行过滤不留残影——写库前解析层已保证合法，此为防御）
+                if let cards = r.toolCards, !cards.isEmpty {
+                    msg.toolCards = cards.compactMap { c in
+                        guard let o = c.object,
+                              let name = o["name"]?.string, !name.isEmpty else { return nil }
+                        return ChatToolCard(
+                            name: name,
+                            argsText: ChatToolCard.prettyArgsText(o["arguments"]?.anyValue))
+                    }
+                }
+                if let ids = r.citationBlockIds, !ids.isEmpty {
+                    msg.citationBlockIds = ids
+                    if r.role == "assistant",
+                       let model = r.modelUsed, NativeVModelChat.isVModelName(model),
+                       let slug = NativeVModelChat.modelId(fromPoolName: model),
+                       let library = kernel.retrievalCenter.library(forModelSlug: slug) {
+                        let query = NativeVModelRetrieval.citationQuery(
+                            toolCards: msg.toolCards, fallbackUserContent: lastUserContent ?? "",
+                            citationBlockIds: ids, library: library)
+                        msg.citations = NativeVModelRetrieval.presentations(
+                            forIDs: ids, query: query, library: library)
                     }
                 }
                 if r.stopped { msg.manuallyStopped = true }
@@ -316,7 +361,10 @@ public final class NativeSidecarClient: SidecarClientProtocol {
         let mp = mpChatConnectorOverride ?? kernel.mpChatConnector
         let active: any NativeChatConnector
         if NativeVModelChat.isVModelName(body.model) {
-            active = kernel.vmodelRoutingConnector
+            // 仅传原始 Agent 资料；协议位门控与身份拼接统一在 Router 边界。
+            let profile = (try? kernel.database.getAgentConfig(
+                projectId: body.project_id, agentId: body.agent_id))?.systemPrompt ?? nil
+            active = kernel.vmodelRoutingConnector.withAgentProfile(profile)
         } else if stripped == "model_package" {
             active = mp
         } else if backend == "openai_compatible" {

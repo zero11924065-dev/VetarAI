@@ -278,7 +278,7 @@ public final class MemoryTabViewModel: ObservableObject {
     @Published public var globalMem = ""
     @Published public var projectMem = ""
     @Published public private(set) var busy = false
-    /// 轻提示条文案（"已保存 ✓" 2500ms 消隐；"保存失败: …" 常驻）
+    /// 轻提示条文案（"已保存" 2500ms 消隐；"保存失败: …" 常驻）
     @Published public private(set) var msg: String?
     @Published public private(set) var loaded = false
 
@@ -329,7 +329,9 @@ public final class MemoryTabViewModel: ObservableObject {
             msg = nil
             do {
                 try await client.writeMemory(scope: scope, projectId: projectId, content: content)
-                flash("已保存 ✓")
+                // 方向2 波次2：去字符对勾「 ✓」（VCallout 自带 success 图标，文案留字；
+                // 同 InferencePanelViewModel:177 清账口径）
+                flash("已保存")
             } catch {
                 msg = "保存失败: \(SidecarError.describe(error))"
             }
@@ -337,7 +339,7 @@ public final class MemoryTabViewModel: ObservableObject {
         }
     }
 
-    /// 成功文案 2500ms 消隐（对齐 TSX flash(setMsg, '已保存 ✓', 2500)）。
+    /// 成功文案 2500ms 消隐（对齐 TSX flash(setMsg, '已保存 ✓', 2500)；方向2 波次2 去 ✓ 字符）。
     private func flash(_ text: String) {
         msg = text
         flashTask?.cancel()

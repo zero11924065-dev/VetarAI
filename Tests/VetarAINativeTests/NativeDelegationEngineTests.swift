@@ -39,7 +39,8 @@ import XCTest
 private final class DelegRaisingConn: NativeChatConnector, @unchecked Sendable {
     struct Boom: Error, CustomStringConvertible { var description: String { "模型推理崩溃(模拟)" } }
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         AsyncThrowingStream { cont in
             cont.yield(.contentDelta("部分输出"))
@@ -52,7 +53,8 @@ private final class DelegRaisingConn: NativeChatConnector, @unchecked Sendable {
 /// test_delegation.HangingConn 等价：首个 chunk 后挂起（模拟长时间推理）。
 private final class DelegHangingConn: NativeChatConnector, @unchecked Sendable {
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         AsyncThrowingStream { cont in
             cont.yield(.contentDelta("部分"))
@@ -71,7 +73,8 @@ private final class DelegOrderConn: NativeChatConnector, @unchecked Sendable {
         self.order = order
     }
     func chatStream(model: String, messages: [[String: JSONValue]],
-                    tools: [JSONValue]?, images: [String]?)
+                    tools: [JSONValue]?, images: [String]?,
+                    thinkingMode: NativeThinkingMode?)
         -> AsyncThrowingStream<NativeChatStreamEvent, Error> {
         order.append("\(name)_start")
         return AsyncThrowingStream { cont in

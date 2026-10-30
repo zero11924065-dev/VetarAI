@@ -29,6 +29,10 @@
 //    · 预估用时 = UserDefaults 记录各模型最近 5 次「发起→首 token」耗时均值；
 //      有样本才显示「预计还需约 Xs」（剩余 = 均值 − 已等待，≤0 不显示），
 //      无样本首用不显示，绝不编造。
+//    · 联调批三 Part D：样本库无样本且模型为 "vmodel:<slug>" 时，回落包内
+//      first_token_delay_seconds 按注册表档位的出厂估算锚点，六档文案桶
+//      呈现（与 VetarModel 新建向导同源逐字；波次4b 上屏措辞改「估算值」，
+//      与样本实测「预计还需约 Xs」可区分）。优先级：样本均值 > 包级锚点 > 不显示。
 //
 
 import Foundation
@@ -44,7 +48,8 @@ public enum ChatWaitStage: String, Equatable, Sendable {
     public func bannerText(waitedSeconds: Int) -> String {
         switch self {
         case .loading:
-            return "模型装载/装填中，较久属正常（本地模型）…已等待 \(waitedSeconds)s"
+            // 方向2 波次4b（A 组 P2-15）：去工程腔「装载/装填」→「加载」（原版 :35）
+            return "模型加载中，较久属正常（本地模型）…已等待 \(waitedSeconds)s"
         case .generating:
             return "生成中…已等待 \(waitedSeconds)s"
         }
@@ -64,6 +69,40 @@ public enum ChatWaitStage: String, Equatable, Sendable {
     public static func chipSuffix(estimate: Int?, waitedSeconds: Int,
                                   contentEmpty: Bool) -> String {
         contentEmpty ? estimateSuffix(estimate: estimate, waitedSeconds: waitedSeconds) : ""
+    }
+
+    // MARK: - 联调批三 Part D：包级首 token 延迟锚点（出厂估算）
+
+    /// 包级锚点六档文案桶（与 VetarModel 新建向导同源，逐字口径）：
+    /// <2 立刻 / <10 几秒 / <25 十几秒 / <70 半分钟到一分钟 / <180 一两分钟 /
+    /// 其余好几分钟。入参 = 包内 first_token_delay_seconds 按注册表档位
+    /// （cache_preset_raw → short/standard/long/ultra 键）取出的秒数。
+    public static func firstTokenAnchorWord(seconds: Double) -> String {
+        switch seconds {
+        case ..<2: return "立刻"
+        case ..<10: return "几秒"
+        case ..<25: return "十几秒"
+        case ..<70: return "半分钟到一分钟"
+        case ..<180: return "一两分钟"
+        default: return "好几分钟"
+        }
+    }
+
+    /// 包级锚点横幅后缀（估算值——与样本实测「预计还需约 Xs」措辞区分）。
+    /// 锚点是出厂估算的总时长口径（非剩余扣减）；已等待 ≥ 锚点即静默
+    /// （预估窗口已过，与样本剩余 ≤0 同款「不编造」纪律）；nil 锚点静默。
+    public static func anchorSuffix(anchorSeconds: Double?, waitedSeconds: Int) -> String {
+        guard let anchorSeconds, anchorSeconds > Double(waitedSeconds) else { return "" }
+        // 方向2 波次4b（A 组 P2-15）：去工程腔「首 token 预计…到达（出厂估算）」
+        // →「首次响应通常需要…（估算值）」（原版 :79；桶词六档不动）
+        return "，首次响应通常需要\(firstTokenAnchorWord(seconds: anchorSeconds))（估算值）"
+    }
+
+    /// chip 口径与 chipSuffix 同款（F5 对齐）：正文空（首 token 未到）才追加，
+    /// 正文一出锚点使命完成自动消失。
+    public static func chipAnchorSuffix(anchorSeconds: Double?, waitedSeconds: Int,
+                                        contentEmpty: Bool) -> String {
+        contentEmpty ? anchorSuffix(anchorSeconds: anchorSeconds, waitedSeconds: waitedSeconds) : ""
     }
 }
 
